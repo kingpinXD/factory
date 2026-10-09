@@ -24,11 +24,12 @@ func TestPRParsesTheRecordedPRs(t *testing.T) {
 		p.HeadRefName != "chore/skeleton" || p.HeadRefOid != "d36c77e415a813c4d1b4579ef256b037cb5f1247" ||
 		p.BaseRefName != "main" || p.BaseRefOid != "b143cb314d1f21f3d1d08908523b603924f7a89b" ||
 		p.Mergeable != "UNKNOWN" || p.MergeStateStatus != "UNKNOWN" || p.ReviewDecision != "" || len(p.Reviews) != 0 ||
-		p.AutoMergeRequest != nil || !p.MergedAt.Equal(time.Date(2026, 10, 9, 20, 45, 28, 0, time.UTC)) {
+		p.AutoMergeRequest != nil || !p.MergedAt.Equal(time.Date(2026, 10, 9, 20, 45, 28, 0, time.UTC)) ||
+		p.IsCrossRepository || p.HeadRepositoryOwner.Login != "kingpinXD" {
 		t.Errorf("pr = %+v", p)
 	}
-	if !p.LastPush().Equal(time.Date(2026, 10, 9, 19, 45, 28, 0, time.UTC)) || len(p.Files) != 7 || p.Files[0].Path != ".github/workflows/ci.yml" {
-		t.Errorf("last push %v, files %v", p.LastPush(), p.Files)
+	if len(p.Files) != 7 || p.Files[0].Path != ".github/workflows/ci.yml" {
+		t.Errorf("files %v", p.Files)
 	}
 
 	p, err = c.PR(ctx, "zeta-chain/node", 4645)
@@ -42,20 +43,22 @@ func TestPRParsesTheRecordedPRs(t *testing.T) {
 	if !reflect.DeepEqual(p.Reviews, want) || p.ReviewDecision != "APPROVED" {
 		t.Errorf("reviews = %+v, decision %q", p.Reviews, p.ReviewDecision)
 	}
-	// Two commits; the newer one is last.
-	if !p.LastPush().Equal(time.Date(2026, 10, 5, 21, 13, 27, 0, time.UTC)) {
-		t.Errorf("last push = %v", p.LastPush())
-	}
 }
 
 func TestPRByBranch(t *testing.T) {
-	list := "pr list -R kingpinXD/factory --head chore/skeleton --state all --json number --limit 1"
+	list := "pr list -R kingpinXD/factory --head chore/skeleton --state all"
+	// A stranger's fork PR on a branch of the same name, newer than ours;
+	// the shape is the one cli/cli lists for its own `trunk` branch.
+	fork := `{"headRepositoryOwner":{"id":"U_kgDOBxWfsw","login":"HIHACK1911"},"isCrossRepository":true,"number":9}`
+	ours := `{"headRepositoryOwner":{"id":"MDQ6VXNlcjI4MDkyOTYy","login":"kingpinXD"},"isCrossRepository":false,"number":1}`
 	for _, tc := range []struct {
 		name  string
 		found string
 		want  int
 	}{
-		{"found", `[{"number":1}]`, 1},
+		{"found", "[" + ours + "]", 1},
+		{"a fork's PR on the same branch name is skipped", "[" + fork + "," + ours + "]", 1},
+		{"only a fork's PR", "[" + fork + "]", 0},
 		{"none", `[]`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,6 +87,19 @@ func TestChecks(t *testing.T) {
 		}},
 		{"a commit status and a running check", constructed, []Check{{"ci/legacy", "PENDING", true}, {"test", "IN_PROGRESS", true}}},
 		{"no checks", `{"data":{"repository":{"object":{"statusCheckRollup":null}}}}`, nil},
+		// Required names as GitHub gives them: branchProtectionRule to an
+		// admin, refUpdateRule to a writer, rules for a ruleset.
+		{"a required check that never started", `{"data":{"repository":{` +
+			`"pullRequest":{"baseRef":{"branchProtectionRule":{"requiredStatusCheckContexts":["ci"]},"refUpdateRule":{"requiredStatusCheckContexts":[]},"rules":{"nodes":[]}}},` +
+			`"object":{"statusCheckRollup":null}}}}`, []Check{{"ci", "EXPECTED", true}}},
+		{"required for a writer, one started", `{"data":{"repository":{` +
+			`"pullRequest":{"baseRef":{"branchProtectionRule":null,"refUpdateRule":{"requiredStatusCheckContexts":["lint","build"]},"rules":{"nodes":[]}}},` +
+			`"object":{"statusCheckRollup":{"contexts":{"nodes":[{"__typename":"CheckRun","name":"build","status":"COMPLETED","conclusion":"SUCCESS","isRequired":true}]}}}}}}`,
+			[]Check{{"build", "SUCCESS", true}, {"lint", "EXPECTED", true}}},
+		{"required by a ruleset and by protection", `{"data":{"repository":{` +
+			`"pullRequest":{"baseRef":{"branchProtectionRule":{"requiredStatusCheckContexts":["test"]},"refUpdateRule":null,"rules":{"nodes":[` +
+			`{"parameters":null},{"parameters":{"requiredStatusChecks":[{"context":"test"},{"context":"Type Check"}]}}]}}},` +
+			`"object":{"statusCheckRollup":null}}}}`, []Check{{"test", "EXPECTED", true}, {"Type Check", "EXPECTED", true}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := fakeGH(map[string]reply{"statusCheckRollup{contexts": {out: tc.out}})
@@ -150,18 +166,20 @@ func TestThreads(t *testing.T) {
 	}
 	want := []Thread{{
 		ID: "PRRT_kwDOGG4V6s6ZXdNv", IsResolved: true, Path: "pkg/drain/generate.go", Line: 255,
-		Comments: []Comment{
-			{ID: 3785943831, Author: "greptile-apps", Body: "Greedy fill misses viable subsets",
-				URL: "https://github.com/zeta-chain/node/pull/4630#discussion_r3785943831", CreatedAt: time.Date(2026, 8, 14, 17, 35, 48, 0, time.UTC)},
-			{ID: 3786105765, Author: "skosito", Body: "Fixed.",
-				URL: "https://github.com/zeta-chain/node/pull/4630#discussion_r3786105765", CreatedAt: time.Date(2026, 8, 14, 18, 2, 19, 0, time.UTC)},
-		},
+		First: Comment{ID: 3785943831, Author: "greptile-apps", Body: "Greedy fill misses viable subsets",
+			URL: "https://github.com/zeta-chain/node/pull/4630#discussion_r3785943831", CreatedAt: time.Date(2026, 8, 14, 17, 35, 48, 0, time.UTC)},
+		Last: Comment{ID: 3786105765, Author: "skosito", Body: "Fixed.",
+			URL: "https://github.com/zeta-chain/node/pull/4630#discussion_r3786105765", CreatedAt: time.Date(2026, 8, 14, 18, 2, 19, 0, time.UTC)},
 	}}
 	if !reflect.DeepEqual(threads, want) {
 		t.Errorf("threads = %+v", threads)
 	}
-	if call := strings.Join(f.Calls()[0].Args, " "); !strings.Contains(call, "-f owner=zeta-chain -f name=node -F number=4630") {
-		t.Errorf("call = %q", call)
+	// However long the thread, the answered test reads its last comment.
+	call := strings.Join(f.Calls()[0].Args, " ")
+	for _, part := range []string{"last:comments(last:1)", "first:comments(first:1)", "-f owner=zeta-chain -f name=node -F number=4630"} {
+		if !strings.Contains(call, part) {
+			t.Errorf("call = %q, want %q in it", call, part)
+		}
 	}
 }
 
@@ -175,7 +193,6 @@ func TestMerge(t *testing.T) {
 		want   [][]string
 	}{
 		{MergeSquash, [][]string{{"gh", "pr", "merge", "12", "-R", r, "--squash", "--match-head-commit", sha}}},
-		{MergeAuto, [][]string{{"gh", "pr", "merge", "12", "-R", r, "--squash", "--match-head-commit", sha, "--auto"}}},
 		{MergeQueue, [][]string{
 			{"gh", "pr", "view", "12", "-R", r, "--json", "id"},
 			{"gh", "api", "graphql", "-f", "query=mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){mergeQueueEntry{id}}}",
@@ -196,9 +213,12 @@ func TestMerge(t *testing.T) {
 			}
 		})
 	}
-	f := &proc.Fake{}
-	if err := (Client{Runner: f}).Merge(ctx, r, 12, "rebase", sha); err == nil || len(f.Calls()) != 0 {
-		t.Errorf("unknown method: err %v, calls %q", err, args(f))
+	// auto: `--squash --auto` in a merge-queue repo can vanish silently (sdk#996).
+	for _, method := range []MergeMethod{"rebase", "auto"} {
+		f := &proc.Fake{}
+		if err := (Client{Runner: f}).Merge(ctx, r, 12, method, sha); err == nil || len(f.Calls()) != 0 {
+			t.Errorf("method %s: err %v, calls %q; want it refused", method, err, args(f))
+		}
 	}
 }
 

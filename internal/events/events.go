@@ -5,6 +5,7 @@
 package events
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -94,7 +95,9 @@ func Key(entity, from, to, triggerRef string, attempt int) string {
 
 // Append adds ev to the log at path under an exclusive file lock, with seq
 // one past the last logged event's. An event whose Key is already logged is
-// not added again; Append returns the logged one.
+// not added again; Append returns the logged one. A last line with no
+// newline, which a crash or a full disk leaves, is cut first and logged as
+// an error event that quotes it.
 func Append(path string, ev Event) (Event, error) {
 	if !slices.Contains(Kinds, ev.Kind) {
 		return Event{}, fmt.Errorf("unknown event kind: %s", ev.Kind)
@@ -107,15 +110,35 @@ func Append(path string, ev Event) (Event, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return Event{}, fmt.Errorf("lock %s: %w", path, err)
 	}
-	logged, err := decode(path, f)
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return Event{}, err
+	}
+	whole, torn := cutTorn(data)
+	logged, err := decode(path, whole)
+	if err != nil {
+		return Event{}, err
+	}
+	if torn != nil {
+		if err := f.Truncate(int64(len(whole))); err != nil {
+			return Event{}, err
+		}
+		cut, err := write(f, logged, Event{Kind: KindError, Sender: SenderProgram, Text: fmt.Sprintf("cut a partial last line: %q", torn)})
+		if err != nil {
+			return Event{}, err
+		}
+		logged = append(logged, cut)
 	}
 	if ev.Key != "" {
 		if i := slices.IndexFunc(logged, func(e Event) bool { return e.Key == ev.Key }); i >= 0 {
 			return logged[i], nil
 		}
 	}
+	return write(f, logged, ev)
+}
+
+// write appends ev to f with seq one past the last of logged.
+func write(f *os.File, logged []Event, ev Event) (Event, error) {
 	ev.Seq = 1
 	if n := len(logged); n > 0 {
 		ev.Seq = logged[n-1].Seq + 1
@@ -133,8 +156,18 @@ func Append(path string, ev Event) (Event, error) {
 	return ev, nil
 }
 
-// Read returns every event in the log at path, oldest first. A log that
-// does not exist yet has no events.
+// cutTorn splits data into its whole lines and a last line with no newline,
+// which is nil when there is none.
+func cutTorn(data []byte) (whole, torn []byte) {
+	i := bytes.LastIndexByte(data, '\n') + 1
+	if i == len(data) {
+		return data, nil
+	}
+	return data[:i], data[i:]
+}
+
+// Read returns every event in the log at path, oldest first, leaving out a
+// last line with no newline. A log that does not exist yet has no events.
 func Read(path string) ([]Event, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -147,11 +180,16 @@ func Read(path string) ([]Event, error) {
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
-	return decode(path, f)
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	whole, _ := cutTorn(data)
+	return decode(path, whole)
 }
 
-func decode(path string, r io.Reader) ([]Event, error) {
-	dec := json.NewDecoder(r)
+func decode(path string, data []byte) ([]Event, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
 	var evs []Event
 	for {
 		var e Event

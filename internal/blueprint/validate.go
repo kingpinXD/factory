@@ -338,6 +338,11 @@ func (v *validator) live(b *Blueprint, live []EntityState) {
 		if _, ok := m.States[e.State]; !ok {
 			v.add("live_state", "%s %s is in state %q, which machine %q no longer has", e.Machine, e.ID, e.State, e.Machine)
 		}
+		for _, p := range e.Prev {
+			if _, ok := m.States[p]; !ok {
+				v.add("live_state", "%s %s returns to state %q, which machine %q no longer has", e.Machine, e.ID, p, e.Machine)
+			}
+		}
 	}
 }
 

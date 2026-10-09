@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -56,7 +57,8 @@ func (e *Error) Error() string { return fmt.Sprintf("%s: %v: %s", e.Cmd, e.Err, 
 func (e *Error) Unwrap() error { return e.Err }
 
 // waitDelay bounds how long Run waits for output once the program exits or
-// ctx ends, so a child that keeps stdout open cannot hold the caller.
+// ctx ends, so a child that keeps stdout open cannot hold the caller. It is
+// also how long a program has to exit on SIGTERM before it is killed.
 const waitDelay = 200 * time.Millisecond
 
 // Exec runs real programs.
@@ -64,6 +66,9 @@ type Exec struct{}
 
 func (Exec) Run(ctx context.Context, c Cmd) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	// At the deadline, SIGTERM first: git removes its lock files and a
+	// half-made worktree on it, and cannot on a kill.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.Dir = c.Dir
 	if len(c.Env) > 0 {
 		cmd.Env = append(os.Environ(), c.Env...)

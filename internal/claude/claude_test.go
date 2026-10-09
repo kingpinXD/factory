@@ -221,6 +221,7 @@ func TestStartWritesSettingsAndRunsFromTheRunFolder(t *testing.T) {
 			"CLAUDE_CODE_AUTO_COMPACT_WINDOW":  "200000",
 			"CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
 			"GIT_CEILING_DIRECTORIES":          c.Brain,
+			"FACTORY_BRAIN":                    c.Brain,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -251,9 +252,21 @@ func TestRunDirSwapsColonsForDashes(t *testing.T) {
 		"factory:usage-probe":     "/Users/me/.factory/runs/factory-usage-probe",
 		"spike-11":                "/Users/me/.factory/runs/spike-11",
 	} {
-		if got := c.RunDir(name); got != want {
-			t.Errorf("RunDir(%q) = %s, want %s", name, got, want)
+		if got, err := c.RunDir(name); err != nil || got != want {
+			t.Errorf("RunDir(%q) = %s, %v; want %s", name, got, err, want)
 		}
+	}
+}
+
+func TestStartRefusesABadName(t *testing.T) {
+	f := &proc.Fake{}
+	c := testClient(t, f)
+	err := c.Start(context.Background(), Spec{Name: "factory:x/../../escape:planner", Task: "x", AutoCompactPct: 60})
+	if err == nil || !strings.Contains(err.Error(), "want lowercase letters, digits and dashes") {
+		t.Errorf("err = %v, want the name refused", err)
+	}
+	if entries, _ := os.ReadDir(c.Home); len(entries) != 0 || len(f.Calls()) != 0 {
+		t.Errorf("wrote %v and ran %v for a bad name", entries, argvs(f))
 	}
 }
 
@@ -282,6 +295,21 @@ func TestResumeRefusesALiveSession(t *testing.T) {
 	}
 }
 
+// crashed is the listing of a session killed a moment ago: no pid, still
+// working, until Claude Code's background service restarts it (spike (c)).
+var crashed = strings.Replace(listing(0), `"state":"stopped"`, `"state":"working"`, 1)
+
+func TestResumeRefusesACrashedSession(t *testing.T) {
+	f := fakeClaude(crashed)
+	err := testClient(t, f).Resume(context.Background(), "b12386c5", "continue")
+	if !errors.Is(err, ErrRestarting) {
+		t.Fatalf("err = %v, want ErrRestarting", err)
+	}
+	if got := argvs(f); !reflect.DeepEqual(got, []string{bin + " agents --json --all"}) {
+		t.Errorf("calls = %q, want only the listing", got)
+	}
+}
+
 func TestResumeUnknownSession(t *testing.T) {
 	err := testClient(t, fakeClaude(listing(0))).Resume(context.Background(), "zzzzzzzz", "continue")
 	if err == nil || err.Error() != "claude agents: no session zzzzzzzz" {
@@ -300,8 +328,32 @@ func TestStop(t *testing.T) {
 }
 
 func TestCompactStopsBeforeResuming(t *testing.T) {
-	// The listing shows a pid twice after the stop, then none.
-	f := fakeClaude(listing(4242), listing(4242), listing(0))
+	// The listing shows a pid twice after the stop, then none. A stopped
+	// session lists as stopped, or as done (spike (c)).
+	for _, stopped := range []string{listing(0), strings.Replace(listing(0), `"state":"stopped"`, `"state":"done"`, 1)} {
+		f := fakeClaude(listing(4242), listing(4242), stopped)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := testClient(t, f).Compact(ctx, "b12386c5"); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{
+			bin + " stop b12386c5",
+			bin + " agents --json --all",
+			bin + " agents --json --all",
+			bin + " agents --json --all",
+			bin + " agents --json --all",
+			bin + " --bg --resume b12386c5-981f-4b69-aa88-372d826a518b /compact",
+		}
+		if got := argvs(f); !reflect.DeepEqual(got, want) {
+			t.Errorf("calls =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+	}
+}
+
+func TestCompactWaitsForTheStopNotACrash(t *testing.T) {
+	// After the stop: no pid but still working, as a crash looks; then stopped.
+	f := fakeClaude(listing(4242), crashed, listing(0))
 	if err := testClient(t, f).Compact(context.Background(), "b12386c5"); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +375,7 @@ func TestCompactGivesUpAtItsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	err := testClient(t, f).Compact(ctx, "b12386c5")
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "still has a process") {
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "has not stopped") {
 		t.Errorf("err = %v", err)
 	}
 	for _, call := range argvs(f) {

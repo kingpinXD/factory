@@ -42,13 +42,13 @@ func (c Component) CheckOutput(path string) ([]string, error) {
 }
 
 func (c Component) outputFor(path string) (Output, error) {
-	name := unversioned(filepath.Base(path))
+	name := Unversioned(filepath.Base(path))
 	var files []string
 	for _, o := range c.Outputs {
 		if o.Path == OutputReply {
 			continue
 		}
-		if unversioned(filepath.Base(o.Path)) == name {
+		if Unversioned(filepath.Base(o.Path)) == name {
 			return o, nil
 		}
 		files = append(files, o.Path)
@@ -59,7 +59,9 @@ func (c Component) outputFor(path string) (Output, error) {
 	return Output{}, fmt.Errorf("%s is not one of the component's outputs: %s", filepath.Base(path), strings.Join(files, ", "))
 }
 
-func unversioned(name string) string { return version.ReplaceAllString(name, "$2") }
+// Unversioned returns a file name without its version: explore.v2.md is
+// explore.md.
+func Unversioned(name string) string { return version.ReplaceAllString(name, "$2") }
 
 // headings returns a file's Markdown heading lines, or for a .yaml file its
 // top-level keys.

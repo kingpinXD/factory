@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -39,6 +40,35 @@ func TestIndex(t *testing.T) {
 	}
 	if _, err := ix.Lookup("nope"); err == nil || err.Error() != `unknown id "nope": not in index.json` {
 		t.Errorf("Lookup(nope) err = %v, want it named", err)
+	}
+}
+
+func TestCheckID(t *testing.T) {
+	for id, ok := range map[string]bool{
+		"e1": true, "e1-w1": true, "2026-10-09-login": true, "w-": true,
+		"": false, "x/../foundation": false, "..": false, "-w1": false, "E1": false, "w_1": false, "w.1": false, "w 1": false,
+	} {
+		if err := CheckID(id); (err == nil) != ok {
+			t.Errorf("CheckID(%q) = %v, want ok %v", id, err, ok)
+		}
+	}
+}
+
+func TestWriteIndexRefusesABadID(t *testing.T) {
+	brain := t.TempDir()
+	if err := os.MkdirAll(Factory(brain), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, ix := range []Index{
+		{"x/../foundation": {Kind: "work", Dir: "/b/w", Epic: "e1"}},
+		{"e1-w1": {Kind: "work", Dir: "/b/w", Epic: "../e1"}},
+	} {
+		if err := WriteIndex(brain, ix); err == nil || !strings.Contains(err.Error(), "want lowercase letters, digits and dashes") {
+			t.Errorf("WriteIndex(%v) err = %v, want the id refused", ix, err)
+		}
+	}
+	if _, err := os.Stat(IndexPath(brain)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("index.json written anyway: %v", err)
 	}
 }
 
@@ -96,26 +126,19 @@ func TestInputs(t *testing.T) {
 	}
 }
 
-// writeLock leaves a lock folder holding pid, as a crashed or running tick would.
+// writeLock leaves a lock file naming pid, as a crashed tick would.
 func writeLock(t *testing.T, brain string, pid int) {
 	t.Helper()
-	dir := filepath.Join(Factory(brain), ".lock", "tick")
+	dir := filepath.Join(Factory(brain), ".lock")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tick"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func lockedPID(t *testing.T, brain string) int {
-	t.Helper()
-	pid, err := readPID(filepath.Join(Factory(brain), ".lock", "tick"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pid
-}
+func lockedPID(brain string) int { return readPID(filepath.Join(Factory(brain), ".lock", "tick")) }
 
 func TestLockRefusedWhileHeldThenFree(t *testing.T) {
 	brain := t.TempDir()
@@ -123,7 +146,7 @@ func TestLockRefusedWhileHeldThenFree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := lockedPID(t, brain); got != os.Getpid() {
+	if got := lockedPID(brain); got != os.Getpid() {
 		t.Errorf("lock holds pid %d, want ours %d", got, os.Getpid())
 	}
 	if _, err := Lock(brain, "repo-worker"); err != nil {
@@ -144,22 +167,66 @@ func TestLockRefusedWhileHeldThenFree(t *testing.T) {
 	unlock()
 }
 
-func TestLockHeldByALiveProcess(t *testing.T) {
-	brain := t.TempDir()
-	sleeper := exec.Command("sleep", "60")
-	if err := sleeper.Start(); err != nil {
+// helperLock starts TestHelperProcessLock, which takes the tick lock and
+// then does then: "hold" keeps it, "sleep" becomes sleep. It returns once
+// the helper is there, with the helper's pid.
+func helperLock(t *testing.T, brain, then string) int {
+	t.Helper()
+	helper := exec.Command(os.Args[0], "-test.run=^TestHelperProcessLock$")
+	helper.Env = append(os.Environ(), "STORE_HELPER_BRAIN="+brain, "STORE_HELPER_THEN="+then)
+	if err := helper.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sleeper.Process.Kill(); sleeper.Wait() })
-	writeLock(t, brain, sleeper.Process.Pid)
+	t.Cleanup(func() { helper.Process.Kill(); helper.Wait() })
+	pid := helper.Process.Pid
+	for start := time.Now(); ; time.Sleep(10 * time.Millisecond) {
+		out, _ := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
+		if then == "sleep" && strings.Contains(string(out), "sleep") || then == "hold" && lockedPID(brain) == pid {
+			return pid
+		}
+		if time.Since(start) > 10*time.Second {
+			t.Fatalf("the helper never got to %s", then)
+		}
+	}
+}
 
+// TestHelperProcessLock is run by helperLock as a separate process.
+func TestHelperProcessLock(t *testing.T) {
+	brain := os.Getenv("STORE_HELPER_BRAIN")
+	if brain == "" {
+		t.Skip("helper process for helperLock")
+	}
+	if _, err := Lock(brain, "tick"); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("STORE_HELPER_THEN") == "hold" {
+		time.Sleep(time.Minute)
+	}
+	t.Fatal(syscall.Exec("/bin/sleep", []string{"sleep", "60"}, os.Environ()))
+}
+
+func TestLockHeldByAnotherProcess(t *testing.T) {
+	brain := t.TempDir()
+	pid := helperLock(t, brain, "hold")
 	_, err := Lock(brain, "tick")
-	if want := "another tick is running (pid " + strconv.Itoa(sleeper.Process.Pid) + ")"; err == nil || err.Error() != want {
+	if want := "another tick is running (pid " + strconv.Itoa(pid) + ")"; err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
-	if got := lockedPID(t, brain); got != sleeper.Process.Pid {
-		t.Errorf("lock now holds pid %d, want the live owner's %d", got, sleeper.Process.Pid)
+	if got := lockedPID(brain); got != pid {
+		t.Errorf("lock file names pid %d, want the holder's %d", got, pid)
 	}
+}
+
+// TestLockFreeOnceItsHolderIsGone: the pid the lock names now belongs to a
+// program that is not a tick, as after a crash and a reboot.
+func TestLockFreeOnceItsHolderIsGone(t *testing.T) {
+	brain := t.TempDir()
+	pid := helperLock(t, brain, "sleep")
+	unlock, err := Lock(brain, "tick")
+	if err != nil {
+		t.Fatalf("Lock while pid %d is sleep: %v", pid, err)
+	}
+	unlock()
 }
 
 func TestLockLeftByADeadProcessIsTakenOver(t *testing.T) {
@@ -175,7 +242,7 @@ func TestLockLeftByADeadProcessIsTakenOver(t *testing.T) {
 		t.Fatalf("Lock over a dead pid: %v", err)
 	}
 	defer unlock()
-	if got := lockedPID(t, brain); got != os.Getpid() {
+	if got := lockedPID(brain); got != os.Getpid() {
 		t.Errorf("lock holds pid %d, want ours %d", got, os.Getpid())
 	}
 	entries, _ := os.ReadDir(filepath.Join(Factory(brain), ".lock"))

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/kingpinXD/factory/internal/blueprint"
 )
 
 // SenderProgram is the sender of events the program writes itself.
@@ -30,12 +32,8 @@ func HashFile(path string) (string, error) {
 // its extension and version, so explore.md and explore.v2.md are both
 // "explore".
 func StepOf(file string) string {
-	name := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
-	i := strings.LastIndex(name, ".v")
-	if i < 0 || i+2 == len(name) || strings.Trim(name[i+2:], "0123456789") != "" {
-		return name
-	}
-	return name[:i]
+	name := blueprint.Unversioned(filepath.Base(file))
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
 // NewestEnd returns the newest end event in evs whose file belongs to step.

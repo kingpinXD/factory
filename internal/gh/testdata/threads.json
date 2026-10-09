@@ -10,7 +10,7 @@
               "isOutdated": false,
               "path": "pkg/drain/generate.go",
               "line": 255,
-              "comments": {
+              "first": {
                 "nodes": [
                   {
                     "databaseId": 3785943831,
@@ -20,7 +20,11 @@
                     "body": "Greedy fill misses viable subsets",
                     "url": "https://github.com/zeta-chain/node/pull/4630#discussion_r3785943831",
                     "createdAt": "2026-08-14T17:35:48Z"
-                  },
+                  }
+                ]
+              },
+              "last": {
+                "nodes": [
                   {
                     "databaseId": 3786105765,
                     "author": {

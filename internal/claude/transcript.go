@@ -31,14 +31,19 @@ func (c Client) Context(ctx context.Context, sessionID string, window int) (pct 
 
 // LimitHit reports whether a session's newest answer is Claude Code's
 // usage-limit message ("You've hit your session limit · resets 8:50pm
-// (America/Toronto)"), when that limit resets, and whether it is the weekly one.
-func (c Client) LimitHit(ctx context.Context, sessionID string) (resetsAt time.Time, weekly bool, ok bool, err error) {
+// (America/Toronto)") for a limit that has not reset by now, when that limit
+// resets, and whether it is the weekly one.
+func (c Client) LimitHit(ctx context.Context, sessionID string, now time.Time) (resetsAt time.Time, weekly bool, ok bool, err error) {
 	t, err := c.readTranscript(ctx, sessionID)
 	if err != nil || t.limit == nil {
 		return time.Time{}, false, false, err
 	}
 	info := t.limit.APIErrorParams.RateLimitInfo
-	return time.Unix(info.ResetsAt, 0), strings.HasPrefix(info.RateLimitType, "seven_day"), true, nil
+	resetsAt = time.Unix(info.ResetsAt, 0)
+	if !resetsAt.After(now) {
+		return time.Time{}, false, false, nil
+	}
+	return resetsAt, strings.HasPrefix(info.RateLimitType, "seven_day"), true, nil
 }
 
 // transcriptLine holds the fields of a transcript line this package reads.

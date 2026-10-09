@@ -2,29 +2,6 @@
   "autoMergeRequest": null,
   "baseRefName": "main",
   "baseRefOid": "b143cb314d1f21f3d1d08908523b603924f7a89b",
-  "commits": [
-    {
-      "authoredDate": "2026-10-09T19:45:28Z",
-      "authors": [
-        {
-          "email": "",
-          "id": "MDQ6VXNlcjI4MDkyOTYy",
-          "login": "kingpinXD",
-          "name": "Tanmay"
-        },
-        {
-          "email": "",
-          "id": "MDQ6VXNlcjgxODQ3",
-          "login": "claude",
-          "name": "Claude Opus 5.5"
-        }
-      ],
-      "committedDate": "2026-10-09T19:45:28Z",
-      "messageBody": "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01EJiJFurHncdMZJKkSkd7BL",
-      "messageHeadline": "chore: go skeleton, CI and make install",
-      "oid": "d36c77e415a813c4d1b4579ef256b037cb5f1247"
-    }
-  ],
   "files": [
     {
       "path": ".github/workflows/ci.yml",
@@ -64,7 +41,13 @@
   ],
   "headRefName": "chore/skeleton",
   "headRefOid": "d36c77e415a813c4d1b4579ef256b037cb5f1247",
+  "headRepositoryOwner": {
+    "id": "MDQ6VXNlcjI4MDkyOTYy",
+    "name": "Tanmay",
+    "login": "kingpinXD"
+  },
   "id": "PR_kwDOVC8X4s8AAAABHmhGTQ",
+  "isCrossRepository": false,
   "isDraft": false,
   "mergeStateStatus": "UNKNOWN",
   "mergeable": "UNKNOWN",

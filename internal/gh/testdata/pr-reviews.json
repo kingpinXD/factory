@@ -2,50 +2,6 @@
   "autoMergeRequest": null,
   "baseRefName": "main",
   "baseRefOid": "4ceb66555370d2ef766d7982c2d559428f10456f",
-  "commits": [
-    {
-      "authoredDate": "2026-10-05T21:13:06Z",
-      "authors": [
-        {
-          "email": "",
-          "id": "MDQ6VXNlcjI4MDkyOTYy",
-          "login": "kingpinXD",
-          "name": "Tanmay"
-        },
-        {
-          "email": "",
-          "id": "MDQ6VXNlcjgxODQ3",
-          "login": "claude",
-          "name": "Claude Opus 5.5"
-        }
-      ],
-      "committedDate": "2026-10-05T21:13:06Z",
-      "messageBody": "The nightly simulation run and its PR/release-push triggers are no longer\nused. The make test-sim-* targets stay for running locally.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01FwPB8onpj91ji6Psv57Yz5",
-      "messageHeadline": "ci: remove simulation test workflow",
-      "oid": "4f4f4ea883d721b6ad79bbefb3fb5b688b6df1a2"
-    },
-    {
-      "authoredDate": "2026-10-05T21:13:27Z",
-      "authors": [
-        {
-          "email": "",
-          "id": "MDQ6VXNlcjI4MDkyOTYy",
-          "login": "kingpinXD",
-          "name": "Tanmay"
-        },
-        {
-          "email": "",
-          "id": "MDQ6VXNlcjgxODQ3",
-          "login": "claude",
-          "name": "Claude Opus 5.5"
-        }
-      ],
-      "committedDate": "2026-10-05T21:13:27Z",
-      "messageBody": "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01FwPB8onpj91ji6Psv57Yz5",
-      "messageHeadline": "docs: add changelog entry for #4645",
-      "oid": "2f733893cd9b079694de3cd4118798c2488c7f65"
-    }
-  ],
   "files": [
     {
       "path": ".github/workflows/reusable-sim.yml",
@@ -65,7 +21,12 @@
   ],
   "headRefName": "ci/remove-sim-workflow",
   "headRefOid": "2f733893cd9b079694de3cd4118798c2488c7f65",
+  "headRepositoryOwner": {
+    "id": "MDEyOk9yZ2FuaXphdGlvbjg2OTc5ODQ0",
+    "login": "zeta-chain"
+  },
   "id": "PR_kwDOGG4V6s8AAAABGyvhGw",
+  "isCrossRepository": false,
   "isDraft": false,
   "mergeStateStatus": "UNKNOWN",
   "mergeable": "UNKNOWN",

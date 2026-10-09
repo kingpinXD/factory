@@ -3,6 +3,7 @@ package proc
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,6 +55,20 @@ func TestExecHungCallReturnsAtItsDeadline(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want the deadline", err)
+	}
+}
+
+func TestExecDeadlineLetsTheProgramCleanUp(t *testing.T) {
+	// git removes its lock files on SIGTERM; a kill leaves them behind.
+	cleaned := filepath.Join(t.TempDir(), "cleaned")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err := Exec{}.Run(ctx, sh(`trap 'echo yes > "`+cleaned+`"; exit 1' TERM; while :; do sleep 0.05; done`))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the deadline", err)
+	}
+	if data, err := os.ReadFile(cleaned); err != nil || string(data) != "yes\n" {
+		t.Errorf("the program did not run its TERM handler: %q, %v", data, err)
 	}
 }
 

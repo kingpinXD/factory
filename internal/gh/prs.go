@@ -3,6 +3,7 @@ package gh
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -24,9 +25,13 @@ type PR struct {
 	ReviewDecision   string    `json:"reviewDecision"`   // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
 	Reviews          []Review  `json:"reviews"`
 	Files            []File    `json:"files"`
-	Commits          []Commit  `json:"commits"`
 	MergedAt         time.Time `json:"mergedAt"`
 	AutoMergeRequest *struct{} `json:"autoMergeRequest"`
+
+	// IsCrossRepository is true for a PR from a fork, whose head is in
+	// HeadRepositoryOwner's copy of the repository.
+	IsCrossRepository   bool `json:"isCrossRepository"`
+	HeadRepositoryOwner User `json:"headRepositoryOwner"`
 }
 
 // Review is a submitted review.
@@ -42,25 +47,8 @@ type File struct {
 	Path string `json:"path"`
 }
 
-// Commit is a commit on the pull request's branch.
-type Commit struct {
-	CommittedDate time.Time `json:"committedDate"`
-}
-
 const prFields = "id,number,url,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus," +
-	"reviewDecision,reviews,files,commits,mergedAt,autoMergeRequest"
-
-// LastPush returns when the newest commit was committed. GitHub keeps no
-// push time; the factory pushes its commits as it makes them.
-func (p PR) LastPush() time.Time {
-	var last time.Time
-	for _, c := range p.Commits {
-		if c.CommittedDate.After(last) {
-			last = c.CommittedDate
-		}
-	}
-	return last
-}
+	"reviewDecision,reviews,files,mergedAt,autoMergeRequest,isCrossRepository,headRepositoryOwner"
 
 // PR reads pull request n.
 func (c Client) PR(ctx context.Context, repo string, n int) (PR, error) {
@@ -69,41 +57,90 @@ func (c Client) PR(ctx context.Context, repo string, n int) (PR, error) {
 	return p, err
 }
 
-// PRByBranch reads the newest pull request from branch, in any state.
+// PRByBranch reads the newest pull request from branch, in any state. gh
+// matches the branch name in forks too, and anyone can open a fork's PR from
+// a branch of the same name, so PRs from forks are skipped.
 func (c Client) PRByBranch(ctx context.Context, repo, branch string) (PR, bool, error) {
 	var found []struct {
-		Number int `json:"number"`
+		Number            int  `json:"number"`
+		IsCrossRepository bool `json:"isCrossRepository"`
 	}
-	if err := c.getJSON(ctx, &found, "pr", "list", "-R", repo, "--head", branch, "--state", "all", "--json", "number", "--limit", "1"); err != nil {
+	if err := c.getJSON(ctx, &found, "pr", "list", "-R", repo, "--head", branch, "--state", "all", "--json", "number,isCrossRepository", "--limit", "100"); err != nil {
 		return PR{}, false, err
 	}
-	if len(found) == 0 {
-		return PR{}, false, nil
+	for _, f := range found {
+		if !f.IsCrossRepository {
+			p, err := c.PR(ctx, repo, f.Number)
+			return p, err == nil, err
+		}
 	}
-	p, err := c.PR(ctx, repo, found[0].Number)
-	return p, err == nil, err
+	return PR{}, false, nil
 }
 
 // Check is one check run or commit status on a commit.
 type Check struct {
 	Name string
 	// State is a finished run's conclusion (SUCCESS, FAILURE, SKIPPED, …), an
-	// unfinished run's status (QUEUED, IN_PROGRESS, …), or a commit status's
-	// state (SUCCESS, FAILURE, PENDING, ERROR).
+	// unfinished run's status (QUEUED, IN_PROGRESS, …), a commit status's
+	// state (SUCCESS, FAILURE, PENDING, ERROR), or EXPECTED for a required
+	// check that has not started.
 	State    string
 	Required bool
 }
 
-const checksQuery = `query($owner:String!,$name:String!,$sha:GitObjectID!,$pr:Int!){repository(owner:$owner,name:$name){object(oid:$sha){` +
-	`... on Commit{statusCheckRollup{contexts(first:100){nodes{__typename ` +
+const checksQuery = `query($owner:String!,$name:String!,$sha:GitObjectID!,$pr:Int!){repository(owner:$owner,name:$name){` +
+	`pullRequest(number:$pr){baseRef{branchProtectionRule{requiredStatusCheckContexts} refUpdateRule{requiredStatusCheckContexts} ` +
+	`rules(first:100){nodes{parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}}} ` +
+	`object(oid:$sha){... on Commit{statusCheckRollup{contexts(first:100){nodes{__typename ` +
 	`... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr)} ` +
 	`... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}`
 
+// requiredChecks is where GitHub names the checks a base branch requires:
+// its branch protection (shown to admins), the rules that apply to the
+// caller (shown to writers), and its rulesets.
+type requiredChecks struct {
+	BranchProtectionRule *struct{ RequiredStatusCheckContexts []string }
+	RefUpdateRule        *struct{ RequiredStatusCheckContexts []string }
+	Rules                struct {
+		Nodes []struct {
+			Parameters *struct {
+				RequiredStatusChecks []struct{ Context string }
+			}
+		}
+	}
+}
+
+// names returns every required check name, in the order found.
+func (r *requiredChecks) names() []string {
+	if r == nil {
+		return nil
+	}
+	var names []string
+	if r.BranchProtectionRule != nil {
+		names = append(names, r.BranchProtectionRule.RequiredStatusCheckContexts...)
+	}
+	if r.RefUpdateRule != nil {
+		names = append(names, r.RefUpdateRule.RequiredStatusCheckContexts...)
+	}
+	for _, n := range r.Rules.Nodes {
+		if n.Parameters != nil {
+			for _, ch := range n.Parameters.RequiredStatusChecks {
+				names = append(names, ch.Context)
+			}
+		}
+	}
+	return names
+}
+
 // Checks returns the checks on commit sha, each marked by whether pull
-// request pr needs it to merge.
+// request pr needs it to merge, and an EXPECTED check for each one pr's
+// base branch requires that has not started.
 func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]Check, error) {
 	var data struct {
 		Repository struct {
+			PullRequest struct {
+				BaseRef *requiredChecks
+			}
 			Object *struct {
 				StatusCheckRollup *struct {
 					Contexts struct {
@@ -128,19 +165,23 @@ func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]
 	if data.Repository.Object == nil {
 		return nil, fmt.Errorf("%s has no commit %s", repo, sha)
 	}
-	if data.Repository.Object.StatusCheckRollup == nil {
-		return nil, nil
-	}
 	var checks []Check
-	for _, n := range data.Repository.Object.StatusCheckRollup.Contexts.Nodes {
-		ch := Check{Name: n.Name, State: n.Conclusion, Required: n.IsRequired}
-		switch {
-		case n.Typename == "StatusContext":
-			ch.Name, ch.State = n.Context, n.State
-		case n.Status != "COMPLETED":
-			ch.State = n.Status
+	if rollup := data.Repository.Object.StatusCheckRollup; rollup != nil {
+		for _, n := range rollup.Contexts.Nodes {
+			ch := Check{Name: n.Name, State: n.Conclusion, Required: n.IsRequired}
+			switch {
+			case n.Typename == "StatusContext":
+				ch.Name, ch.State = n.Context, n.State
+			case n.Status != "COMPLETED":
+				ch.State = n.Status
+			}
+			checks = append(checks, ch)
 		}
-		checks = append(checks, ch)
+	}
+	for _, name := range data.Repository.PullRequest.BaseRef.names() {
+		if !slices.ContainsFunc(checks, func(ch Check) bool { return ch.Name == name }) {
+			checks = append(checks, Check{Name: name, State: "EXPECTED", Required: true})
+		}
 	}
 	return checks, nil
 }
@@ -179,11 +220,36 @@ type Thread struct {
 	IsOutdated bool
 	Path       string
 	Line       int
-	Comments   []Comment
+	// First opened the thread. Last is its newest comment, whose author
+	// tells whether the thread is answered; for a one-comment thread it is
+	// First again.
+	First, Last Comment
 }
 
+const commentFields = `nodes{databaseId author{login} body url createdAt}`
+
 const threadsQuery = `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){` +
-	`reviewThreads(first:100){nodes{id isResolved isOutdated path line comments(first:100){nodes{databaseId author{login} body url createdAt}}}}}}}`
+	`reviewThreads(first:100){nodes{id isResolved isOutdated path line ` +
+	`first:comments(first:1){` + commentFields + `} last:comments(last:1){` + commentFields + `}}}}}}`
+
+// threadComments is one comment, or none, as threadsQuery reads it.
+type threadComments struct {
+	Nodes []struct {
+		DatabaseID int64 `json:"databaseId"`
+		Author     User
+		Body       string
+		URL        string
+		CreatedAt  time.Time
+	}
+}
+
+func (tc threadComments) comment() Comment {
+	if len(tc.Nodes) == 0 {
+		return Comment{}
+	}
+	n := tc.Nodes[0]
+	return Comment{ID: n.DatabaseID, Author: n.Author.Login, Body: n.Body, URL: n.URL, CreatedAt: n.CreatedAt}
+}
 
 // Threads returns pull request pr's review threads.
 func (c Client) Threads(ctx context.Context, repo string, pr int) ([]Thread, error) {
@@ -192,20 +258,12 @@ func (c Client) Threads(ctx context.Context, repo string, pr int) ([]Thread, err
 			PullRequest struct {
 				ReviewThreads struct {
 					Nodes []struct {
-						ID         string
-						IsResolved bool
-						IsOutdated bool
-						Path       string
-						Line       int
-						Comments   struct {
-							Nodes []struct {
-								DatabaseID int64 `json:"databaseId"`
-								Author     User
-								Body       string
-								URL        string
-								CreatedAt  time.Time
-							}
-						}
+						ID          string
+						IsResolved  bool
+						IsOutdated  bool
+						Path        string
+						Line        int
+						First, Last threadComments
 					}
 				}
 			}
@@ -216,11 +274,10 @@ func (c Client) Threads(ctx context.Context, repo string, pr int) ([]Thread, err
 	}
 	var threads []Thread
 	for _, n := range data.Repository.PullRequest.ReviewThreads.Nodes {
-		t := Thread{ID: n.ID, IsResolved: n.IsResolved, IsOutdated: n.IsOutdated, Path: n.Path, Line: n.Line}
-		for _, cm := range n.Comments.Nodes {
-			t.Comments = append(t.Comments, Comment{ID: cm.DatabaseID, Author: cm.Author.Login, Body: cm.Body, URL: cm.URL, CreatedAt: cm.CreatedAt})
-		}
-		threads = append(threads, t)
+		threads = append(threads, Thread{
+			ID: n.ID, IsResolved: n.IsResolved, IsOutdated: n.IsOutdated, Path: n.Path, Line: n.Line,
+			First: n.First.comment(), Last: n.Last.comment(),
+		})
 	}
 	return threads, nil
 }
@@ -231,9 +288,8 @@ type MergeMethod string
 const (
 	// MergeSquash merges at once.
 	MergeSquash MergeMethod = "squash"
-	// MergeAuto is for a merge-queue repository that allows auto-merge.
-	MergeAuto MergeMethod = "auto"
-	// MergeQueue is for a merge-queue repository that does not (argo-cd-apps).
+	// MergeQueue is for every merge-queue repository: `gh pr merge --squash
+	// --auto` there can report auto-merge armed and then vanish (sdk#996).
 	MergeQueue MergeMethod = "queue"
 )
 
@@ -247,8 +303,6 @@ func (c Client) Merge(ctx context.Context, repo string, pr int, method MergeMeth
 	args := []string{"pr", "merge", strconv.Itoa(pr), "-R", repo, "--squash", "--match-head-commit", sha}
 	switch method {
 	case MergeSquash:
-	case MergeAuto:
-		args = append(args, "--auto")
 	case MergeQueue:
 		id, err := c.nodeID(ctx, repo, pr)
 		if err != nil {

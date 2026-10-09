@@ -228,7 +228,9 @@ machines:
         health: github
       merging:
         entry: the merge check passed and the merge was sent
-        exits: merged when GitHub shows it merged; in_review when the merge failed
+        exits: merged when GitHub shows it merged; in_review when the merge failed, or after 2h (a merge queue dropped it)
+        timeout: 2h
+        on_timeout: in_review
         health: github
       merged:
         entry: GitHub shows the PR merged
@@ -253,11 +255,11 @@ machines:
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
-        exits: back to the state it left on factory retry; cancelled on factory stop
+        exits: back to the state it left on factory retry, unless its PR is closed; cancelled on factory stop
         health: waits
       closed:
         entry: GitHub shows the PR closed without merging
-        exits: needs_you, with a DM
+        exits: needs_you, with a DM; only factory stop moves it on from there
         health: waits
         end: true
       cancelled:
@@ -295,7 +297,7 @@ machines:
       - {from: blocked, to: previous, trigger: file, guard: instruction_received}
       - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
       - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
-      - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
+      - {from: needs_you, to: previous, trigger: user, guard: retry_allowed}
       - {to: merged, trigger: github, guard: pr_merged, always_allowed: true}
       - {to: closed, trigger: github, guard: pr_closed_unmerged, always_allowed: true}
       - {to: rechecking, trigger: file, guard: recheck_started, always_allowed: true}
@@ -365,11 +367,11 @@ machines:
         health: events
       planned:
         entry: the newest epic.yaml is valid and every issue has a result
-        exits: running once a set is claimed
+        exits: running once a set is claimed; uat when every item is merged or cancelled, as in an epic with no items
         health: waits
       running:
         entry: a set of the epic is claimed
-        exits: merging when every open item is in_review or later; blocked when nothing can start
+        exits: merging when every open item is in_review or later; blocked when no open item can start and none is being worked or in review
         health: waits
       merging:
         entry: every open item is in_review or later
@@ -380,8 +382,8 @@ machines:
         exits: done when the epic has uat none, or uat/result.md says pass (the only way to done)
         health: events
       blocked:
-        entry: no open item can start and none is being worked
-        exits: running when an item can start
+        entry: no open item can start and none is being worked or in review
+        exits: running when an item can start; merging when every open item is in_review or later
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -400,9 +402,11 @@ machines:
       - {from: checking, to: previous, trigger: file, guard: recheck_ended}
       - {from: planning, to: planned, trigger: file, guard: epic_plan_ended}
       - {from: planned, to: running, trigger: tick, guard: work_started}
+      - {from: planned, to: uat, trigger: tick, guard: items_finished}
       - {from: running, to: merging, trigger: tick, guard: all_in_review}
-      - {from: running, to: blocked, trigger: tick, guard: nothing_startable}
+      - {from: running, to: blocked, trigger: tick, guard: epic_idle}
       - {from: blocked, to: running, trigger: tick, guard: item_startable}
+      - {from: blocked, to: merging, trigger: tick, guard: all_in_review}
       - {from: merging, to: uat, trigger: tick, guard: items_finished}
       - {from: uat, to: done, trigger: file, guard: uat_passed}
       - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
@@ -416,7 +420,7 @@ machines:
     states:
       starting:
         entry: the program started the session, or woke a stopped one with a flagless resume
-        exits: running once it is listed working; stopped when the factory stops it; dead after no pid for dead_after
+        exits: running once it is listed working; turn_ended when it is listed with its turn already ended; stopped when the factory stops it; dead after no pid for dead_after
         health: events
       running:
         entry: listed with a pid, working
@@ -446,6 +450,7 @@ machines:
         end: true
     transitions:
       - {from: starting, to: running, trigger: tick, guard: listed_working}
+      - {from: starting, to: turn_ended, trigger: tick, guard: turn_ended}
       - {from: running, to: turn_ended, trigger: tick, guard: turn_ended}
       - {from: turn_ended, to: running, trigger: tick, guard: listed_working}
       - {from: turn_ended, to: compacting, trigger: tick, guard: checkpoint_ready}

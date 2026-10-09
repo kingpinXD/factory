@@ -74,7 +74,8 @@ type Tick struct {
 // Values are the tunable supervision and usage values.
 type Values struct {
 	Supervision Supervision `yaml:"supervision" json:"supervision"`
-	// MergeQuiet is how long after the last push a PR waits before merging.
+	// MergeQuiet is how long a PR waits before merging, counted from when
+	// the program first saw its current head SHA: commit dates are not push times.
 	MergeQuiet Duration `yaml:"merge_quiet" json:"merge_quiet"`
 	// Lease is how long a set's lease lasts after its last heartbeat.
 	Lease   Duration `yaml:"lease" json:"lease"`
@@ -258,6 +259,9 @@ type EntityState struct {
 	Machine string
 	ID      string
 	State   string
+	// Prev is the stack of states the entity's `to: previous` moves return
+	// to, from status.json or its last transition.
+	Prev []string
 }
 
 // Problem is one reason a blueprint fails its check.

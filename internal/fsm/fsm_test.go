@@ -159,6 +159,58 @@ func walkReturn(t *testing.T, mn string, m blueprint.Machine, tr blueprint.Trans
 	}
 }
 
+// only registers a stub for every guard name; only the names given hold.
+func only(names ...string) map[string]GuardFunc {
+	gs := stubs(false)
+	for _, name := range names {
+		gs[name] = func(Cur, Event) (bool, error) { return true, nil }
+	}
+	return gs
+}
+
+// TestShippedMovesTheReviewsFound: moves the foundation reviews found missing
+// or wrong in the shipped blueprint. refused names the guard that must stop
+// the move; empty means it must reach want.
+func TestShippedMovesTheReviewsFound(t *testing.T) {
+	b := shipped(t)
+	cases := []struct {
+		name    string
+		machine string
+		cur     Cur
+		to      string
+		trigger string
+		guards  map[string]GuardFunc
+		want    string
+		refused string
+	}{
+		{"a session whose first turn ended between ticks", blueprint.MachineSession, Cur{State: "starting"},
+			"turn_ended", blueprint.TriggerTick, only("turn_ended"), "turn_ended", ""},
+		{"an epic planned with no items", blueprint.MachineEpic, Cur{State: "planned"},
+			"uat", blueprint.TriggerTick, only("items_finished"), "uat", ""},
+		{"an epic with every item in review is not blocked", blueprint.MachineEpic, Cur{State: "running"},
+			"blocked", blueprint.TriggerTick, only("nothing_startable", "all_in_review"), "", "epic_idle"},
+		{"a blocked epic whose items all reached review", blueprint.MachineEpic, Cur{State: "blocked"},
+			"merging", blueprint.TriggerTick, only("all_in_review"), "merging", ""},
+		{"retry on an item whose PR was closed", blueprint.MachineWork, Cur{State: "needs_you", Prev: []string{"closed"}},
+			blueprint.Previous, blueprint.TriggerUser, only("retry_requested"), "", "retry_allowed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			next, err := Apply(b.Machines[c.machine], c.cur, Event{To: c.to, Trigger: c.trigger, At: t0}, c.guards)
+			if c.refused == "" {
+				if err != nil || next.State != c.want {
+					t.Fatalf("%s → %s = %q, %v; want %q", c.cur.State, c.to, next.State, err, c.want)
+				}
+				return
+			}
+			var refused ErrRefused
+			if !errors.As(err, &refused) || refused.Guard != c.refused {
+				t.Fatalf("%s → %s = %q, %v; want refused by guard %s", c.cur.State, c.to, next.State, err, c.refused)
+			}
+		})
+	}
+}
+
 func TestRefusedText(t *testing.T) {
 	work := shipped(t).Machines[blueprint.MachineWork]
 	cases := []struct {
@@ -365,6 +417,11 @@ func TestTimeout(t *testing.T) {
 		}},
 		{"no timeout, no move", blueprint.MachineWork, Cur{State: "in_review", Since: t0}, []tick{
 			{after: 1000 * time.Hour, state: "in_review"},
+		}},
+		// A PR the merge queue dropped after a successful enqueue.
+		{"merging gives up", blueprint.MachineWork, Cur{State: "merging", Since: t0}, []tick{
+			{after: 2*time.Hour - time.Minute, state: "merging"},
+			{after: 2 * time.Hour, moved: true, state: "in_review"},
 		}},
 		{"session compaction gives up", blueprint.MachineSession, Cur{State: "compacting", Since: t0}, []tick{
 			{after: 10 * time.Minute, moved: true, state: "running"},

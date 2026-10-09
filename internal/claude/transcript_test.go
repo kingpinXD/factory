@@ -101,23 +101,28 @@ func TestLimitHit(t *testing.T) {
 	limit := fixtureLines(t, "limit.jsonl")
 	answer := limit[0]
 	weekly := bytes.Replace(limit[1], []byte(`"rateLimitType":"five_hour"`), []byte(`"rateLimitType":"seven_day"`), 1)
+	// "You've hit your session limit · resets 8:50pm (America/Toronto)".
+	resets := time.Date(2026, 10, 9, 0, 50, 0, 0, time.UTC)
+	before := resets.Add(-time.Hour)
 	for _, tc := range []struct {
 		name     string
 		data     [][]byte
+		now      time.Time
 		ok       bool
 		weekly   bool
 		resetsAt time.Time
 	}{
-		// "You've hit your session limit · resets 8:50pm (America/Toronto)".
-		{"session limit", limit, true, false, time.Date(2026, 10, 9, 0, 50, 0, 0, time.UTC)},
+		{"session limit", limit, before, true, false, resets},
 		// Constructed: no weekly limit message has been recorded yet.
-		{"weekly limit", [][]byte{answer, weekly}, true, true, time.Date(2026, 10, 9, 0, 50, 0, 0, time.UTC)},
-		{"answered after the limit", [][]byte{limit[1], answer}, false, false, time.Time{}},
-		{"no limit", fixtureLines(t, "compact.jsonl"), false, false, time.Time{}},
+		{"weekly limit", [][]byte{answer, weekly}, before, true, true, resets},
+		{"the reset has passed", limit, resets.Add(time.Second), false, false, time.Time{}},
+		{"at the reset time", limit, resets, false, false, time.Time{}},
+		{"answered after the limit", [][]byte{limit[1], answer}, before, false, false, time.Time{}},
+		{"no limit", fixtureLines(t, "compact.jsonl"), before, false, false, time.Time{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := withTranscript(t, compactID, bytes.Join(tc.data, nil))
-			resetsAt, weekly, ok, err := c.LimitHit(context.Background(), compactID)
+			resetsAt, weekly, ok, err := c.LimitHit(context.Background(), compactID, tc.now)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -147,7 +152,7 @@ func TestAnotherSyntheticAnswerChangesNothing(t *testing.T) {
 	if err != nil || pct != 69 {
 		t.Errorf("Context = %d%%, %v; want 69%%", pct, err)
 	}
-	if _, _, ok, err := c.LimitHit(context.Background(), compactID); err != nil || !ok {
+	if _, _, ok, err := c.LimitHit(context.Background(), compactID, time.Date(2026, 10, 8, 21, 10, 0, 0, time.UTC)); err != nil || !ok {
 		t.Errorf("LimitHit = %v, %v; want the limit still hit", ok, err)
 	}
 }

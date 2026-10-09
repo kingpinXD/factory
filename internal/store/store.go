@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -56,8 +58,33 @@ func ReadIndex(brain string) (Index, error) {
 	return ix, nil
 }
 
-// WriteIndex replaces brain's index.json.
-func WriteIndex(brain string, ix Index) error { return writeJSON(IndexPath(brain), ix) }
+// WriteIndex replaces brain's index.json. It refuses an entry whose id or
+// epic id breaks the id rule.
+func WriteIndex(brain string, ix Index) error {
+	for id, e := range ix {
+		if err := CheckID(id); err != nil {
+			return err
+		}
+		if e.Epic != "" {
+			if err := CheckID(e.Epic); err != nil {
+				return err
+			}
+		}
+	}
+	return writeJSON(IndexPath(brain), ix)
+}
+
+var idRule = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// CheckID refuses an id that is not lowercase letters, digits and dashes,
+// starting with a letter or digit. Ids name folders, branches and sessions,
+// so an id such as "x/../y" would reach outside them.
+func CheckID(id string) error {
+	if !idRule.MatchString(id) {
+		return fmt.Errorf("id %q: want lowercase letters, digits and dashes, starting with a letter or digit", id)
+	}
+	return nil
+}
 
 // Lookup returns the entry for id.
 func (ix Index) Lookup(id string) (Entry, error) {
@@ -134,7 +161,7 @@ func WriteInputs(dir string, v any) error {
 	if err != nil {
 		return err
 	}
-	return writeFile(InputsPath(dir), data)
+	return blueprint.WriteFile(InputsPath(dir), data)
 }
 
 func readJSON(path string, v any) error {
@@ -156,23 +183,5 @@ func writeJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return writeFile(path, append(data, '\n'))
-}
-
-// writeFile writes through a temporary file and a rename, so a reader never
-// sees half a file.
-func writeFile(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return blueprint.WriteFile(path, append(data, '\n'))
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/proc"
+	"github.com/kingpinXD/factory/internal/store"
 )
 
 // Client runs the claude CLI.
@@ -113,6 +114,11 @@ type Session struct {
 // Live reports whether the session has a process.
 func (s Session) Live() bool { return s.PID != 0 }
 
+// Stopped reports whether the session has no process and is not working: it
+// was stopped, or its work is done. A crashed session has no process but is
+// still working until Claude Code's background service restarts it.
+func (s Session) Stopped() bool { return !s.Live() && (s.State == "stopped" || s.State == "done") }
+
 // List returns every session Claude Code knows, stopped ones included. known
 // is false when the listing failed or came back empty; the caller must then
 // conclude nothing about any session.
@@ -177,16 +183,24 @@ type Spec struct {
 }
 
 // RunDir returns a session's run folder, named after the session with
-// dashes for colons. It sits outside any git repo, so Claude Code injects no
-// git status and loads no project instructions.
-func (c Client) RunDir(name string) string {
-	return filepath.Join(c.Home, ".factory", "runs", strings.ReplaceAll(name, ":", "-"))
+// dashes for colons; the result must pass the id rule. It sits outside any
+// git repo, so Claude Code injects no git status and loads no project
+// instructions.
+func (c Client) RunDir(name string) (string, error) {
+	folder := strings.ReplaceAll(name, ":", "-")
+	if err := store.CheckID(folder); err != nil {
+		return "", fmt.Errorf("session %s: %w", name, err)
+	}
+	return filepath.Join(c.Home, ".factory", "runs", folder), nil
 }
 
 // Start writes the session's run folder and settings, then starts it in the
 // background from that folder.
 func (c Client) Start(ctx context.Context, s Spec) error {
-	dir := c.RunDir(s.Name)
+	dir, err := c.RunDir(s.Name)
+	if err != nil {
+		return err
+	}
 	settings, err := c.writeSettings(dir, s)
 	if err != nil {
 		return err
@@ -229,6 +243,7 @@ func (c Client) writeSettings(dir string, s Spec) (string, error) {
 	}
 	env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] = "1"
 	env["GIT_CEILING_DIRECTORIES"] = c.Brain
+	env["FACTORY_BRAIN"] = c.Brain
 	if s.GHToken != "" {
 		env["GH_TOKEN"] = s.GHToken
 	}
@@ -248,6 +263,11 @@ func (c Client) writeSettings(dir string, s Spec) (string, error) {
 // would start a copy. A live session gets work through Post.
 var ErrLive = errors.New("the session is live; post to it instead")
 
+// ErrRestarting is Resume refusing a session that crashed and is still
+// working: Claude Code's background service is about to restart it, and a
+// resume would run a second copy.
+var ErrRestarting = errors.New("the session crashed and Claude Code is restarting it")
+
 // Resume wakes a stopped session with prompt. It passes no flags: with flags,
 // Claude Code starts a copy that keeps none of the session's settings.
 func (c Client) Resume(ctx context.Context, id, prompt string) error {
@@ -255,8 +275,11 @@ func (c Client) Resume(ctx context.Context, id, prompt string) error {
 	if err != nil {
 		return err
 	}
-	if s.Live() {
+	switch {
+	case s.Live():
 		return fmt.Errorf("resume %s: %w", id, ErrLive)
+	case s.State == "working":
+		return fmt.Errorf("resume %s: %w", id, ErrRestarting)
 	}
 	_, err = c.run(ctx, s.Cwd, "--bg", "--resume", s.SessionID, prompt)
 	return err
@@ -271,19 +294,19 @@ func (c Client) Stop(ctx context.Context, id string) error {
 
 // Compact compacts a session in place. A session cannot compact itself, and
 // /compact sent to its socket arrives as plain text, so Compact stops it,
-// waits until it has no process, and resumes it with /compact.
+// waits until it is listed stopped, and resumes it with /compact.
 func (c Client) Compact(ctx context.Context, id string) error {
 	if err := c.Stop(ctx, id); err != nil {
 		return err
 	}
 	for {
 		s, err := c.find(ctx, id)
-		if err == nil && !s.Live() {
+		if err == nil && s.Stopped() {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("compact %s: the session still has a process: %w", id, ctx.Err())
+			return fmt.Errorf("compact %s: the session has not stopped: %w", id, ctx.Err())
 		case <-time.After(c.PollEvery):
 		}
 	}

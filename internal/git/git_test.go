@@ -157,28 +157,225 @@ func TestWorktreeRetry(t *testing.T) {
 	if err != nil || again != first {
 		t.Errorf("retry = %s, %v; want %s", again, err, first)
 	}
+}
 
-	run(t, "-C", first, "switch", "-q", "-c", "other")
-	_, err = execClient().Worktree(context.Background(), clone, "main", "w1")
-	if err == nil || !strings.Contains(err.Error(), `exists on branch "other", not factory/w1`) {
-		t.Errorf("err = %v, want the worktree on the wrong branch refused", err)
+// assertReady checks the worktree at path is whole: on factory/w1, every
+// file checked out, nothing staged or changed, and no lock left by git.
+func assertReady(t *testing.T, clone, path string) {
+	t.Helper()
+	if b := run(t, "-C", path, "branch", "--show-current"); b != "factory/w1" {
+		t.Errorf("on branch %q, want factory/w1", b)
+	}
+	if st := run(t, "-C", path, "status", "--porcelain"); st != "" {
+		t.Errorf("status = %q, want clean", st)
+	}
+	if data, err := os.ReadFile(filepath.Join(path, "README")); err != nil || string(data) != "hello\n" {
+		t.Errorf("README = %q, %v", data, err)
+	}
+	list := run(t, "-C", clone, "worktree", "list", "--porcelain")
+	for _, line := range strings.Split(list, "\n") {
+		if strings.HasPrefix(line, "locked") {
+			t.Errorf("a worktree is still locked:\n%s", list)
+		}
 	}
 }
 
-func TestCleanupAfterMergeRemovesBothWorktreesWithoutFetching(t *testing.T) {
+// TestWorktreeRebuildsAHalfMadeWorktree: a retry after git was killed while
+// adding the worktree must not hand over what it left. Made with
+// --no-checkout, the worktree is what a kill during checkout leaves: on the
+// branch, with an empty index, so every file shows as staged for deletion.
+func TestWorktreeRebuildsAHalfMadeWorktree(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(t *testing.T, clone, path string)
+	}{
+		{"checkout never finished", func(t *testing.T, clone, path string) {
+			run(t, "-C", clone, "worktree", "add", "-q", "--no-checkout", path, "-b", "factory/w1", "origin/main")
+		}},
+		{"killed during checkout, still locked", func(t *testing.T, clone, path string) {
+			run(t, "-C", clone, "worktree", "add", "-q", "--no-checkout", path, "-b", "factory/w1", "origin/main")
+			run(t, "-C", clone, "worktree", "lock", "--reason", "initializing", path)
+		}},
+		{"checked out, still locked", func(t *testing.T, clone, path string) {
+			run(t, "-C", clone, "worktree", "add", "-q", path, "-b", "factory/w1", "origin/main")
+			run(t, "-C", clone, "worktree", "lock", "--reason", "initializing", path)
+		}},
+		{"on another branch", func(t *testing.T, clone, path string) {
+			run(t, "-C", clone, "worktree", "add", "-q", path, "-b", "factory/w1", "origin/main")
+			run(t, "-C", path, "switch", "-q", "-c", "other")
+		}},
+		{"a folder git does not know", func(t *testing.T, _, path string) {
+			if err := os.MkdirAll(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(path, "README"), "partial")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clone, _ := userClone(t)
+			before := stateOf(t, clone)
+			want := WorktreePath(clone, "w1")
+			tc.make(t, clone, want)
+
+			path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
+			if err != nil || path != want {
+				t.Fatalf("Worktree = %s, %v; want %s", path, err, want)
+			}
+			assertReady(t, clone, path)
+			if after := stateOf(t, clone); after != before {
+				t.Errorf("user clone changed: %+v, was %+v", after, before)
+			}
+		})
+	}
+}
+
+func TestWorktreeWhenOnlyTheBranchIsLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(t *testing.T, clone string)
+	}{
+		{"killed after making the branch", func(t *testing.T, clone string) {
+			run(t, "-C", clone, "branch", "factory/w1", "origin/main")
+		}},
+		{"folder deleted by hand", func(t *testing.T, clone string) {
+			path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clone, _ := userClone(t)
+			tc.make(t, clone)
+			path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertReady(t, clone, path)
+		})
+	}
+}
+
+func TestCleanupAfterTheFolderWasDeletedByHand(t *testing.T) {
+	clone, _ := userClone(t)
+	path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := execClient().Cleanup(context.Background(), clone, "w1", 0, "")
+	if err != nil || len(kept) != 0 {
+		t.Fatalf("Cleanup = kept %v, err %v", kept, err)
+	}
+	if b := run(t, "-C", clone, "branch", "--list", "factory/w1"); b != "" {
+		t.Errorf("branch left: %q", b)
+	}
+}
+
+// TestCleanupFetchesAHeadGitHubMade: GitHub can make the PR's last commit
+// itself, so the clone never has the merged head. A second clone plays
+// GitHub: it adds the commit, pushes it to refs/pull/7/head and deletes the
+// branch, as a merge does.
+func TestCleanupFetchesAHeadGitHubMade(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		add  func(t *testing.T, github string) string
+	}{
+		{"a suggested change committed on GitHub", func(t *testing.T, github string) string {
+			return commit(t, github, "suggested.txt", "from the review\n")
+		}},
+		{"update-branch merged the base in", func(t *testing.T, github string) string {
+			run(t, "-C", github, "fetch", "-q", "origin", "main")
+			run(t, "-C", github, "merge", "-q", "--no-edit", "origin/main")
+			return run(t, "-C", github, "rev-parse", "HEAD")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clone, origin := userClone(t)
+			path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			commit(t, path, "feature.txt", "work\n")
+			run(t, "-C", path, "push", "-q", "origin", "factory/w1")
+
+			seed := filepath.Join(filepath.Dir(origin), "seed")
+			commit(t, seed, "other.txt", "main moved on\n")
+			run(t, "-C", seed, "push", "-q", origin, "main")
+			github := filepath.Join(t.TempDir(), "github")
+			run(t, "clone", "-q", "-b", "factory/w1", origin, github)
+			merged := tc.add(t, github)
+			run(t, "-C", github, "push", "-q", "origin", "HEAD:refs/pull/7/head", ":factory/w1")
+
+			kept, err := execClient().Cleanup(context.Background(), clone, "w1", 7, merged)
+			if err != nil || len(kept) != 0 {
+				t.Fatalf("Cleanup = kept %v, err %v; want everything removed", kept, err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("%s still exists", path)
+			}
+			if b := run(t, "-C", clone, "branch", "--list", "factory/w1"); b != "" {
+				t.Errorf("branch left: %q", b)
+			}
+		})
+	}
+}
+
+// TestCleanupLeavesTheUsersBabysitWorktree: the factory's babysitter works
+// in the item's own worktree, so a babysit-<n> worktree is the user's.
+func TestCleanupLeavesTheUsersBabysitWorktree(t *testing.T) {
+	clone, _ := userClone(t)
+	if _, err := execClient().Worktree(context.Background(), clone, "main", "w1"); err != nil {
+		t.Fatal(err)
+	}
+	babysit := clone + "-worktrees/babysit-7"
+	run(t, "-C", clone, "worktree", "add", "-q", babysit, "origin/main", "-b", "babysit-7-tmp")
+	tip := commit(t, babysit, "fix.txt", "unpushed fix\n")
+	write(t, filepath.Join(babysit, "fix.txt"), "unsaved edit\n")
+
+	if _, err := execClient().Cleanup(context.Background(), clone, "w1", 7, ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := run(t, "-C", babysit, "status", "--porcelain"); st != "M fix.txt" {
+		t.Errorf("babysit-7 status = %q, want its unsaved edit", st)
+	}
+	if got := run(t, "-C", clone, "rev-parse", "babysit-7-tmp"); got != tip {
+		t.Errorf("babysit-7-tmp = %s, want %s", got, tip)
+	}
+}
+
+func TestBadIDsTouchNothing(t *testing.T) {
+	clone := filepath.Join(t.TempDir(), "repo")
+	f := &proc.Fake{}
+	c := Client{Runner: f}
+	_, werr := c.Worktree(context.Background(), clone, "main", "x/../foundation")
+	_, cerr := c.Cleanup(context.Background(), clone, "x/../foundation", 0, "")
+	for _, err := range []error{werr, cerr} {
+		if err == nil || !strings.Contains(err.Error(), `id "x/../foundation"`) {
+			t.Errorf("err = %v, want the id refused", err)
+		}
+	}
+	if len(f.Calls()) != 0 {
+		t.Errorf("ran git for a bad id: %v", f.Calls())
+	}
+}
+
+func TestCleanupAfterMergeDoesNotFetchAHeadItHas(t *testing.T) {
 	clone, origin := userClone(t)
 	path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened := commit(t, path, "feature.txt", "work\n")
-	// The babysitter's worktree, made as babysit-pr makes it, pushed the
-	// last fix: the item's own worktree is one commit behind the merged head.
-	babysit := clone + "-worktrees/babysit-7"
-	run(t, "-C", clone, "worktree", "add", "-q", babysit, opened, "-b", "babysit-7-tmp")
-	merged := commit(t, babysit, "fix.txt", "review fix\n")
+	commit(t, path, "feature.txt", "work\n")
+	// The babysitter pushed the last fix from the item's own worktree.
+	merged := commit(t, path, "fix.txt", "review fix\n")
 	before := stateOf(t, clone)
-	// A fetch would now fail: the remote is gone, as a merged branch may be.
+	// A fetch would now fail: the remote is gone.
 	if err := os.Rename(origin, origin+".gone"); err != nil {
 		t.Fatal(err)
 	}
@@ -187,13 +384,11 @@ func TestCleanupAfterMergeRemovesBothWorktreesWithoutFetching(t *testing.T) {
 	if err != nil || len(kept) != 0 {
 		t.Fatalf("Cleanup = kept %v, err %v", kept, err)
 	}
-	for _, p := range []string{path, babysit} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("%s still exists", p)
-		}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("%s still exists", path)
 	}
-	if b := run(t, "-C", clone, "branch", "--list", "factory/w1", "babysit-7-tmp"); b != "" {
-		t.Errorf("branches left: %q", b)
+	if b := run(t, "-C", clone, "branch", "--list", "factory/w1"); b != "" {
+		t.Errorf("branch left: %q", b)
 	}
 	if after := stateOf(t, clone); after != before {
 		t.Errorf("user clone changed: %+v, was %+v", after, before)

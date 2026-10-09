@@ -15,7 +15,7 @@ var Guards = map[string]string{
 	"restarts_exhausted":   "the entity used up its restarts or nudges",
 	"instruction_received": "the planner sent the entity an instruction event",
 	"pr_recorded":          "a PR on factory/<work-id>, or the adopted PR, is recorded and the worktree is handed over",
-	"merge_ready":          "required checks green on the head SHA, no unresolved thread, no CHANGES_REQUESTED, merge_quiet passed since the last push, may-merge is 0, and an approval or `Merge without approval: yes`",
+	"merge_ready":          "required checks green on the head SHA, no unresolved thread, no CHANGES_REQUESTED, merge_quiet passed since the program first saw the PR's current head SHA, may-merge is 0, and an approval or `Merge without approval: yes`",
 	"merge_failed":         "the merge call failed",
 	"scope_changed":        "a re-check result says updated after the worktree was handed over",
 	"cleaned_up":           "the item's worktrees and local branch are removed",
@@ -27,6 +27,7 @@ var Guards = map[string]string{
 	"recheck_dropped":      "the re-check result for the item is done, obsolete or duplicate",
 	"needs_user":           "only the user can settle it: a dead-letter, planner runs used up, or the same SHA red after a babysitter pass",
 	"retry_requested":      "the user ran factory retry on it",
+	"retry_allowed":        "the user ran factory retry on it, and its PR is not closed",
 	// set
 	"lease_taken":       "an orchestrator holds the set's lease",
 	"session_started":   "the entity's session is listed",
@@ -34,9 +35,10 @@ var Guards = map[string]string{
 	"item_startable":    "an open item can start now",
 	"items_finished":    "every item is merged or cancelled",
 	// epic
-	"state_check_ended": "the newest state-check.v<n>.md has its end event",
+	"state_check_ended": "the newest state-check.v<n>.md has its end event, and the epic has no state to return to: the first check, not a re-check",
 	"epic_plan_ended":   "the newest epic.v<n>.yaml has its end event, is valid, and every issue has a result",
 	"work_started":      "a set of the epic is claimed",
+	"epic_idle":         "no open item of the epic can start, and none is being worked or in review",
 	"all_in_review":     "every open item is in_review or later",
 	"uat_passed":        "the epic has uat: none, or uat/result.md says pass",
 	"recheck_signal":    "a re-check signal: issue_stale, a set blocked past its restarts, a related non-factory merge, factory replan, or factory answer",

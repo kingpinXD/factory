@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/gh"
 )
 
 // InputKind is what an input turned out to be.
@@ -30,23 +31,26 @@ const (
 // ErrRefused wraps every refusal; the rest of the error is the message to show.
 var ErrRefused = errors.New("refused")
 
-// SubIssueCounter counts the direct sub-issues of an issue.
-type SubIssueCounter interface {
-	SubIssues(ctx context.Context, repo string, number int) (int, error)
+// IssueReader reads an issue, or the pull request with that number, as
+// gh.Client does.
+type IssueReader interface {
+	Issue(ctx context.Context, repo string, number int) (gh.Issue, error)
 }
 
 var (
 	pathPrefixes   = []string{"/", "~/", "./", "../"}
 	fileExtensions = []string{".md", ".markdown", ".txt", ".yaml", ".yml", ".json"}
 	schemeURL      = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://\S+$`)
-	repoWord       = regexp.MustCompile(`[\w-]+`)
+	bareGitHubURL  = regexp.MustCompile(`^(?i:(www\.)?github\.com)/\S+$`)
+	issueRef       = regexp.MustCompile(`^([\w.-]+/[\w.-]+)#(\d+)$`)
 )
 
 // Kind classifies input. An issue URL with sub-issues is an epic, any other
-// issue URL an issue, an existing file a plan. A path or URL that does not
-// resolve, or a pull request URL, is refused (the error wraps ErrRefused).
-// Anything else is text.
-func Kind(ctx context.Context, input string, issues SubIssueCounter) (InputKind, error) {
+// issue URL an issue, an existing file a plan; a URL may leave out its
+// scheme, or be written owner/repo#n. A path or URL that does not resolve,
+// or a pull request, is refused (the error wraps ErrRefused). Anything else
+// is text.
+func Kind(ctx context.Context, input string, issues IssueReader) (InputKind, error) {
 	input = strings.TrimSpace(input)
 	switch {
 	case input == "":
@@ -72,7 +76,7 @@ func RepoHint(input string) string {
 	return registryHint(input, blueprint.Brain())
 }
 
-func urlKind(ctx context.Context, input string, issues SubIssueCounter) (InputKind, error) {
+func urlKind(ctx context.Context, input string, issues IssueReader) (InputKind, error) {
 	g, ok := parseGitHubURL(input)
 	switch {
 	case ok && g.section == "pull":
@@ -80,11 +84,14 @@ func urlKind(ctx context.Context, input string, issues SubIssueCounter) (InputKi
 	case !ok || g.section != "issues" || g.number == 0:
 		return "", refuse("%q is not a GitHub issue URL", input)
 	}
-	n, err := issues.SubIssues(ctx, g.repo, g.number)
+	i, err := issues.Issue(ctx, g.repo, g.number)
 	if err != nil {
-		return "", fmt.Errorf("count sub-issues of %s#%d: %w", g.repo, g.number, err)
+		return "", fmt.Errorf("read %s#%d: %w", g.repo, g.number, err)
 	}
-	if n > 0 {
+	switch i.Kind() {
+	case gh.KindPR:
+		return "", refuse("%q is a pull request; give an issue, a plan file or text", input)
+	case gh.KindEpic:
 		return KindEpic, nil
 	}
 	return KindIssue, nil
@@ -109,7 +116,9 @@ func refuse(format string, args ...any) error {
 
 // A URL or a file extension only counts when the input is a single word, so a
 // sentence that mentions "main.go" or starts with a link stays text.
-func looksLikeURL(s string) bool { return schemeURL.MatchString(s) }
+func looksLikeURL(s string) bool {
+	return schemeURL.MatchString(s) || bareGitHubURL.MatchString(s) || issueRef.MatchString(s)
+}
 
 func looksLikePath(s string) bool {
 	for _, prefix := range pathPrefixes {
@@ -139,7 +148,14 @@ type githubURL struct {
 }
 
 func parseGitHubURL(input string) (githubURL, bool) {
-	if !looksLikeURL(input) {
+	if m := issueRef.FindStringSubmatch(input); m != nil {
+		n, _ := strconv.Atoi(m[2])
+		return githubURL{repo: m[1], section: "issues", number: n}, true
+	}
+	if bareGitHubURL.MatchString(input) {
+		input = "https://" + input
+	}
+	if !schemeURL.MatchString(input) {
 		return githubURL{}, false
 	}
 	u, err := url.Parse(input)
@@ -163,16 +179,15 @@ func parseGitHubURL(input string) (githubURL, bool) {
 	return g, true
 }
 
-// registryHint returns the one registry short name the text mentions as a
-// whole word, or "" when it mentions none or several.
+// registryHint returns the one registry short name the text names as a
+// repo, in backticks (`sdk`) or after its owner (anuma-ai/sdk), or "" when
+// it names none or several. A bare word does not count: names such as text,
+// fit and nearby are everyday words.
 func registryHint(text, brain string) string {
-	words := map[string]bool{}
-	for _, w := range repoWord.FindAllString(text, -1) {
-		words[w] = true
-	}
 	var found []string
 	for _, name := range registryNames(brain) {
-		if words[name] {
+		q := regexp.QuoteMeta(name)
+		if regexp.MustCompile("`" + q + "`" + `|[\w.-]/` + q + `(?:[^\w-]|$)`).MatchString(text) {
 			found = append(found, name)
 		}
 	}

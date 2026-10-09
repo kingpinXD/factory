@@ -101,7 +101,7 @@ func withReviewer(b *Blueprint) {
 func TestValidateFixturePasses(t *testing.T) {
 	brain := testBrain(t, testAgents)
 	live := []EntityState{
-		{Machine: MachineWork, ID: "w-1", State: "waiting"},
+		{Machine: MachineWork, ID: "w-1", State: "waiting", Prev: []string{"starting"}},
 		{Machine: MachineAccount, ID: "account", State: "paused"},
 	}
 	if got := fixture(t).Validate(brain, live); len(got) != 0 {
@@ -409,6 +409,11 @@ func TestValidateRules(t *testing.T) {
 			name: "a live entity's state was removed",
 			live: []EntityState{{Machine: MachineWork, ID: "w-1", State: "exploring"}},
 			rule: "live_state", msg: `work w-1 is in state "exploring", which machine "work" no longer has`,
+		},
+		{
+			name: "a state a live entity returns to was removed",
+			live: []EntityState{{Machine: MachineWork, ID: "w-1", State: "waiting", Prev: []string{"exploring"}}},
+			rule: "live_state", msg: `work w-1 returns to state "exploring", which machine "work" no longer has`,
 		},
 		{
 			name: "a live entity's machine was removed",

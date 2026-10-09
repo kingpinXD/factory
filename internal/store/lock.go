@@ -3,7 +3,6 @@ package store
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,98 +10,55 @@ import (
 	"syscall"
 )
 
-// LockedError means a live process holds the lock.
+// LockedError means another process holds the lock.
 type LockedError struct {
 	Name string
 	PID  int
 }
 
 func (e *LockedError) Error() string {
+	if e.PID == 0 {
+		return fmt.Sprintf("another %s is running", e.Name)
+	}
 	return fmt.Sprintf("another %s is running (pid %d)", e.Name, e.PID)
 }
 
-// Lock takes the lock called name, such as "tick": the folder
-// <brain>/factory/.lock/<name> holding its owner's pid. A lock held by a
-// live process is refused with a *LockedError; one left by a dead process
-// is taken over. The returned func releases the lock.
+// Lock takes the lock called name, such as "tick": an flock on the file
+// <brain>/factory/.lock/<name>. The system releases it when its holder exits,
+// however it exits. A held lock is refused with a *LockedError naming the
+// pid its holder wrote in the file. The returned func releases the lock.
 func Lock(brain, name string) (func() error, error) {
 	dir := filepath.Join(Factory(brain), ".lock")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(dir, name)
-	for range 3 {
-		err := claim(dir, path)
-		if err == nil {
-			return func() error { return os.RemoveAll(path) }, nil
-		}
-		if !errors.Is(err, fs.ErrExist) {
-			return nil, err
-		}
-		pid, err := readPID(path)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue // released meanwhile
-		}
-		if err != nil {
-			return nil, err
-		}
-		if alive(pid) {
-			return nil, &LockedError{Name: name, PID: pid}
-		}
-		if err := removeStale(path, pid); err != nil {
-			return nil, err
-		}
-	}
-	return nil, fmt.Errorf("could not take the %s lock at %s", name, path)
-}
-
-// claim makes the lock folder with our pid inside, then renames it into
-// place, so the lock never exists without its pid. The rename fails with
-// fs.ErrExist while another lock is there.
-func claim(dir, path string) error {
-	tmp, err := os.MkdirTemp(dir, filepath.Base(path)+".new-")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer os.RemoveAll(tmp)
-	if err := os.WriteFile(filepath.Join(tmp, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-func readPID(path string) (int, error) {
-	data, err := os.ReadFile(filepath.Join(path, "pid"))
-	if err != nil {
-		return 0, err
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, fmt.Errorf("%s: bad pid: %w", path, err)
-	}
-	return pid, nil
-}
-
-func alive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-// removeStale moves the dead process's lock aside and deletes it. If
-// another process took the lock over in the meantime, its lock is put back.
-func removeStale(path string, deadPID int) error {
-	stale := fmt.Sprintf("%s.stale-%d", path, os.Getpid())
-	if err := os.Rename(path, stale); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, &LockedError{Name: name, PID: readPID(path)}
 		}
-		return err
+		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
-	if pid, err := readPID(stale); err == nil && pid != deadPID {
-		return os.Rename(stale, path)
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return nil, err
 	}
-	return os.RemoveAll(stale)
+	if _, err := f.WriteAt([]byte(strconv.Itoa(os.Getpid())), 0); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f.Close, nil
+}
+
+// readPID returns the pid in the lock file at path, or 0 when the holder has
+// not written it yet.
+func readPID(path string) int {
+	data, _ := os.ReadFile(path)
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	return pid
 }

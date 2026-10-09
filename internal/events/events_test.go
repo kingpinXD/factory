@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -178,6 +179,49 @@ func TestReadNamesABrokenEvent(t *testing.T) {
 	_, err = Read(path)
 	if err == nil || !strings.Contains(err.Error(), "event 2") {
 		t.Errorf("err = %v, want it to name event 2", err)
+	}
+}
+
+// tornLog returns a log with one event and the start of a second line with
+// no newline, as a crash or a full disk leaves it.
+func tornLog(t *testing.T) (path, torn string) {
+	t.Helper()
+	path = logPath(t)
+	mustAppend(t, path, Event{Kind: KindStart})
+	torn = `{"seq":2,"at":"2026-10-09T12:00:00Z","kind":"heart`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(torn)
+	f.Close()
+	return path, torn
+}
+
+func TestReadSkipsATornLastLine(t *testing.T) {
+	path, torn := tornLog(t)
+	evs := mustRead(t, path)
+	if len(evs) != 1 || evs[0].Kind != KindStart {
+		t.Errorf("Read = %+v, want the one whole event", evs)
+	}
+	if data, _ := os.ReadFile(path); !strings.HasSuffix(string(data), torn) {
+		t.Errorf("Read changed the log: %q", data)
+	}
+}
+
+func TestAppendCutsATornLastLine(t *testing.T) {
+	path, torn := tornLog(t)
+	got := mustAppend(t, path, Event{Kind: KindHeartbeat})
+	if got.Seq != 3 {
+		t.Errorf("appended seq %d, want 3: after the start and the error naming the cut", got.Seq)
+	}
+	evs := mustRead(t, path)
+	if len(evs) != 3 || evs[1].Kind != KindError || evs[1].Sender != SenderProgram || !strings.Contains(evs[1].Text, strconv.Quote(torn)) {
+		t.Fatalf("log = %+v, want start, an error quoting the cut line, heartbeat", evs)
+	}
+	assertSeqs(t, path, 3)
+	if err := Ack(path, 2, "s1"); err == nil || !strings.Contains(err.Error(), "seq 2 is not a message") {
+		t.Errorf("Ack after the cut: err = %v, want the log readable", err)
 	}
 }
 

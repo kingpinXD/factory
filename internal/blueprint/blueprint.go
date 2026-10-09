@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // SchemaVersion is the only blueprint schema version this program reads.
@@ -126,6 +128,9 @@ type Usage struct {
 // Context holds the context-window percentages at which a session
 // checkpoints and Claude Code compacts it by itself.
 type Context struct {
+	// Window is the context window in tokens that both Claude Code's
+	// auto-compaction and the program's percentages are measured against.
+	Window        int `yaml:"window" json:"window"`
 	CheckpointAt  int `yaml:"checkpoint_at" json:"checkpoint_at"`
 	AutoCompactAt int `yaml:"auto_compact_at" json:"auto_compact_at"`
 	// CompactFailuresDM is how many failed compactions in a row send a DM.
@@ -161,15 +166,46 @@ type Component struct {
 	// Placeholder marks a component that is named but not built yet.
 	Placeholder bool     `yaml:"placeholder,omitempty" json:"placeholder,omitempty"`
 	Input       []string `yaml:"input,omitempty" json:"input,omitempty"`
-	Output      Output   `yaml:"output,omitempty" json:"output,omitzero"`
-	Health      string   `yaml:"health,omitempty" json:"health,omitempty"`
-	Limits      Limits   `yaml:"limits,omitempty" json:"limits,omitzero"`
+	// Outputs is written in YAML as one output or a list of them.
+	Outputs Outputs `yaml:"output,omitempty" json:"output,omitempty"`
+	Health  string  `yaml:"health,omitempty" json:"health,omitempty"`
+	Limits  Limits  `yaml:"limits,omitempty" json:"limits,omitzero"`
 }
 
-// Output is the file a component's step writes, and the headings it must have.
+// OutputReply, as an output's path, means the helper returns its result in
+// its reply and writes no file.
+const OutputReply = "reply"
+
+// RulesFile, relative to <brain>/factory, holds the rules every session and
+// helper prompt ends with.
+const RulesFile = "components/_rules.md"
+
+// Output is a file a component's step writes, and the headings it must have.
+// For a .yaml file the headings are its top-level keys. A path may hold
+// placeholders such as <set-id>; ".v<n>" before the extension is a version.
 type Output struct {
 	Path     string   `yaml:"path" json:"path"`
 	Headings []string `yaml:"headings,omitempty" json:"headings,omitempty"`
+}
+
+// Outputs are a component's outputs.
+type Outputs []Output
+
+// UnmarshalYAML reads one output or a list of them.
+func (o *Outputs) UnmarshalYAML(n *yaml.Node) error {
+	items := []*yaml.Node{n}
+	if n.Kind == yaml.SequenceNode {
+		items = n.Content
+	}
+	*o = nil
+	for _, item := range items {
+		var out Output
+		if err := decodeKnownFields(item, &out); err != nil {
+			return err
+		}
+		*o = append(*o, out)
+	}
+	return nil
 }
 
 // Limits are a component's own limits.

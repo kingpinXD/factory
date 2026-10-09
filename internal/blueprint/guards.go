@@ -8,6 +8,8 @@ var Guards = map[string]string{
 	"startable":            "the item's gate: start links are released, its repo's base branch is green and the account is ok",
 	"step_started":         "the step's start event is logged",
 	"step_ended":           "the step's end event is logged, and its output file has the hash it names and the step's headings",
+	"verify_passed":        "the verifier's newest verify.v<n>.md is ended (as step_ended) and the first line under its ## Verdict is pass",
+	"verify_failed":        "the verifier's newest verify.v<n>.md is ended (as step_ended) and the first line under its ## Verdict is fail",
 	"question_asked":       "the session logged a question for the user",
 	"answered":             "the user's answer is logged",
 	"restarts_exhausted":   "the entity used up its restarts or nudges",

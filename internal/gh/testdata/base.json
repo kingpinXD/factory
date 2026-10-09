@@ -1,0 +1,14 @@
+{
+  "data": {
+    "repository": {
+      "ref": {
+        "target": {
+          "oid": "f453fce3417ec3f8de2f83a66ec0edec5a857ee0",
+          "statusCheckRollup": {
+            "state": "SUCCESS"
+          }
+        }
+      }
+    }
+  }
+}

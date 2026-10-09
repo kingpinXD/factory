@@ -21,6 +21,12 @@ var commands = []string{
 var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"check":     runCheck,
 	"blueprint": runBlueprint,
+	"agents":    runAgents,
+	"event":     runEvent,
+	"inbox":     runInbox,
+	"heartbeat": runHeartbeat,
+	"lease-ok":  runLeaseOK,
+	"query":     runQuery,
 }
 
 func main() {
@@ -42,25 +48,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "factory: not implemented yet: %s\n", name)
 	return 1
-}
-
-// runCheck validates the brain's blueprint and prints each problem.
-func runCheck(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 0 {
-		fmt.Fprintln(stderr, "usage: factory check")
-		return 2
-	}
-	brain := blueprint.Brain()
-	_, problems := blueprint.Check(brain, nil)
-	for _, p := range problems {
-		fmt.Fprintln(stdout, p)
-	}
-	if len(problems) > 0 {
-		fmt.Fprintf(stderr, "factory: %s fails its check (%d problems)\n", blueprint.Path(brain), len(problems))
-		return 1
-	}
-	fmt.Fprintf(stdout, "ok: %s\n", blueprint.Path(brain))
-	return 0
 }
 
 // runBlueprint prints the brain's blueprint as JSON.

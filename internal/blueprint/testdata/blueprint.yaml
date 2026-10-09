@@ -3,6 +3,7 @@ schema_version: 1
 tick: {every: 1m, reconcile_every: 5m}
 values:
   usage: {near_limit: 80, pause: 88, stale_after: 15m}
+  context: {window: 200000}
 deny:
   models: [fable]
 components:
@@ -12,8 +13,14 @@ components:
     tier: medium
     effort: high
     instructions: components/planner.md
+    output:
+      - {path: state-check.v<n>.md, headings: ["## Input", "## Issues"]}
+      - {path: epic.v<n>.yaml, headings: [issues, items]}
     health: events
-  uat-runner: {runs_as: session, placeholder: true}
+  uat-runner:
+    runs_as: session
+    placeholder: true
+    output: {path: uat/result.md, headings: ["## Result"]}
 machines:
   work: &item
     start: queued

@@ -1,0 +1,501 @@
+# The factory's blueprint: components, state machines, supervision values and deny list.
+# The program (kingpinXD/factory) reads it every tick. A change takes effect only if
+# `factory check` passes; otherwise the tick keeps the last good copy and DMs once.
+# The plan behind every value: features/agent_factory/plans/2026-10-08-factory/plan.md.
+#
+# Machines: each state has an entry and exits in words, a health kind (events, waits,
+# github) and an optional timeout whose on_timeout names the next state (itself = restart).
+# Transitions are what the program enforces. `always_allowed` moves have no `from` and are
+# allowed from every state that is not an `end` state. `to: previous` returns the entity to
+# the state it was in before. Guards are names the program registers.
+
+schema_version: 1
+
+tick:
+  every: 1m
+  reconcile_every: 5m
+
+values:
+  supervision:
+    no_progress: 45m
+    dead_after: 2m
+    restarts_per_component_per_hour: 2
+    restarts_per_item: 6
+    planner_runs_per_problem: 3
+    same_error_dead_letter: 3
+    unknown_listings_dm: 6
+  merge_quiet: 15m
+  lease: 30m
+  inbox:
+    check_every: 10m
+    check_every_calls: 20
+    unacked: 15m
+  usage:
+    near_limit: 80
+    pause: 88
+    probe_every: 4m
+    probe_every_near_limit: 1m
+    resume_after_reset: 2m
+    stale_after: 15m
+  context:
+    window: 200000
+    checkpoint_at: 50
+    auto_compact_at: 60
+    compact_failures_dm: 2
+  wait_dm: 24h
+
+deny:
+  models: [fable]
+  features: [fast_mode, advisor]
+  repos: [text]
+  branches:
+    - {repo: argo-cd-apps, branch: env-prod}
+
+# A session's or helper's instructions are components/<name>.md; the program appends
+# components/_rules.md to each. Helpers reach factory sessions through agents.json (`factory
+# agents`), under their front matter name, with the tools, tier and effort set here. An output
+# path is relative to the epic folder, and any output may be redone as a new `.v<n>` version;
+# `path: reply` means the helper returns its result in its reply and writes no file. Headings
+# of a .yaml output are its top-level keys.
+components:
+  dispatcher: {runs_as: code}
+  intake: {runs_as: code}
+  manager: {runs_as: code}
+  merger: {runs_as: code}
+  issue-writer: {runs_as: code}
+  usage-probe-driver: {runs_as: code}
+
+  # epic
+  planner:
+    runs_as: session
+    tier: medium
+    effort: high
+    instructions: components/planner.md
+    output:
+      - {path: state-check.v<n>.md, headings: ["## Input", "## Repos", "## Issues"]}
+      - {path: epic.v<n>.yaml, headings: [issues, items, sets, links, uat]}
+    health: events
+  uat-runner:
+    runs_as: session
+    placeholder: true
+    instructions: components/uat-runner.md
+    output: {path: uat/result.md, headings: ["## Result", "## Evidence"]}
+
+  # work
+  orchestrator:
+    runs_as: session
+    tier: medium
+    effort: medium
+    instructions: components/orchestrator.md
+    output: {path: "sets/<set-id>/<work-id>/rounds.md", headings: ["## Round 1", "## Final Summary"]}
+    health: events
+  explorer:
+    runs_as: helper
+    tier: medium
+    effort: medium
+    tools: [Bash, Read, Write, Grep, Glob, ToolSearch, mcp__greptile__list_knowledge_bases,
+      mcp__greptile__list_knowledge_base_documents, mcp__greptile__get_knowledge_base_document,
+      mcp__greptile__search_knowledge_base]
+    instructions: components/explorer.md
+    output:
+      path: "sets/<set-id>/<work-id>/explore.md"
+      headings: ["## Summary", "## Files", "## Baseline tests", "## Issue check"]
+  plan-writer:
+    runs_as: helper
+    tier: medium
+    effort: high
+    tools: [Bash, Read, Write, Edit, Grep, Glob]
+    instructions: components/plan-writer.md
+    output: {path: "sets/<set-id>/<work-id>/plan.md", headings: ["## Explore summary", "## TODOs", "## Assumptions"]}
+  plan-reviewer:
+    runs_as: helper
+    tier: medium
+    effort: high
+    tools: [Bash, Read, Grep, Glob]
+    instructions: components/plan-reviewer.md
+    output: {path: reply, headings: ["### Reviewer → Findings"]}
+  implementor:
+    runs_as: helper
+    tier: medium
+    effort: medium
+    tools: [Bash, Read, Write, Edit, Grep, Glob]
+    instructions: components/implementor.md
+    output:
+      path: "sets/<set-id>/<work-id>/implement.md"
+      headings: ["## Status", "## TODOs", "## Judgment calls", "## Red tests", "## Files touched"]
+  verifier:
+    runs_as: helper
+    tier: medium
+    effort: medium
+    tools: [Bash, Read, Write, Edit, Grep, Glob, Agent]
+    instructions: components/verifier.md
+    output: {path: "sets/<set-id>/<work-id>/verify.md", headings: ["## Verdict", "## Checks", "## Review", "## Send back"]}
+  pr-opener:
+    runs_as: helper
+    tier: low
+    effort: low
+    tools: [Bash, Read, Write, Edit, Grep, Glob]
+    instructions: components/pr-opener.md
+    output: {path: "sets/<set-id>/<work-id>/pr.md", headings: ["## PR", "## Checks", "## Reviewers"]}
+  reviewer-code:
+    runs_as: helper
+    tier: medium
+    effort: medium
+    tools: [Bash, Read, Grep, Glob]
+    instructions: components/reviewer-code.md
+    output: {path: reply}
+  reviewer-red-team:
+    runs_as: helper
+    tier: medium
+    effort: high
+    tools: [Bash, Read, Grep, Glob]
+    instructions: components/reviewer-red-team.md
+    output: {path: reply}
+  reviewer-arch-test:
+    runs_as: helper
+    tier: low
+    effort: medium
+    tools: [Bash, Read, Grep, Glob]
+    instructions: components/reviewer-arch-test.md
+    output: {path: reply}
+  reviewer-issue-completeness:
+    runs_as: helper
+    tier: low
+    effort: medium
+    tools: [Bash, Read, Grep, Glob]
+    instructions: components/reviewer-issue-completeness.md
+    output: {path: reply}
+  babysitter:
+    runs_as: session
+    tier: medium
+    effort: medium
+    instructions: components/babysitter.md
+    output: {path: "sets/<set-id>/<work-id>/babysit.v<n>.md", headings: ["## Outcome", "## Comments", "## CI"]}
+    health: github
+
+machines:
+  # One PR in one repo, for one issue.
+  work:
+    start: queued
+    states:
+      queued:
+        entry: the newest ended epic.yaml lists the item
+        exits: starting once the item is startable
+        health: waits
+      starting:
+        entry: the item is startable; the program makes its worktree and starts or nudges its orchestrator
+        exits: exploring when the explorer's start event is logged
+        health: events
+      exploring:
+        entry: the explorer's start event is logged
+        exits: planning when explore.v<n>.md ends with its Files section; restarted after 2h
+        timeout: 2h
+        on_timeout: exploring
+        health: events
+      planning:
+        entry: the explore output ended
+        exits: plan_review when plan.v<n>.md ends; restarted after 2h
+        timeout: 2h
+        on_timeout: planning
+        health: events
+      plan_review:
+        entry: the plan ended
+        exits: implementing when the review loop ends; restarted after 2h
+        timeout: 2h
+        on_timeout: plan_review
+        health: events
+      implementing:
+        entry: the plan review ended, the verifier failed the implementation (the orchestrator sends it back), or the scope changed after handover (handback written)
+        exits: verifying when the implementation step ends; restarted after 6h
+        timeout: 6h
+        on_timeout: implementing
+        health: events
+      verifying:
+        entry: the implementation step ended
+        exits: pr_open when verify.v<n>.md ends with the verdict pass; implementing when it ends with fail (the orchestrator sends its Send back to the implementor); restarted after 2h
+        timeout: 2h
+        on_timeout: verifying
+        health: events
+      pr_open:
+        entry: verification ended; the pr-opener opens the PR
+        exits: in_review once the PR is recorded and the worktree handed over; needs_you after 1h
+        timeout: 1h
+        on_timeout: needs_you
+        health: github
+      in_review:
+        entry: the PR is recorded and the babysitter owns the worktree
+        exits: merging when the merge check passes; implementing when the scope changed
+        health: github
+      merging:
+        entry: the merge check passed and the merge was sent
+        exits: merged when GitHub shows it merged; in_review when the merge failed
+        health: github
+      merged:
+        entry: GitHub shows the PR merged
+        exits: done once the item's worktrees and local branch are removed
+        health: waits
+        end: true
+      done:
+        entry: the item's worktrees and local branch are removed
+        health: waits
+        end: true
+      rechecking:
+        entry: the epic started a re-check that covers the item; merges are held
+        exits: back to the state it left on ready or updated; cancelled on done, obsolete or duplicate
+        health: waits
+      waiting_user:
+        entry: the session asked the user a question (DM sent)
+        exits: back to the state it left when the answer is logged
+        health: waits
+      blocked:
+        entry: the item used up its restarts; its set asks the planner for a re-check
+        exits: back to the state it left when the planner sends an instruction
+        health: waits
+      needs_you:
+        entry: only the user can settle it (DM sent)
+        exits: back to the state it left on factory retry; cancelled on factory stop
+        health: waits
+      closed:
+        entry: GitHub shows the PR closed without merging
+        exits: needs_you, with a DM
+        health: waits
+        end: true
+      cancelled:
+        entry: a stop or a re-check ended the item; sessions stopped, auto-merge off, PR closed, worktrees removed
+        health: waits
+        end: true
+    transitions:
+      - {from: queued, to: starting, trigger: tick, guard: startable}
+      - {from: starting, to: exploring, trigger: file, guard: step_started}
+      - {from: exploring, to: planning, trigger: file, guard: step_ended}
+      - {from: planning, to: plan_review, trigger: file, guard: step_ended}
+      - {from: plan_review, to: implementing, trigger: file, guard: step_ended}
+      - {from: implementing, to: verifying, trigger: file, guard: step_ended}
+      - {from: verifying, to: pr_open, trigger: file, guard: verify_passed}
+      - {from: verifying, to: implementing, trigger: file, guard: verify_failed}
+      - {from: pr_open, to: in_review, trigger: github, guard: pr_recorded}
+      - {from: in_review, to: merging, trigger: tick, guard: merge_ready}
+      - {from: in_review, to: implementing, trigger: file, guard: scope_changed}
+      - {from: merging, to: in_review, trigger: github, guard: merge_failed}
+      - {from: merged, to: done, trigger: tick, guard: cleaned_up}
+      - {from: closed, to: needs_you, trigger: tick}
+      - {from: starting, to: waiting_user, trigger: file, guard: question_asked}
+      - {from: exploring, to: waiting_user, trigger: file, guard: question_asked}
+      - {from: planning, to: waiting_user, trigger: file, guard: question_asked}
+      - {from: plan_review, to: waiting_user, trigger: file, guard: question_asked}
+      - {from: implementing, to: waiting_user, trigger: file, guard: question_asked}
+      - {from: verifying, to: waiting_user, trigger: file, guard: question_asked}
+      - {from: waiting_user, to: previous, trigger: user, guard: answered}
+      - {from: starting, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: exploring, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: planning, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: plan_review, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: implementing, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: verifying, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: blocked, to: previous, trigger: file, guard: instruction_received}
+      - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
+      - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
+      - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
+      - {to: merged, trigger: github, guard: pr_merged, always_allowed: true}
+      - {to: closed, trigger: github, guard: pr_closed_unmerged, always_allowed: true}
+      - {to: rechecking, trigger: file, guard: recheck_started, always_allowed: true}
+      - {to: cancelled, trigger: user, guard: cancel_requested, always_allowed: true}
+      - {to: needs_you, trigger: tick, guard: needs_user, always_allowed: true}
+
+  # The items one orchestrator implements, under one lease.
+  set:
+    start: queued
+    states:
+      queued:
+        entry: the newest ended epic.yaml defines the set
+        exits: claimed once an orchestrator holds its lease
+        health: waits
+      claimed:
+        entry: an orchestrator holds the set's lease
+        exits: running once the orchestrator's session is listed
+        health: events
+      running:
+        entry: the orchestrator works the set's items, starting the next startable one when the current one reaches pr_open
+        exits: blocked when nothing in it can start or it used up its restarts; done when every item is merged or cancelled
+        health: events
+      blocked:
+        entry: nothing in the set can start (the orchestrator ended its turn), or it used up its restarts (one planner run)
+        exits: running when an item can start (the tick nudges the orchestrator) or the planner sends an instruction; done when every item is merged or cancelled
+        health: waits
+      needs_you:
+        entry: only the user can settle it (DM sent)
+        exits: back to the state it left on factory retry; cancelled on factory stop
+        health: waits
+      done:
+        entry: every item is merged or cancelled
+        health: waits
+        end: true
+      cancelled:
+        entry: a stop covered the set; its sessions are stopped
+        health: waits
+        end: true
+    transitions:
+      - {from: queued, to: claimed, trigger: tick, guard: lease_taken}
+      - {from: claimed, to: running, trigger: tick, guard: session_started}
+      - {from: running, to: blocked, trigger: file, guard: nothing_startable}
+      - {from: running, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: blocked, to: running, trigger: tick, guard: item_startable}
+      - {from: blocked, to: running, trigger: file, guard: instruction_received}
+      - {from: running, to: done, trigger: tick, guard: items_finished}
+      - {from: blocked, to: done, trigger: tick, guard: items_finished}
+      - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
+      - {to: needs_you, trigger: tick, guard: needs_user, always_allowed: true}
+      - {to: cancelled, trigger: user, guard: cancel_requested, always_allowed: true}
+
+  # Every input; an epic of one for a single-repo issue.
+  epic:
+    start: checking
+    states:
+      checking:
+        entry: an input was added, or a re-check signal arrived; the planner checks the current state
+        exits: planning when the first state-check.v<n>.md ends; back to the state it left when a re-check's epic.v<n>.yaml ends; restarted after 2h
+        timeout: 2h
+        on_timeout: checking
+        health: events
+      planning:
+        entry: the state check ended
+        exits: planned when epic.v<n>.yaml ends, is valid and gives every issue a result; restarted after 2h
+        timeout: 2h
+        on_timeout: planning
+        health: events
+      planned:
+        entry: the newest epic.yaml is valid and every issue has a result
+        exits: running once a set is claimed
+        health: waits
+      running:
+        entry: a set of the epic is claimed
+        exits: merging when every open item is in_review or later; blocked when nothing can start
+        health: waits
+      merging:
+        entry: every open item is in_review or later
+        exits: uat when every item is merged or cancelled
+        health: github
+      uat:
+        entry: every item is merged or cancelled
+        exits: done when the epic has uat none, or uat/result.md says pass (the only way to done)
+        health: events
+      blocked:
+        entry: no open item can start and none is being worked
+        exits: running when an item can start
+        health: waits
+      needs_you:
+        entry: only the user can settle it (DM sent)
+        exits: back to the state it left on factory retry; checking on factory answer; cancelled on factory stop
+        health: waits
+      done:
+        entry: every item is merged or cancelled and UAT passed or is none
+        health: waits
+        end: true
+      cancelled:
+        entry: a stop covered the epic; its work is cancelled downward
+        health: waits
+        end: true
+    transitions:
+      - {from: checking, to: planning, trigger: file, guard: state_check_ended}
+      - {from: checking, to: previous, trigger: file, guard: recheck_ended}
+      - {from: planning, to: planned, trigger: file, guard: epic_plan_ended}
+      - {from: planned, to: running, trigger: tick, guard: work_started}
+      - {from: running, to: merging, trigger: tick, guard: all_in_review}
+      - {from: running, to: blocked, trigger: tick, guard: nothing_startable}
+      - {from: blocked, to: running, trigger: tick, guard: item_startable}
+      - {from: merging, to: uat, trigger: tick, guard: items_finished}
+      - {from: uat, to: done, trigger: file, guard: uat_passed}
+      - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
+      - {to: checking, trigger: file, guard: recheck_signal, always_allowed: true}
+      - {to: needs_you, trigger: tick, guard: needs_user, always_allowed: true}
+      - {to: cancelled, trigger: user, guard: cancel_requested, always_allowed: true}
+
+  # One Claude Code session the factory started.
+  session:
+    start: starting
+    states:
+      starting:
+        entry: the program started the session, or woke a stopped one with a flagless resume
+        exits: running once it is listed working; stopped when the factory stops it; dead after no pid for dead_after
+        health: events
+      running:
+        entry: listed with a pid, working
+        exits: turn_ended when its turn ends; stopped when the factory stops it; dead after no pid for dead_after
+        health: events
+      turn_ended:
+        entry: listed with a pid, its turn ended
+        exits: running when a posted message starts a turn; compacting after a checkpoint; finished when its work is over; stopped; dead
+        health: waits
+      compacting:
+        entry: its newest event is a checkpoint and no step is open; the program stopped it and resumed it with /compact
+        exits: running once the transcript has a compaction record and the turn ended (the program then posts "read your checkpoint"); after 10m, running without compacting; stopped on a usage pause or factory stop; dead
+        timeout: 10m
+        on_timeout: running
+        health: waits
+      stopped:
+        entry: the factory stopped it (usage pause or factory stop); the conversation is kept
+        exits: starting when resumed with no flags; finished when its work is over
+        health: waits
+      dead:
+        entry: no pid for dead_after (Claude Code restarts a crash by itself sooner)
+        exits: starting when resumed with no flags; finished when its work is over
+        health: waits
+      finished:
+        entry: its work is over and nothing will wake it
+        health: waits
+        end: true
+    transitions:
+      - {from: starting, to: running, trigger: tick, guard: listed_working}
+      - {from: running, to: turn_ended, trigger: tick, guard: turn_ended}
+      - {from: turn_ended, to: running, trigger: tick, guard: listed_working}
+      - {from: turn_ended, to: compacting, trigger: tick, guard: checkpoint_ready}
+      - {from: compacting, to: running, trigger: tick, guard: compaction_recorded}
+      - {from: turn_ended, to: finished, trigger: tick, guard: work_finished}
+      - {from: starting, to: stopped, trigger: tick, guard: factory_stopped}
+      - {from: running, to: stopped, trigger: tick, guard: factory_stopped}
+      - {from: turn_ended, to: stopped, trigger: tick, guard: factory_stopped}
+      - {from: starting, to: dead, trigger: tick, guard: no_pid}
+      - {from: running, to: dead, trigger: tick, guard: no_pid}
+      - {from: turn_ended, to: dead, trigger: tick, guard: no_pid}
+      - {from: compacting, to: stopped, trigger: tick, guard: factory_stopped}
+      - {from: compacting, to: dead, trigger: tick, guard: no_pid}
+      - {from: stopped, to: starting, trigger: tick, guard: resume_allowed}
+      - {from: dead, to: starting, trigger: tick, guard: resume_allowed}
+      - {from: stopped, to: finished, trigger: tick, guard: work_finished}
+      - {from: dead, to: finished, trigger: tick, guard: work_finished}
+
+  # Plan usage, one per machine. While it is not ok, nothing starts or resumes and the
+  # clocks of the work it holds back are frozen.
+  account:
+    start: ok
+    states:
+      ok:
+        entry: a fresh figure under near_limit in both windows
+        exits: near_limit at near_limit; paused at pause or a limit message; stale when the figure is older than stale_after
+        health: waits
+      near_limit:
+        entry: a fresh figure at or above near_limit in either window; no new work starts
+        exits: ok when both windows are under near_limit; paused; stale
+        health: waits
+      paused:
+        entry: a figure at or above pause, or a factory session showed a limit message; every factory session is stopped and recorded; a weekly pause DMs once
+        exits: resuming resume_after_reset past the reset, once the probe's fresh figure is under near_limit
+        health: waits
+      resuming:
+        entry: the reset passed and the probe's figure is under near_limit; one recorded session resumes per tick, longest chain first
+        exits: ok when every recorded session is resumed; paused at pause again
+        health: waits
+      stale:
+        entry: the newest figure is older than stale_after; no new work starts
+        exits: ok or near_limit on a fresh figure; paused
+        health: waits
+    transitions:
+      - {from: ok, to: near_limit, trigger: tick, guard: usage_near_limit}
+      - {from: near_limit, to: ok, trigger: tick, guard: usage_under_limit}
+      - {from: ok, to: stale, trigger: tick, guard: usage_stale}
+      - {from: near_limit, to: stale, trigger: tick, guard: usage_stale}
+      - {from: stale, to: ok, trigger: tick, guard: usage_under_limit}
+      - {from: stale, to: near_limit, trigger: tick, guard: usage_near_limit}
+      - {from: paused, to: resuming, trigger: tick, guard: reset_passed}
+      - {from: resuming, to: ok, trigger: tick, guard: all_resumed}
+      - {to: paused, trigger: tick, guard: usage_pause, always_allowed: true}

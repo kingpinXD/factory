@@ -77,7 +77,7 @@ func TestRunKnownCommandIsNotImplemented(t *testing.T) {
 }
 
 // testBrain points FACTORY_BRAIN at a brain holding the blueprint package's
-// test fixture, the planner's instructions and a model tiers table.
+// test fixture, the rules, the planner's instructions and a model tiers table.
 func testBrain(t *testing.T) string {
 	t.Helper()
 	brain := t.TempDir()
@@ -87,6 +87,7 @@ func testBrain(t *testing.T) string {
 	}
 	files := map[string]string{
 		"factory/blueprint.yaml":        string(fixture),
+		"factory/components/_rules.md":  "# Factory rules\n",
 		"factory/components/planner.md": "# planner\n",
 		"AGENTS.md":                     "## Model tiers\n\n| Tier | Claude |\n| --- | --- |\n| medium | opus |\n",
 	}

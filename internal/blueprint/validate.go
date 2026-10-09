@@ -14,6 +14,8 @@ var (
 	triggerKinds = []string{TriggerTick, TriggerGitHub, TriggerFile, TriggerUser}
 	runsAsKinds  = []string{RunsAsCode, RunsAsSession, RunsAsHelper, RunsAsInteractive}
 	effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+	// outputExts are the files CheckOutput can read headings from.
+	outputExts = []string{".md", ".yaml"}
 )
 
 // Validate checks the blueprint against the brain (instruction files and the
@@ -33,8 +35,17 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 	}
 	v.components(brain, b)
 	v.live(b, live)
+	if w := b.Values.Context.Window; w < minContextWindow || w > maxContextWindow {
+		v.add("context", "values.context.window %d is outside %d..%d, the range Claude Code's auto-compact window takes", w, minContextWindow, maxContextWindow)
+	}
 	return v.problems
 }
+
+// The auto-compact window range `claude --help` gives for --autocompact.
+const (
+	minContextWindow = 100_000
+	maxContextWindow = 1_000_000
+)
 
 type validator struct {
 	problems []Problem
@@ -212,6 +223,9 @@ func walk(from []string, next func(string) []string) map[string]bool {
 }
 
 func (v *validator) components(brain string, b *Blueprint) {
+	if _, err := os.Stat(filepath.Join(brain, "factory", RulesFile)); err != nil {
+		v.add("instructions", "%s does not exist; every session and helper prompt ends with it", RulesFile)
+	}
 	var tiers Tiers
 	var tiersErr error
 	tiersRead := false
@@ -226,11 +240,17 @@ func (v *validator) components(brain string, b *Blueprint) {
 		if c.Health != "" && !slices.Contains(healthKinds, c.Health) {
 			v.add("health", "component %q has health %q; want events, waits or github", cn, c.Health)
 		}
+		if len(c.Tools) > 0 && c.RunsAs != RunsAsHelper {
+			v.add("tools", "component %q runs_as %s and lists tools; only a helper's tools are used, through agents.json", cn, c.RunsAs)
+		}
+		v.outputs(cn, c)
 		needsModel := c.RunsAs != RunsAsCode && !c.Placeholder
 		switch {
 		case c.Instructions != "":
 			if _, err := os.Stat(filepath.Join(brain, "factory", c.Instructions)); err != nil {
 				v.add("instructions", "component %q: instructions %s do not exist", cn, c.Instructions)
+			} else if c.RunsAs == RunsAsHelper {
+				v.frontMatter(brain, cn, c)
 			}
 		case needsModel:
 			v.add("instructions", "component %q has no instructions", cn)
@@ -262,6 +282,38 @@ func (v *validator) components(brain string, b *Blueprint) {
 		if denied, ok := deniedModel(model, b.Deny.Models); ok {
 			v.add("denied_model", "component %q: tier %q resolves to %q, which is denied (%s)", cn, c.Tier, model, denied)
 		}
+	}
+}
+
+func (v *validator) outputs(cn string, c Component) {
+	for i, o := range c.Outputs {
+		switch {
+		case o.Path == "":
+			v.add("output", "component %q: output %d has no path", cn, i+1)
+		case o.Path == OutputReply:
+			if c.RunsAs != RunsAsHelper {
+				v.add("output", "component %q: only a helper's output can be its reply", cn)
+			}
+		case !slices.Contains(outputExts, filepath.Ext(o.Path)):
+			v.add("output", "component %q: output %s is not a .md or .yaml file, or reply", cn, o.Path)
+		}
+	}
+}
+
+// frontMatter checks what agents.json takes from a helper's instructions.
+func (v *validator) frontMatter(brain, cn string, c Component) {
+	ins, err := ReadInstructions(brain, c.Instructions)
+	switch {
+	case err != nil:
+		v.add("front_matter", "component %q: %v", cn, err)
+	case ins.Name == "":
+		v.add("front_matter", "component %q: instructions %s have no front matter name", cn, c.Instructions)
+	case ins.Name != cn:
+		v.add("front_matter", "component %q: front matter name %q differs from the component name", cn, ins.Name)
+	case ins.Description == "":
+		v.add("front_matter", "component %q: front matter has no description", cn)
+	case ins.Tools != nil && !slices.Equal(ins.Tools, c.Tools):
+		v.add("front_matter", "component %q: front matter tools %v differ from the blueprint's %v", cn, ins.Tools, c.Tools)
 	}
 }
 

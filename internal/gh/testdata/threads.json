@@ -1,0 +1,41 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "PRRT_kwDOGG4V6s6ZXdNv",
+              "isResolved": true,
+              "isOutdated": false,
+              "path": "pkg/drain/generate.go",
+              "line": 255,
+              "comments": {
+                "nodes": [
+                  {
+                    "databaseId": 3785943831,
+                    "author": {
+                      "login": "greptile-apps"
+                    },
+                    "body": "Greedy fill misses viable subsets",
+                    "url": "https://github.com/zeta-chain/node/pull/4630#discussion_r3785943831",
+                    "createdAt": "2026-08-14T17:35:48Z"
+                  },
+                  {
+                    "databaseId": 3786105765,
+                    "author": {
+                      "login": "skosito"
+                    },
+                    "body": "Fixed.",
+                    "url": "https://github.com/zeta-chain/node/pull/4630#discussion_r3786105765",
+                    "createdAt": "2026-08-14T18:02:19Z"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

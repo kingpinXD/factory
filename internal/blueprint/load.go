@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 
 	"github.com/kingpinXD/factory/internal/notify"
 	"go.yaml.in/yaml/v3"
@@ -25,6 +27,28 @@ func Parse(data []byte) (*Blueprint, error) {
 		return nil, err
 	}
 	return &b, nil
+}
+
+// decodeKnownFields decodes n into the struct v points to, refusing unknown
+// fields like Parse does: yaml's Node.Decode drops the decoder's KnownFields,
+// so the keys are checked here, in the decoder's own words.
+func decodeKnownFields(n *yaml.Node, v any) error {
+	t := reflect.TypeOf(v).Elem()
+	known := map[string]bool{}
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		known[name] = true
+	}
+	var unknown []string
+	for i := 0; n.Kind == yaml.MappingNode && i+1 < len(n.Content); i += 2 {
+		if k := n.Content[i]; !known[k.Value] {
+			unknown = append(unknown, fmt.Sprintf("line %d: field %s not found in type %s", k.Line, k.Value, t))
+		}
+	}
+	if unknown != nil {
+		return &yaml.TypeError{Errors: unknown}
+	}
+	return n.Decode(v)
 }
 
 // Load reads and decodes the blueprint at path.
@@ -96,7 +120,7 @@ func saveGood(brain string, data []byte) error {
 	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) {
 		return nil
 	}
-	return writeFile(path, data)
+	return WriteFile(path, data)
 }
 
 type dmState struct {
@@ -117,7 +141,7 @@ func dmOnce(ctx context.Context, brain, key, text string, n notify.Notifier) err
 		return err
 	}
 	data, _ := json.Marshal(dmState{FailingSHA256: key})
-	return writeFile(dmStatePath(brain), data)
+	return WriteFile(dmStatePath(brain), data)
 }
 
 // clearDM forgets the last failing version, so a later failure DMs again.
@@ -137,9 +161,9 @@ func versionKey(data []byte, readErr error) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// writeFile writes through a temporary file and a rename, so a reader never
+// WriteFile writes through a temporary file and a rename, so a reader never
 // sees half a file.
-func writeFile(path string, data []byte) error {
+func WriteFile(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
 	if err != nil {
 		return err

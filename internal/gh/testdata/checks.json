@@ -1,0 +1,21 @@
+{
+  "data": {
+    "repository": {
+      "object": {
+        "statusCheckRollup": {
+          "contexts": {
+            "nodes": [
+              {
+                "__typename": "CheckRun",
+                "name": "ci",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "isRequired": true
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+# A small valid blueprint. Tests break one rule at a time from it.
+schema_version: 1
+tick: {every: 1m, reconcile_every: 5m}
+values:
+  usage: {near_limit: 80, pause: 88, stale_after: 15m}
+  context: {window: 200000}
+deny:
+  models: [fable]
+components:
+  manager: {runs_as: code}
+  planner:
+    runs_as: session
+    tier: medium
+    effort: high
+    instructions: components/planner.md
+    output:
+      - {path: state-check.v<n>.md, headings: ["## Input", "## Issues"]}
+      - {path: epic.v<n>.yaml, headings: [issues, items]}
+    health: events
+  uat-runner:
+    runs_as: session
+    placeholder: true
+    output: {path: uat/result.md, headings: ["## Result"]}
+machines:
+  work: &item
+    start: queued
+    states:
+      queued: {entry: the plan lists it, exits: starting when startable, health: waits}
+      starting: {entry: startable, exits: running when its step ends, health: events, timeout: 2h, on_timeout: starting}
+      running: {entry: started, exits: done when merged, health: github}
+      waiting: {entry: a question was asked, exits: back when answered, health: waits}
+      done: {entry: merged, health: waits, end: true}
+      cancelled: {entry: stopped, health: waits, end: true}
+    transitions:
+      - {from: queued, to: starting, trigger: tick, guard: startable}
+      - {from: starting, to: running, trigger: file, guard: step_ended}
+      - {from: running, to: done, trigger: github, guard: pr_merged}
+      - {from: starting, to: waiting, trigger: file, guard: question_asked}
+      - {from: waiting, to: previous, trigger: user, guard: answered}
+      - {to: cancelled, trigger: user, guard: cancel_requested, always_allowed: true}
+  set: *item
+  epic: *item
+  session: *item
+  account:
+    start: ok
+    states:
+      ok: {entry: a fresh figure under the limit, exits: paused at the limit, health: waits}
+      paused: {entry: at the limit, exits: back after the reset, health: waits}
+    transitions:
+      - {to: paused, trigger: tick, guard: usage_pause, always_allowed: true}
+      - {from: paused, to: previous, trigger: tick, guard: reset_passed}

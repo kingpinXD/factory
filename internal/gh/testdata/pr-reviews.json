@@ -1,0 +1,70 @@
+{
+  "autoMergeRequest": null,
+  "baseRefName": "main",
+  "baseRefOid": "4ceb66555370d2ef766d7982c2d559428f10456f",
+  "files": [
+    {
+      "path": ".github/workflows/reusable-sim.yml",
+      "additions": 0,
+      "deletions": 37
+    },
+    {
+      "path": ".github/workflows/sim.yml",
+      "additions": 0,
+      "deletions": 159
+    },
+    {
+      "path": "changelog.md",
+      "additions": 1,
+      "deletions": 0
+    }
+  ],
+  "headRefName": "ci/remove-sim-workflow",
+  "headRefOid": "2f733893cd9b079694de3cd4118798c2488c7f65",
+  "headRepositoryOwner": {
+    "id": "MDEyOk9yZ2FuaXphdGlvbjg2OTc5ODQ0",
+    "login": "zeta-chain"
+  },
+  "id": "PR_kwDOGG4V6s8AAAABGyvhGw",
+  "isCrossRepository": false,
+  "isDraft": false,
+  "mergeStateStatus": "UNKNOWN",
+  "mergeable": "UNKNOWN",
+  "mergedAt": "2026-10-06T18:57:44Z",
+  "number": 4645,
+  "reviewDecision": "APPROVED",
+  "reviews": [
+    {
+      "id": "PRR_kwDOGG4V6s8AAAABQ67BpA",
+      "author": {
+        "login": "skosito"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-06T15:08:51Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "commit": {
+        "oid": "2f733893cd9b079694de3cd4118798c2488c7f65"
+      }
+    },
+    {
+      "id": "PRR_kwDOGG4V6s8AAAABQ9VA9w",
+      "author": {
+        "login": "julianrubino"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-06T18:36:41Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "commit": {
+        "oid": "2f733893cd9b079694de3cd4118798c2488c7f65"
+      }
+    }
+  ],
+  "state": "MERGED",
+  "url": "https://github.com/zeta-chain/node/pull/4645"
+}

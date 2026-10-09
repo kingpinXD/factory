@@ -1,0 +1,60 @@
+{
+  "autoMergeRequest": null,
+  "baseRefName": "main",
+  "baseRefOid": "b143cb314d1f21f3d1d08908523b603924f7a89b",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "additions": 34,
+      "deletions": 0
+    },
+    {
+      "path": "Makefile",
+      "additions": 16,
+      "deletions": 0
+    },
+    {
+      "path": "README.md",
+      "additions": 9,
+      "deletions": 0
+    },
+    {
+      "path": "cmd/factory/main.go",
+      "additions": 43,
+      "deletions": 0
+    },
+    {
+      "path": "cmd/factory/main_test.go",
+      "additions": 71,
+      "deletions": 0
+    },
+    {
+      "path": "go.mod",
+      "additions": 3,
+      "deletions": 0
+    },
+    {
+      "path": "internal/doc.go",
+      "additions": 2,
+      "deletions": 0
+    }
+  ],
+  "headRefName": "chore/skeleton",
+  "headRefOid": "d36c77e415a813c4d1b4579ef256b037cb5f1247",
+  "headRepositoryOwner": {
+    "id": "MDQ6VXNlcjI4MDkyOTYy",
+    "name": "Tanmay",
+    "login": "kingpinXD"
+  },
+  "id": "PR_kwDOVC8X4s8AAAABHmhGTQ",
+  "isCrossRepository": false,
+  "isDraft": false,
+  "mergeStateStatus": "UNKNOWN",
+  "mergeable": "UNKNOWN",
+  "mergedAt": "2026-10-09T20:45:28Z",
+  "number": 1,
+  "reviewDecision": "",
+  "reviews": [],
+  "state": "MERGED",
+  "url": "https://github.com/kingpinXD/factory/pull/1"
+}

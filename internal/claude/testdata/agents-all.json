@@ -1,0 +1,128 @@
+[
+  {
+    "pid": 14453,
+    "cwd": "/Users/me/src/app",
+    "kind": "interactive",
+    "startedAt": 1791392715310,
+    "sessionId": "b8015bee-87b8-4b0e-842b-7439dad0384a",
+    "name": "notes",
+    "status": "idle"
+  },
+  {
+    "pid": 15582,
+    "cwd": "/Users/me/src/app",
+    "kind": "interactive",
+    "startedAt": 1791392733614,
+    "sessionId": "6f320e96-2135-4c68-ae17-1f11c710b6b3",
+    "name": "review",
+    "status": "idle"
+  },
+  {
+    "id": "a11e5f7a",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573019837,
+    "sessionId": "a11e5f7a-8430-407d-adee-87bc33d85179",
+    "name": "factory:spike-1:orchestrator",
+    "state": "done"
+  },
+  {
+    "id": "7224d792",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573321307,
+    "sessionId": "7224d792-8e16-4bc2-b163-f0a954285ab8",
+    "name": "factory:spike-1:orchestrator",
+    "state": "stopped"
+  },
+  {
+    "id": "1f43124e",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573355455,
+    "sessionId": "1f43124e-750e-4a12-bb16-15983d80f8ee",
+    "name": "factory:spike-3:crash",
+    "state": "stopped"
+  },
+  {
+    "id": "eb647854",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573441850,
+    "sessionId": "eb647854-15a6-43eb-ba0e-ec9727424317",
+    "name": "factory:spike-4:nested",
+    "state": "done"
+  },
+  {
+    "id": "ea402f6f",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573563482,
+    "sessionId": "ea402f6f-8354-49fd-b5e7-76a6a1107a41",
+    "name": "factory:spike-5:compact",
+    "state": "stopped"
+  },
+  {
+    "id": "3e3c73cd",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573571424,
+    "sessionId": "3e3c73cd-7285-475a-ad29-5fe0092a9c37",
+    "name": "factory:spike-6:fable",
+    "state": "done"
+  },
+  {
+    "id": "688aaecb",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573738706,
+    "sessionId": "688aaecb-3a81-48a6-b022-c00e7c29e41b",
+    "name": "factory:spike-7:compact",
+    "state": "done"
+  },
+  {
+    "id": "cd3325da",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791573785638,
+    "sessionId": "cd3325da-84fb-45fa-80b6-a41696603295",
+    "name": "factory:spike-8:compact",
+    "state": "stopped"
+  },
+  {
+    "id": "65558b0c",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791574013469,
+    "sessionId": "65558b0c-3df4-416a-b699-f4bdb196e1fd",
+    "name": "factory:spike-9:write",
+    "state": "done"
+  },
+  {
+    "id": "63840c9b",
+    "cwd": "/Users/me/.agents/features/_spike",
+    "kind": "background",
+    "startedAt": 1791574066877,
+    "sessionId": "63840c9b-87c3-4dd0-ab56-11a825fb57fa",
+    "name": "factory:spike-10:burn",
+    "state": "stopped"
+  },
+  {
+    "id": "047eb781",
+    "cwd": "/Users/me/.factory/runs/spike-11",
+    "kind": "background",
+    "startedAt": 1791574871821,
+    "sessionId": "047eb781-95a6-4276-8b3b-a23d2a862d28",
+    "name": "factory:spike-11:cwd",
+    "state": "done"
+  },
+  {
+    "id": "b12386c5",
+    "cwd": "/Users/me/.factory/runs/spike-compact",
+    "kind": "background",
+    "startedAt": 1791576359168,
+    "sessionId": "b12386c5-981f-4b69-aa88-372d826a518b",
+    "name": "factory:spike-compact:orchestrator",
+    "state": "stopped"
+  }
+]

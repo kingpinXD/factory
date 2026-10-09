@@ -1,0 +1,157 @@
+package reconcile
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+
+	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/fsm"
+	"github.com/kingpinXD/factory/internal/store"
+)
+
+// enter runs what entering e's state does, after t, the transition into it,
+// is logged. Each action is keyed by t, so a replayed move repeats nothing.
+func (r *run) enter(e *entity, t events.Event) error {
+	switch {
+	case e.work != nil && e.cur.State == stateStarting:
+		if _, ok := worktreeReady(e); !ok {
+			return r.queueRepoWork(e, worktreeRequest, t)
+		}
+	case e.work != nil && e.cur.State == stateWaitingUser:
+		return r.dmQuestion(e, t)
+	case e.work != nil && e.cur.State == stateMerged:
+		if _, ok := lastRepoRequest(e, worktreeRequest); ok {
+			return r.queueRepoWork(e, cleanupRequest, t)
+		}
+	case e.session != nil && e.cur.State == sessionStarting:
+		return r.wake(e)
+	}
+	return nil
+}
+
+// queueRepoWork asks `factory repo-worker` for slow repo work on the item:
+// a worktree, or the cleanup of one. The tick never runs it itself.
+func (r *run) queueRepoWork(e *entity, kind string, t events.Event) error {
+	_, err := r.append(e, events.Event{
+		Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker,
+		Request: kind, Key: fmt.Sprintf("repo:%s:%d", kind, t.Seq),
+	})
+	if err != nil {
+		return err
+	}
+	verb := "queued"
+	if r.dry {
+		verb = "would queue"
+	}
+	r.say("%s: %s %s for the repo worker", e.id, verb, kind)
+	return nil
+}
+
+// lastRepoRequest returns the item's newest request to the repo worker of kind.
+func lastRepoRequest(e *entity, kind string) (events.Event, bool) {
+	for i := len(e.evs) - 1; i >= 0; i-- {
+		ev := e.evs[i]
+		if ev.Kind == events.KindRequest && ev.Recipient == events.RecipientRepoWorker && ev.Request == kind {
+			return ev, true
+		}
+	}
+	return events.Event{}, false
+}
+
+// repoResult returns the repo worker's answer to req: worktree_ready, done
+// or error.
+func repoResult(e *entity, req events.Event) (events.Event, bool) { return e.byKey(repoResultKey(req)) }
+
+func repoResultKey(req events.Event) string { return "repo:" + strconv.Itoa(req.Seq) }
+
+// worktreeReady returns the worktree_ready answering the item's newest
+// worktree request; its Text is the worktree's path.
+func worktreeReady(it *entity) (events.Event, bool) {
+	req, ok := lastRepoRequest(it, worktreeRequest)
+	if !ok {
+		return events.Event{}, false
+	}
+	res, ok := repoResult(it, req)
+	return res, ok && res.Kind == events.KindWorktreeReady
+}
+
+// dmQuestion sends the user the question that moved the item to
+// waiting_user, once: an intent before the DM and a done after it.
+func (r *run) dmQuestion(e *entity, t events.Event) error {
+	done := fmt.Sprintf("dm:%d", t.Seq)
+	if e.has(done) {
+		return nil
+	}
+	q, ok := eventBySeq(e, t.TriggerRef)
+	if !ok {
+		return fmt.Errorf("the question %s that moved it to %s is not in its log", t.TriggerRef, e.cur.State)
+	}
+	text := fmt.Sprintf("factory: %s (%s#%d) asks: %s\nAnswer with: factory answer %s %s#%d \"<answer>\"",
+		e.id, e.work.Repo, e.work.Issue, q.Text, e.entry.Epic, e.work.Repo, e.work.Issue)
+	if _, err := r.append(e, events.Event{Kind: events.KindIntent, Sender: events.SenderProgram, Text: "dm question " + t.TriggerRef, Key: "dm-intent:" + strconv.Itoa(t.Seq)}); err != nil {
+		return err
+	}
+	if err := r.act("DM the user "+e.id+"'s question", func(ctx context.Context) error { return r.d.Notify.DM(ctx, text) }); err != nil {
+		return err
+	}
+	_, err := r.append(e, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Text: "dm question " + t.TriggerRef, Key: done})
+	return err
+}
+
+func eventBySeq(e *entity, ref string) (events.Event, bool) {
+	seq, err := strconv.Atoi(ref)
+	if err != nil {
+		return events.Event{}, false
+	}
+	for _, ev := range e.evs {
+		if ev.Seq == seq {
+			return ev, true
+		}
+	}
+	return events.Event{}, false
+}
+
+// create makes a new entity in its machine's start state: its folder,
+// inputs.yaml and first transition, and its index entry. The index and its
+// status.json are written when the tick finishes.
+func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (*entity, error) {
+	if err := store.CheckID(id); err != nil {
+		return nil, err
+	}
+	if _, taken := r.ix[id]; taken {
+		return nil, fmt.Errorf("id %s is taken", id)
+	}
+	m := r.b.Machines[entry.Kind]
+	e := &entity{id: id, entry: entry, m: m, cur: fsm.Start(m, r.now)}
+	switch in := inputs.(type) {
+	case *EpicInputs:
+		e.epic = in
+	case *SetInputs:
+		e.set = in
+	case *WorkInputs:
+		e.work = in
+	case *SessionInputs:
+		e.session = in
+	}
+	if !r.dry {
+		if err := os.MkdirAll(entry.Dir, 0o755); err != nil {
+			return nil, err
+		}
+		if err := store.WriteInputs(entry.Dir, inputs); err != nil {
+			return nil, err
+		}
+	}
+	logged, err := r.append(e, events.Event{
+		Kind: events.KindTransition, Sender: events.SenderProgram, At: r.now,
+		To: m.Start, Trigger: trigger, TriggerRef: "create", Key: events.Key(id, "", m.Start, "create", 0),
+	})
+	if err != nil {
+		return nil, err
+	}
+	e.entered = logged.Seq
+	r.ix[id], r.ents[id], r.indexed = entry, e, true
+	r.say("%s: created in %s", id, m.Start)
+	return e, nil
+}

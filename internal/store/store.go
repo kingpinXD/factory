@@ -102,6 +102,13 @@ type Status struct {
 	// Prev is the stack of states `to: previous` moves return to,
 	// innermost last.
 	Prev []string `json:"prev,omitempty"`
+	// Attempt, Since, Held and HeldSince are the rest of the entity's
+	// fsm.Cur. Held and HeldSince are kept only here: the time a clock was
+	// held back is in no event.
+	Attempt   int           `json:"attempt,omitempty"`
+	Since     time.Time     `json:"since,omitzero"`
+	Held      time.Duration `json:"held,omitempty"`
+	HeldSince time.Time     `json:"held_since,omitzero"`
 	// End is set when State is an end state of the entity's machine.
 	End bool `json:"end,omitempty"`
 	// Lease is a set's current lease number.
@@ -109,6 +116,18 @@ type Status struct {
 	// Repo (owner/repo) and Issue are a work item's.
 	Repo  string `json:"repo,omitempty"`
 	Issue int    `json:"issue,omitempty"`
+	// PR is a work item's recorded pull request, as GitHub last showed it:
+	// its number, URL, state (OPEN, CLOSED, MERGED) and head commit.
+	PR      int    `json:"pr,omitempty"`
+	PRURL   string `json:"pr_url,omitempty"`
+	PRState string `json:"pr_state,omitempty"`
+	HeadSHA string `json:"head_sha,omitempty"`
+	// NoPIDSince is when a session was first listed with no pid, since it
+	// last had one.
+	NoPIDSince time.Time `json:"no_pid_since,omitzero"`
+	// Delivered names, as <entity id>#<seq>, each event a session has been
+	// told about by a post or a prompt, so none is delivered twice.
+	Delivered []string `json:"delivered,omitempty"`
 }
 
 // ReadStatus reads the status.json in dir. A missing file is the zero Status.
@@ -125,6 +144,15 @@ func WriteStatus(dir string, st Status) error { return writeJSON(StatusPath(dir)
 type Overall struct {
 	// LastTick is when the last tick finished, in UTC.
 	LastTick time.Time `json:"last_tick"`
+	// Tick is the number of the last tick that finished. A tick that dies
+	// before finishing runs again under the same number, so its transition
+	// keys repeat and are not logged twice.
+	Tick int `json:"tick,omitempty"`
+	// Problems are the blueprint's problems when the tick runs on the last
+	// good copy.
+	Problems []string `json:"problems,omitempty"`
+	// Errors are what went wrong in the last tick that it went on past.
+	Errors []string `json:"errors,omitempty"`
 }
 
 // ReadOverall reads brain's overall status.json. A missing file is the zero

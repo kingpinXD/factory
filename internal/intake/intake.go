@@ -98,7 +98,7 @@ func urlKind(ctx context.Context, input string, issues IssueReader) (InputKind, 
 }
 
 func pathKind(input string) (InputKind, error) {
-	info, err := os.Stat(expandHome(input))
+	info, err := os.Stat(ExpandHome(input))
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return "", refuse("%q looks like a path but no such file exists", input)
@@ -129,7 +129,8 @@ func looksLikePath(s string) bool {
 	return !strings.ContainsAny(s, " \t\n") && slices.Contains(fileExtensions, strings.ToLower(filepath.Ext(s)))
 }
 
-func expandHome(path string) string {
+// ExpandHome turns a leading ~/ into the home folder.
+func ExpandHome(path string) string {
 	rest, ok := strings.CutPrefix(path, "~/")
 	if !ok {
 		return path

@@ -13,7 +13,8 @@ var (
 	healthKinds  = []string{HealthEvents, HealthWaits, HealthGitHub}
 	triggerKinds = []string{TriggerTick, TriggerGitHub, TriggerFile, TriggerUser}
 	runsAsKinds  = []string{RunsAsCode, RunsAsSession, RunsAsHelper, RunsAsInteractive}
-	effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+	// EffortLevels are the efforts a component or an override may name.
+	EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
 	// outputExts are the files CheckOutput can read headings from.
 	outputExts = []string{".md", ".yaml"}
 )
@@ -234,7 +235,7 @@ func (v *validator) components(brain string, b *Blueprint) {
 		if !slices.Contains(runsAsKinds, c.RunsAs) {
 			v.add("component", "component %q runs_as %q; want code, session, helper or interactive", cn, c.RunsAs)
 		}
-		if c.Effort != "" && !slices.Contains(effortLevels, c.Effort) {
+		if c.Effort != "" && !slices.Contains(EffortLevels, c.Effort) {
 			v.add("component", "component %q has effort %q; want low, medium, high, xhigh or max", cn, c.Effort)
 		}
 		if c.Health != "" && !slices.Contains(healthKinds, c.Health) {

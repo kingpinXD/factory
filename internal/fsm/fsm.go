@@ -117,17 +117,18 @@ func Timeout(m blueprint.Machine, cur Cur, now time.Time, held bool) (Cur, bool)
 	return forward(m, cur, s.OnTimeout, now), true
 }
 
-// allows reports whether t is the move ev asks for from state from. An
-// always-allowed move applies from every state that is not an end, except
-// its own target.
+// allows reports whether t is the move ev asks for from state from.
 func allows(m blueprint.Machine, t blueprint.Transition, from string, ev Event) bool {
-	if t.To != ev.To || t.Trigger != ev.Trigger {
-		return false
-	}
+	return t.To == ev.To && t.Trigger == ev.Trigger && Leaves(m, t, from)
+}
+
+// Leaves reports whether t is a move out of state. An always-allowed move
+// leaves every state that is not an end, except its own target.
+func Leaves(m blueprint.Machine, t blueprint.Transition, state string) bool {
 	if t.AlwaysAllowed {
-		return !m.States[from].End && from != t.To
+		return !m.States[state].End && state != t.To
 	}
-	return t.From == from
+	return t.From == state
 }
 
 func holds(guards map[string]GuardFunc, name string, cur Cur, ev Event) (bool, error) {

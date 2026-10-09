@@ -19,14 +19,17 @@ var commands = []string{
 }
 
 var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
-	"check":     runCheck,
-	"blueprint": runBlueprint,
-	"agents":    runAgents,
-	"event":     runEvent,
-	"inbox":     runInbox,
-	"heartbeat": runHeartbeat,
-	"lease-ok":  runLeaseOK,
-	"query":     runQuery,
+	"check":       runCheck,
+	"blueprint":   runBlueprint,
+	"agents":      runAgents,
+	"event":       runEvent,
+	"inbox":       runInbox,
+	"heartbeat":   runHeartbeat,
+	"lease-ok":    runLeaseOK,
+	"query":       runQuery,
+	"tick":        runTick,
+	"repo-worker": runRepoWorker,
+	"add":         runAdd,
 }
 
 func main() {

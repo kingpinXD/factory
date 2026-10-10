@@ -84,8 +84,8 @@ func (c Client) tree(ctx context.Context, i Issue) (Node, error) {
 	if i.SubIssues.Total == 0 {
 		return node, nil
 	}
-	var children []Issue
-	if err := c.getJSON(ctx, &children, "api", "--paginate", issuePath(i.Repo(), i.Number)+"/sub_issues"); err != nil {
+	children, err := c.SubIssues(ctx, i.Repo(), i.Number)
+	if err != nil {
 		return Node{}, err
 	}
 	for _, child := range children {

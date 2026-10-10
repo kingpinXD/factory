@@ -48,6 +48,9 @@ func (r *run) record(e *entity, pr gh.PR) {
 		r.say("%s: recorded PR %s", e.id, pr.URL)
 	}
 	e.pr = &pr
+	if e.st.HeadSHA != pr.HeadRefOid {
+		e.st.HeadSeenAt = r.now
+	}
 	e.st.PR, e.st.PRURL, e.st.PRState, e.st.HeadSHA = pr.Number, pr.URL, pr.State, pr.HeadRefOid
 }
 

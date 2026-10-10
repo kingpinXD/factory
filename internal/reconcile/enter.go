@@ -14,6 +14,7 @@ import (
 // enter runs what entering e's state does, after t, the transition into it,
 // is logged. Each action is keyed by t, so a replayed move repeats nothing.
 func (r *run) enter(e *entity, t events.Event) error {
+	r.settle(e)
 	switch {
 	case e.work != nil && e.cur.State == stateStarting:
 		if _, ok := worktreeReady(e); !ok {
@@ -25,8 +26,18 @@ func (r *run) enter(e *entity, t events.Event) error {
 		if _, ok := lastRepoRequest(e, worktreeRequest); ok {
 			return r.queueRepoWork(e, cleanupRequest, t)
 		}
+	case e.work != nil && e.cur.State == workMerging:
+		return r.sendMerge(e, t)
+	case e.work != nil && e.cur.State == workRechecking:
+		return r.pauseMerge(e, t)
+	case e.work != nil && e.cur.State == workNeedsYou:
+		r.dmPRNeedsYou(e, t)
 	case e.session != nil && e.cur.State == sessionStarting:
 		return r.wake(e)
+	case e.session != nil && e.cur.State == sessionCompacting:
+		return r.compact(e)
+	case e.session != nil && t.From == sessionCompacting && e.cur.State == sessionRunning:
+		return r.afterCompaction(e, t)
 	}
 	return nil
 }

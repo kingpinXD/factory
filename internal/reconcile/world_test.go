@@ -55,6 +55,11 @@ type world struct {
 	prs map[string]gh.PR
 	red map[string]bool
 	dms []string
+	// hub is GitHub's issues, links and merged PRs (epic_test.go).
+	hub *hub
+	// pulls is GitHub's review threads, comments, checks and merge queues,
+	// and the merges and updates asked for (merge_test.go).
+	pulls *pulls
 }
 
 type fakeAccount struct{ ok bool }
@@ -115,7 +120,7 @@ func newWorld(t *testing.T) *world {
 	}
 	t.Cleanup(func() { os.RemoveAll(socks) })
 	w := &world{t: t, brain: brain, home: t.TempDir(), socks: socks, now: t0, acct: &fakeAccount{ok: true},
-		prs: map[string]gh.PR{}, red: map[string]bool{}}
+		prs: map[string]gh.PR{}, red: map[string]bool{}, hub: newHub(), pulls: newPulls()}
 	w.fake = &proc.Fake{Respond: w.respond}
 	return w
 }
@@ -148,6 +153,12 @@ func (w *world) respond(c proc.Cmd) ([]byte, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	a := c.Args
+	if out, ok, err := w.hub.respond(c); ok {
+		return out, err
+	}
+	if out, ok, err := w.pulls.respond(w, c); ok {
+		return out, err
+	}
 	switch {
 	case c.Name == claudeBin && a[0] == "agents":
 		return json.Marshal(w.sessions)

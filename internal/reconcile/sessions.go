@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/kingpinXD/factory/internal/agents"
@@ -25,13 +26,15 @@ func sessionName(task, component string) string { return "factory:" + task + ":"
 func sessionID(task, component string) string { return task + "-" + component }
 
 // sessionComponent is the session an entity's work needs: an epic's
-// planner, a set's orchestrator.
+// planner, a set's orchestrator, a work item's babysitter.
 func sessionComponent(e *entity) string {
 	switch {
 	case e.epic != nil:
 		return componentPlanner
 	case e.set != nil:
 		return componentOrchestrator
+	case e.work != nil:
+		return babysitterComponent
 	}
 	return ""
 }
@@ -40,7 +43,9 @@ func sessionComponent(e *entity) string {
 var plannerStates = []string{"checking", "planning"}
 
 // listing returns `claude agents`, read once per tick. known is false when
-// it failed or came back empty: then no session is started or moved.
+// it failed, or came back empty while a session record expects a live
+// session: then no session is started or moved. An empty listing with none
+// expected is known, or a fresh machine would never start its first planner.
 func (r *run) listing() ([]claude.Session, bool) {
 	if !r.listed {
 		r.listed = true
@@ -50,7 +55,7 @@ func (r *run) listing() ([]claude.Session, bool) {
 		if err != nil {
 			r.fail("claude agents: %v", err)
 		}
-		r.sessions, r.sessionsKnown = sessions, known && err == nil
+		r.sessions, r.sessionsKnown = sessions, err == nil && (known || !r.expectsLiveSession())
 	}
 	return r.sessions, r.sessionsKnown
 }
@@ -86,12 +91,15 @@ type delivery struct {
 }
 
 // deliveries returns what the owner's session should know now: the owner's
-// unacknowledged messages, and a set's items whose worktree became ready
-// while they are starting.
+// unacknowledged messages, a set's items whose worktree became ready while
+// they are starting, and what is new on a work item's PR.
 func (r *run) deliveries(owner *entity) []delivery {
 	var out []delivery
 	for _, m := range events.Inbox(owner.evs) {
 		out = append(out, delivery{ref: owner.id + "#" + seqRef(m), msg: m})
+	}
+	if owner.work != nil {
+		return append(out, r.babysitTriggers(owner)...)
 	}
 	if owner.set == nil {
 		return out
@@ -120,10 +128,14 @@ func markDelivered(sess *entity, ds []delivery) {
 
 // needsSession reports whether the owner has work for its session: a
 // message or ready item to deliver, an epic its planner is checking or
-// planning, or a set with an item being worked in its worktree.
+// planning, a set with an item being worked in its worktree, or a work item
+// whose PR needs its babysitter.
 func (r *run) needsSession(owner *entity) bool {
 	if !owner.open() {
 		return false
+	}
+	if owner.work != nil {
+		return r.babysitterNeeded(owner)
 	}
 	if len(r.deliveries(owner)) > 0 {
 		return true
@@ -162,9 +174,10 @@ func (r *run) driveSessions() {
 }
 
 func (r *run) drive(owner *entity, component string) error {
-	sess := r.ents[sessionID(owner.id, component)]
+	id, name := r.sessionSlot(owner, component)
+	sess := r.ents[id]
 	if sess == nil {
-		return r.startSession(owner, component)
+		return r.startSession(owner, component, id, name)
 	}
 	news := r.undelivered(owner, sess)
 	if len(news) == 0 {
@@ -180,16 +193,15 @@ func (r *run) drive(owner *entity, component string) error {
 // startSession makes the owner's session entity and starts the session,
 // unless the listing is unknown, or a session is listed under its name: one
 // listed is never started again, only adopted.
-func (r *run) startSession(owner *entity, component string) error {
-	name := sessionName(owner.id, component)
+func (r *run) startSession(owner *entity, component, id, name string) error {
 	sessions, known := r.listing()
 	if !known {
 		r.say("%s: not started: the session listing is unknown", name)
 		return nil
 	}
-	sess, err := r.create(sessionID(owner.id, component), store.Entry{
+	sess, err := r.create(id, store.Entry{
 		Kind: blueprint.MachineSession,
-		Dir:  filepath.Join(owner.entry.Dir, "sessions", component),
+		Dir:  filepath.Join(owner.entry.Dir, "sessions", strings.TrimPrefix(id, owner.id+"-")),
 		Epic: owner.entry.Epic,
 	}, &SessionInputs{Name: name, Component: component, Task: owner.id}, blueprint.TriggerTick)
 	if err != nil {
@@ -210,16 +222,20 @@ func (r *run) launch(owner *entity, sess *entity) error {
 		owner.st.Lease++
 	}
 	prompt := r.startPrompt(owner, component)
-	spec, err := r.spec(owner, component, prompt)
+	spec, err := r.spec(owner, sess.session, prompt)
 	if err != nil {
 		return err
 	}
 	what := fmt.Sprintf("start %s on %s at %s effort", spec.Name, spec.Model, spec.Effort)
 	err = r.act(what, func(ctx context.Context) error { return r.d.Claude.Start(ctx, spec) })
-	if err == nil {
-		markDelivered(sess, r.deliveries(owner))
+	if err != nil {
+		return err
 	}
-	return err
+	markDelivered(sess, r.deliveries(owner))
+	if component == babysitterComponent {
+		return r.renewPRLine(owner)
+	}
+	return nil
 }
 
 // post gives a live session its new work through its socket.
@@ -252,7 +268,7 @@ func (r *run) wake(sess *entity) error {
 	if s.Live() {
 		return r.post(owner, sess, s, news)
 	}
-	prompt := r.wakePrompt(owner, sess.session.Component, news)
+	prompt := r.resumePrompt(owner, sess.session.Component, news)
 	err := r.act("resume "+sess.session.Name, func(ctx context.Context) error {
 		if s.State == listedWorking {
 			if err := r.d.Claude.Stop(ctx, s.ID); err != nil {
@@ -267,9 +283,11 @@ func (r *run) wake(sess *entity) error {
 	return err
 }
 
-// spec returns the session's launch spec: its component's tier and effort,
-// or the epic's overrides of them, the joined prompt file and the helpers.
-func (r *run) spec(owner *entity, component, prompt string) (claude.Spec, error) {
+// spec returns the session's launch spec: its name, its component's tier
+// and effort or the epic's overrides of them, the joined prompt file and the
+// helpers.
+func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (claude.Spec, error) {
+	component := sess.Component
 	ov := r.overrides(owner)
 	c := r.b.Components[component]
 	tier, effort := c.Tier, c.Effort
@@ -288,7 +306,7 @@ func (r *run) spec(owner *entity, component, prompt string) (claude.Spec, error)
 		return claude.Spec{}, err
 	}
 	return claude.Spec{
-		Name:              sessionName(owner.id, component),
+		Name:              sess.Name,
 		Model:             model,
 		Effort:            effort,
 		PromptFile:        agents.PromptPath(r.d.Brain, component),

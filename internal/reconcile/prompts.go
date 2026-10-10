@@ -19,6 +19,8 @@ func (r *run) startPrompt(owner *entity, component string) string {
 		return r.plannerPrompt(owner, r.deliveries(owner))
 	case componentOrchestrator:
 		return r.orchestratorPrompt(owner, "You are starting on this set.", r.workingItems(owner), r.deliveries(owner))
+	case babysitterComponent:
+		return r.babysitterPromptFor(owner, r.deliveries(owner))
 	}
 	return taskLine(owner.id)
 }
@@ -36,6 +38,8 @@ func (r *run) wakePrompt(owner *entity, component string, news []delivery) strin
 			}
 		}
 		return r.orchestratorPrompt(owner, "New work for your set.", items, news)
+	case babysitterComponent:
+		return r.babysitterPromptFor(owner, news)
 	}
 	return taskLine(owner.id) + messagesSection(owner.id, news)
 }
@@ -113,7 +117,7 @@ func messagesSection(id string, ds []delivery) string {
 
 // babysitterWake is what wakes a babysitter (TODO 12), for its prompt.
 type babysitterWake struct {
-	WorkID, PRURL, Repo, Branch, Base, Worktree, ItemDir string
+	WorkID, PRURL, Repo, Issue, Branch, Base, Worktree, ItemDir string
 	// Reasons say what woke it: a new thread, review, comment or change
 	// request, red checks by SHA, a conflict, or "N unanswered threads".
 	Reasons []string
@@ -125,7 +129,7 @@ type babysitterWake struct {
 func babysitterPrompt(w babysitterWake) string {
 	var b strings.Builder
 	b.WriteString(taskLine(w.WorkID))
-	fmt.Fprintf(&b, "PR: %s\nrepo: %s\nbranch: %s\nbase: %s\n", w.PRURL, w.Repo, w.Branch, w.Base)
+	fmt.Fprintf(&b, "PR: %s\nrepo: %s\nissue: %s\nbranch: %s\nbase: %s\n", w.PRURL, w.Repo, w.Issue, w.Branch, w.Base)
 	fmt.Fprintf(&b, "worktree (handed over to you): %s\n", w.Worktree)
 	fmt.Fprintf(&b, "item folder: %s\n", w.ItemDir)
 	fmt.Fprintf(&b, "your pass report: %s\n", filepath.Join(w.ItemDir, "babysit.v<n>.md"))

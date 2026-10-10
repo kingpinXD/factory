@@ -30,6 +30,11 @@ var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"tick":        runTick,
 	"repo-worker": runRepoWorker,
 	"add":         runAdd,
+	"may-merge":   runMayMerge,
+	"deployed":    runDeployed,
+	"replan":      runReplan,
+	"answer":      runAnswer,
+	"issue":       runIssue,
 }
 
 func main() {

@@ -51,7 +51,8 @@ type Account interface {
 	Step(ctx context.Context, now time.Time, dryRun bool) (ok bool, err error)
 }
 
-// NoAccount is the account step until TODO 10 fills it: work may always start.
+// NoAccount is an account step that always lets work start. PlanAccount is
+// the real one.
 type NoAccount struct{}
 
 func (NoAccount) Step(context.Context, time.Time, bool) (bool, error) { return true, nil }
@@ -69,14 +70,17 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 		}
 		defer unlock()
 	}
+	if dryRun && d.Out != nil {
+		fmt.Fprintln(d.Out, "dry run: what the next tick would do; nothing below happens")
+	}
+	// The account step runs before anything is read, so the tick sees the
+	// sessions it stopped and the resumes it asked for.
+	acctOK, acctErr := stepAccount(ctx, d, dryRun)
 	r, err := newRun(ctx, d, dryRun)
 	if err != nil {
 		return err
 	}
-	if dryRun {
-		r.say("dry run: what the next tick would do; nothing below happens")
-	}
-	r.account()
+	r.useAccount(acctOK, acctErr)
 	if err := r.loadBlueprint(); err != nil {
 		return err
 	}
@@ -91,10 +95,16 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 				continue
 			}
 			r.observe(e)
+			r.measure(e)
 		}
+		r.prepare(e)
 		r.applyRequests(e)
 		r.advance(e)
 	}
+	if r.full {
+		r.watchPRs()
+	}
+	r.supervise()
 	r.driveSessions()
 	kind := "tick"
 	if r.full {
@@ -111,6 +121,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	for _, p := range r.problems {
 		overall.Problems = append(overall.Problems, p.String())
 	}
+	r.supervised(&overall)
 	return store.WriteOverall(r.d.Brain, overall)
 }
 
@@ -138,6 +149,7 @@ type run struct {
 	bases         map[string]baseResult
 	agents        map[string]agents.Agent
 	errs          []string
+	sup           supervision
 }
 
 type baseResult struct {
@@ -161,6 +173,7 @@ func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
 		ix:    ix,
 		ents:  map[string]*entity{},
 		bases: map[string]baseResult{},
+		sup:   supervision{prev: overall, compactedAt: map[string]time.Time{}},
 	}
 	for _, id := range slices.Sorted(maps.Keys(ix)) {
 		e, err := loadEntity(id, ix[id])
@@ -173,16 +186,24 @@ func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
 	return r, nil
 }
 
-// account runs the account step on its own budget. An error counts as not
-// ok: nothing starts while usage is unknown.
-func (r *run) account() {
-	ctx, cancel := context.WithTimeout(r.ctx, r.d.AccountTimeout)
+// account runs the account step on its own budget.
+func (r *run) account() { r.useAccount(stepAccount(r.ctx, r.d, r.dry)) }
+
+// stepAccount runs the account step on its own budget.
+func stepAccount(ctx context.Context, d Deps, dryRun bool) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.AccountTimeout)
 	defer cancel()
-	ok, err := r.d.Account.Step(ctx, r.now, r.dry)
+	return d.Account.Step(ctx, d.Now().UTC().Round(0), dryRun)
+}
+
+// useAccount takes the account step's answer. An error counts as not ok:
+// nothing starts while usage is unknown.
+func (r *run) useAccount(ok bool, err error) {
 	if err != nil {
 		r.fail("account: %v", err)
 	}
 	r.accountOK = ok && err == nil
+	r.updateHolds()
 }
 
 // loadBlueprint loads the blueprint the tick runs on: the brain's, or its

@@ -51,38 +51,39 @@ var guards = map[string]guard{
 	"factory_stopped": (*run).factoryStopped,
 	"work_finished":   (*run).workFinished,
 	"resume_allowed":  (*run).resumeAllowed,
+	// supervision, context and the account
+	"restarts_exhausted":  (*run).restartsExhausted,
+	"needs_user":          (*run).needsUser,
+	"checkpoint_ready":    (*run).checkpointReady,
+	"compaction_recorded": (*run).compactionRecorded,
+	"usage_near_limit":    (*run).usageNearLimit,
+	"usage_under_limit":   (*run).usageUnderLimit,
+	"usage_pause":         (*run).usagePause,
+	"usage_stale":         (*run).usageStale,
+	"reset_passed":        (*run).resetPassed,
+	"all_resumed":         (*run).allResumed,
+	// the planner flow and re-checks
+	"state_check_ended":  (*run).stateCheckEnded,
+	"epic_plan_ended":    (*run).epicPlanEnded,
+	"work_started":       (*run).workStarted,
+	"epic_idle":          (*run).epicIdle,
+	"all_in_review":      (*run).allInReview,
+	"uat_passed":         (*run).uatPassed,
+	"recheck_signal":     (*run).recheckSignal,
+	"recheck_ended":      (*run).recheckEnded,
+	"recheck_started":    (*run).recheckStarted,
+	"recheck_kept":       recheckKept,
+	"recheck_dropped":    recheckDropped,
+	"recheck_needs_user": recheckNeedsUser,
+	"scope_changed":      (*run).scopeChanged,
+	// merging
+	"merge_ready":  (*run).mergeReady,
+	"merge_failed": (*run).mergeFailed,
 }
 
 // pending are the guards later TODOs implement, each with what it needs.
-// Until then each never holds, so its move never happens. Two parts of
-// implemented guards wait too: linksReleased (TODO 11, gate: start links)
-// and the account behind accountOK (TODO 10).
-var pending = map[string]string{
-	"restarts_exhausted":  "TODO 10: restart and nudge counts",
-	"needs_user":          "TODO 10: dead-letters, planner runs used up, the same SHA red after a babysitter pass",
-	"checkpoint_ready":    "TODO 10: checkpoints",
-	"compaction_recorded": "TODO 10: compaction",
-	"usage_near_limit":    "TODO 10: the account",
-	"usage_under_limit":   "TODO 10: the account",
-	"usage_pause":         "TODO 10: the account",
-	"usage_stale":         "TODO 10: the account",
-	"reset_passed":        "TODO 10: the account",
-	"all_resumed":         "TODO 10: the account",
-	"state_check_ended":   "TODO 11: the planner flow",
-	"epic_plan_ended":     "TODO 11: the planner flow",
-	"work_started":        "TODO 11: the planner flow",
-	"epic_idle":           "TODO 11: the planner flow",
-	"all_in_review":       "TODO 11: the planner flow",
-	"uat_passed":          "TODO 11: the planner flow",
-	"recheck_signal":      "TODO 11: re-checks",
-	"recheck_ended":       "TODO 11: re-checks",
-	"recheck_started":     "TODO 11: re-checks",
-	"recheck_kept":        "TODO 11: re-checks",
-	"recheck_dropped":     "TODO 11: re-checks",
-	"scope_changed":       "TODO 11: re-checks",
-	"merge_ready":         "TODO 12: merging",
-	"merge_failed":        "TODO 12: merging",
-}
+// Until then each never holds, so its move never happens.
+var pending = map[string]string{}
 
 // registry returns every guard by name: the implemented ones, and for each
 // pending one a guard that never holds.
@@ -213,10 +214,6 @@ func (r *run) ready(it *entity) (bool, error) {
 	}
 	return r.baseGreen(it.work.Repo, it.work.Base)
 }
-
-// linksReleased reports whether every gate: start link into the item is
-// released. TODO 11 reads them from epic.yaml; until then no item has links.
-func linksReleased(*run, *entity) (bool, error) { return true, nil }
 
 // setItems returns the items of its set, in the set's order; an item with
 // no set is alone.
@@ -419,7 +416,9 @@ func handedOver(e *entity) bool {
 	return false
 }
 
-// prState: on a full reconcile, GitHub shows the item's PR in state.
+// prState: on a full reconcile, GitHub shows the item's PR in state. A
+// closed PR moves its item once: from closed it goes on to needs_you, an
+// open state, which the same closed PR must not move back.
 func prState(e *entity, state string) (bool, string, error) {
 	if e.pr == nil || e.pr.State != state {
 		return false, "", nil
@@ -427,7 +426,9 @@ func prState(e *entity, state string) (bool, string, error) {
 	if state == "MERGED" {
 		return true, "merged:" + e.pr.HeadRefOid, nil
 	}
-	return true, fmt.Sprintf("closed:%d", e.pr.Number), nil
+	ref := fmt.Sprintf("closed:%d", e.pr.Number)
+	moved := slices.ContainsFunc(e.evs, func(ev events.Event) bool { return ev.Kind == events.KindTransition && ev.TriggerRef == ref })
+	return !moved, ref, nil
 }
 
 // cleanedUp: the item never had a worktree, or the repo worker finished the
@@ -526,10 +527,12 @@ func (r *run) workFinished(e *entity) (bool, string, error) {
 	return owner == nil || !owner.open(), "", nil
 }
 
-// resumeAllowed: the account is ok and the session's owner has work for it.
+// resumeAllowed: the session's owner has work for it and does not wait for
+// the user, and the account is ok or asked for this resume after a pause.
 func (r *run) resumeAllowed(e *entity) (bool, string, error) {
 	owner := r.ents[e.session.Task]
-	if !r.accountOK || owner == nil {
+	afterPause := e.req != nil && e.req.Request == RequestResume
+	if owner == nil || owner.cur.State == stateNeedsYou || !r.accountOK && !afterPause {
 		return false, "", nil
 	}
 	return r.needsSession(owner), "", nil

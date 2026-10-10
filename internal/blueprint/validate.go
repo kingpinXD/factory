@@ -280,7 +280,7 @@ func (v *validator) components(brain string, b *Blueprint) {
 			v.add("tier", "component %q: tier %q has no Claude model in AGENTS.md", cn, c.Tier)
 			continue
 		}
-		if denied, ok := deniedModel(model, b.Deny.Models); ok {
+		if denied, ok := DeniedModel(model, b.Deny.Models); ok {
 			v.add("denied_model", "component %q: tier %q resolves to %q, which is denied (%s)", cn, c.Tier, model, denied)
 		}
 	}
@@ -318,9 +318,9 @@ func (v *validator) frontMatter(brain, cn string, c Component) {
 	}
 }
 
-// deniedModel reports the deny entry a model id matches. Fable is refused
+// DeniedModel reports the deny entry a model id matches. Fable is refused
 // even if the deny list drops it: it can bill to usage credits.
-func deniedModel(model string, deny []string) (string, bool) {
+func DeniedModel(model string, deny []string) (string, bool) {
 	for _, d := range append([]string{"fable"}, deny...) {
 		if d != "" && strings.Contains(strings.ToLower(model), strings.ToLower(d)) {
 			return d, true

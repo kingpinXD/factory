@@ -25,6 +25,7 @@ var Guards = map[string]string{
 	"recheck_started":      "the epic started a re-check that covers the item",
 	"recheck_kept":         "the re-check result for the item is ready or updated",
 	"recheck_dropped":      "the re-check result for the item is done, obsolete or duplicate",
+	"recheck_needs_user":   "the re-check result for the item waits on the user or on someone else",
 	"needs_user":           "only the user can settle it: a dead-letter, planner runs used up, or the same SHA red after a babysitter pass",
 	"retry_requested":      "the user ran factory retry on it",
 	"retry_allowed":        "the user ran factory retry on it, and its PR is not closed",

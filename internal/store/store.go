@@ -122,12 +122,24 @@ type Status struct {
 	PRURL   string `json:"pr_url,omitempty"`
 	PRState string `json:"pr_state,omitempty"`
 	HeadSHA string `json:"head_sha,omitempty"`
+	// HeadSeenAt is when the tick first saw HeadSHA: the merge quiet time
+	// runs from it, since a commit's date is not when it was pushed.
+	HeadSeenAt time.Time `json:"head_seen_at,omitzero"`
+	// Unanswered counts the PR's unresolved review threads whose last
+	// comment is not the user's, as the last full reconcile saw them.
+	Unanswered int `json:"unanswered,omitempty"`
 	// NoPIDSince is when a session was first listed with no pid, since it
 	// last had one.
 	NoPIDSince time.Time `json:"no_pid_since,omitzero"`
 	// Delivered names, as <entity id>#<seq>, each event a session has been
 	// told about by a post or a prompt, so none is delivered twice.
 	Delivered []string `json:"delivered,omitempty"`
+	// Context is a live session's context use, in percent of the window,
+	// as the tick last measured it at ContextAt; zero ContextAt is unknown.
+	Context   int       `json:"context,omitempty"`
+	ContextAt time.Time `json:"context_at,omitzero"`
+	// Rechecks counts an epic's re-checks.
+	Rechecks int `json:"rechecks,omitempty"`
 }
 
 // ReadStatus reads the status.json in dir. A missing file is the zero Status.
@@ -153,6 +165,24 @@ type Overall struct {
 	Problems []string `json:"problems,omitempty"`
 	// Errors are what went wrong in the last tick that it went on past.
 	Errors []string `json:"errors,omitempty"`
+	// Holds are the recent times the account held work back, oldest first;
+	// the last has no To while it lasts. Clocks of held-back work skip them.
+	Holds []Hold `json:"holds,omitempty"`
+	// UnknownListings counts the ticks in a row whose session listing
+	// failed or came back empty while a session was expected.
+	UnknownListings int `json:"unknown_listings,omitempty"`
+	// PausedRepos are the repo@base branches whose checks were red: no new
+	// item starts in them.
+	PausedRepos []string `json:"paused_repos,omitempty"`
+	// AutoContinue is set while the user settings turn on
+	// autoContinueAtUsageLimit, which would run past a limit on credits.
+	AutoContinue bool `json:"auto_continue_at_usage_limit,omitempty"`
+}
+
+// Hold is one time the account held work back.
+type Hold struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to,omitzero"`
 }
 
 // ReadOverall reads brain's overall status.json. A missing file is the zero

@@ -38,18 +38,19 @@ var newDeps = func(out io.Writer) (reconcile.Deps, error) {
 	if cl.FactoryBin, err = os.Executable(); err != nil {
 		return reconcile.Deps{}, err
 	}
-	return reconcile.Deps{
+	d := reconcile.Deps{
 		Brain:          brain,
 		Now:            time.Now,
 		GitHub:         gh.Client{Runner: proc.Exec{}},
 		Claude:         cl,
 		Notify:         notify.Slack{Brain: brain},
-		Account:        reconcile.NoAccount{},
 		GHToken:        os.Getenv("GH_TOKEN"),
 		CallTimeout:    callTimeout,
 		AccountTimeout: accountTimeout,
 		Out:            out,
-	}, nil
+	}
+	d.Account = reconcile.PlanAccount{Deps: d, Probe: reconcile.Probe{Runner: proc.Exec{}, Claude: cl.Bin, Home: cl.Home}}
+	return d, nil
 }
 
 // runTick runs one tick: factory tick [--dry-run].

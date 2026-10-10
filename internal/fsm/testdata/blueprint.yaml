@@ -184,7 +184,9 @@ machines:
         health: waits
       starting:
         entry: the item is startable; the program makes its worktree and starts or nudges its orchestrator
-        exits: exploring when the explorer's start event is logged
+        exits: exploring when the explorer's start event is logged; restarted after 1h (the worktree is asked for again)
+        timeout: 1h
+        on_timeout: starting
         health: events
       exploring:
         entry: the explorer's start event is logged
@@ -243,7 +245,7 @@ machines:
         end: true
       rechecking:
         entry: the epic started a re-check that covers the item; merges are held
-        exits: back to the state it left on ready or updated; cancelled on done, obsolete or duplicate
+        exits: back to the state it left on ready or updated; cancelled on done, obsolete or duplicate; needs_you when the result waits on the user or someone else
         health: waits
       waiting_user:
         entry: the session asked the user a question (DM sent)
@@ -255,7 +257,7 @@ machines:
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
-        exits: back to the state it left on factory retry, unless its PR is closed; cancelled on factory stop
+        exits: back to the state it left on factory retry, unless its PR is closed; cancelled on factory stop; after a re-check, as the next re-check's result says (factory answer)
         health: waits
       closed:
         entry: GitHub shows the PR closed without merging
@@ -297,6 +299,9 @@ machines:
       - {from: blocked, to: previous, trigger: file, guard: instruction_received}
       - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
       - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
+      - {from: rechecking, to: needs_you, trigger: file, guard: recheck_needs_user}
+      - {from: needs_you, to: previous, trigger: file, guard: recheck_kept}
+      - {from: needs_you, to: cancelled, trigger: file, guard: recheck_dropped}
       - {from: needs_you, to: previous, trigger: user, guard: retry_allowed}
       - {to: merged, trigger: github, guard: pr_merged, always_allowed: true}
       - {to: closed, trigger: github, guard: pr_closed_unmerged, always_allowed: true}

@@ -129,16 +129,29 @@ func TestNoDoubleStart(t *testing.T) {
 	}
 }
 
+// An empty listing is unknown only while a session record expects a live
+// session: a fresh machine must still start its first planner.
 func TestStartNeedsAKnownListing(t *testing.T) {
 	w := newWorld(t)
+	w.epic("e9", "checking")
+	w.put("e9-planner", blueprint.MachineSession, "e9", filepath.Join(w.epicDir("e9"), "sessions", "planner"), "running",
+		&SessionInputs{Name: "factory:e9:planner", Component: "planner", Task: "e9"})
 	if _, err := Add(context.Background(), w.deps(), "add a flag", Overrides{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.called("claude --bg"); len(got) != 0 {
-		t.Errorf("started with an empty listing: %q", got)
+		t.Errorf("started with an empty listing while a session is expected: %q", got)
 	}
 	if !strings.Contains(w.out.String(), "not started: the session listing is unknown") {
 		t.Errorf("output:\n%s", w.out.String())
+	}
+
+	fresh := newWorld(t)
+	if _, err := Add(context.Background(), fresh.deps(), "add a flag", Overrides{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.called("claude --bg --model"); len(got) != 1 {
+		t.Errorf("a fresh machine with an empty listing started %q, want its planner", got)
 	}
 }
 

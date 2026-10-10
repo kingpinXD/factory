@@ -143,7 +143,11 @@ func (j repoJob) cleanup(ctx context.Context, g git.Client) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	kept, err := g.Cleanup(ctx, j.in.Clone, j.id, st.PR, st.HeadSHA)
+	merged := st.HeadSHA
+	if j.req.Text == cancelledCleanup {
+		merged = ""
+	}
+	kept, err := g.Cleanup(ctx, j.in.Clone, j.id, st.PR, merged)
 	if err != nil {
 		return "", err
 	}

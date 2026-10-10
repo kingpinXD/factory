@@ -100,7 +100,7 @@ func (t Tiers) Model(tier string, deny []string) (string, error) {
 	if model == "" {
 		return "", fmt.Errorf("tier %q has no Claude model in AGENTS.md", tier)
 	}
-	if denied, ok := deniedModel(model, deny); ok {
+	if denied, ok := DeniedModel(model, deny); ok {
 		return "", fmt.Errorf("tier %q resolves to %q, which is denied (%s)", tier, model, denied)
 	}
 	return model, nil

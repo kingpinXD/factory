@@ -29,6 +29,9 @@ type entity struct {
 	// pr is the entity's pull request as GitHub shows it this tick, on a
 	// full reconcile.
 	pr *gh.PR
+	// reads are the PR's threads, checks and comments, read once a tick
+	// when the merge check or the babysitter needs them.
+	reads *prReads
 
 	work    *WorkInputs
 	set     *SetInputs

@@ -11,12 +11,12 @@ import (
 
 func TestBabysitterPrompt(t *testing.T) {
 	got := babysitterPrompt(babysitterWake{
-		WorkID: "e1-w1", PRURL: "https://github.com/o/r/pull/5", Repo: "o/r", Branch: "factory/e1-w1", Base: "main",
+		WorkID: "e1-w1", PRURL: "https://github.com/o/r/pull/5", Repo: "o/r", Issue: "o/r#12", Branch: "factory/e1-w1", Base: "main",
 		Worktree: "/src/r-worktrees/factory-e1-w1", ItemDir: "/brain/factory/work/e1/sets/e1-s1/e1-w1",
 		Reasons: []string{"red checks on abc123", "2 unanswered threads"}, DMed: []string{"alice"},
 	})
 	want := "factory-task: e1-w1\n" +
-		"PR: https://github.com/o/r/pull/5\nrepo: o/r\nbranch: factory/e1-w1\nbase: main\n" +
+		"PR: https://github.com/o/r/pull/5\nrepo: o/r\nissue: o/r#12\nbranch: factory/e1-w1\nbase: main\n" +
 		"worktree (handed over to you): /src/r-worktrees/factory-e1-w1\n" +
 		"item folder: /brain/factory/work/e1/sets/e1-s1/e1-w1\n" +
 		"your pass report: /brain/factory/work/e1/sets/e1-s1/e1-w1/babysit.v<n>.md\n" +

@@ -53,16 +53,17 @@ var guards = map[string]guard{
 	"work_finished":   (*run).workFinished,
 	"resume_allowed":  (*run).resumeAllowed,
 	// supervision, context and the account
-	"restarts_exhausted":  (*run).restartsExhausted,
-	"needs_user":          (*run).needsUser,
-	"checkpoint_ready":    (*run).checkpointReady,
-	"compaction_recorded": (*run).compactionRecorded,
-	"usage_near_limit":    (*run).usageNearLimit,
-	"usage_under_limit":   (*run).usageUnderLimit,
-	"usage_pause":         (*run).usagePause,
-	"usage_stale":         (*run).usageStale,
-	"reset_passed":        (*run).resetPassed,
-	"all_resumed":         (*run).allResumed,
+	"restarts_exhausted":      (*run).restartsExhausted,
+	"needs_user":              (*run).needsUser,
+	"checkpoint_ready":        (*run).checkpointReady,
+	"compaction_recorded":     (*run).compactionRecorded,
+	"usage_near_limit":        (*run).usageNearLimit,
+	"usage_under_limit":       (*run).usageUnderLimit,
+	"usage_pause":             (*run).usagePause,
+	"usage_stale":             (*run).usageStale,
+	"reset_passed":            (*run).resetPassed,
+	"reset_passed_near_limit": (*run).resetPassedNearLimit,
+	"all_resumed":             (*run).allResumed,
 	// the planner flow and re-checks
 	"state_check_ended":  (*run).stateCheckEnded,
 	"epic_plan_ended":    (*run).epicPlanEnded,
@@ -371,13 +372,18 @@ func requested(name string) guard {
 	}
 }
 
+// retryAllowed: a retry was asked for, the item's PR is not closed, and it
+// does not wait on the user's answer to a re-check, which factory answer
+// gives.
 func (r *run) retryAllowed(e *entity) (bool, string, error) {
 	ok, ref, err := requested(RequestRetry)(r, e)
-	return ok && e.st.PRState != prClosed, ref, err
+	return ok && e.st.PRState != prClosed && !awaitsAnswer(e), ref, err
 }
 
 // instructionReceived: an instruction to the entity in its current state;
-// for a work item, also one to its set since the item entered its state.
+// for a work item, also one to its set since the item was blocked. The
+// planner sends that one during the re-check the block starts, so it can
+// predate the item's return from that re-check.
 func (r *run) instructionReceived(e *entity) (bool, string, error) {
 	if ev, ok := e.newest(events.KindInstruction, nil); ok {
 		return true, seqRef(ev), nil
@@ -385,36 +391,56 @@ func (r *run) instructionReceived(e *entity) (bool, string, error) {
 	if e.work == nil || r.ents[e.work.Set] == nil {
 		return false, "", nil
 	}
-	set := r.ents[e.work.Set]
+	set, since := r.ents[e.work.Set], blockedAt(e)
 	for i := len(set.evs) - 1; i >= 0; i-- {
 		ev := set.evs[i]
-		if ev.Kind == events.KindInstruction && !ev.At.Before(e.cur.Since) {
+		if ev.Kind == events.KindInstruction && !ev.At.Before(since) {
 			return true, set.id + "#" + seqRef(ev), nil
 		}
 	}
 	return false, "", nil
 }
 
-// prRecorded: the item's PR is recorded and its worktree handed over.
-func (r *run) prRecorded(e *entity) (bool, string, error) {
-	if e.st.PR == 0 || !handedOver(e) {
-		return false, "", nil
+// blockedAt returns when the item was last blocked: its newest escalation,
+// not a return to blocked from a re-check or needs_you.
+func blockedAt(it *entity) time.Time {
+	for i := len(it.evs) - 1; i >= 0; i-- {
+		if blockedPastRestarts(it.evs[i]) {
+			return it.evs[i].At
+		}
 	}
-	return true, fmt.Sprintf("pr:%d", e.st.PR), nil
+	return it.cur.Since
 }
 
-// handedOver reports whether the item's worktree is with its babysitter:
-// its newest handover or handback is a handover.
+// prRecorded: the item's PR is recorded and its worktree handed over. The
+// handover names the occurrence: after a handback, the same PR moves the
+// item to in_review again once the worktree is handed over again.
+func (r *run) prRecorded(e *entity) (bool, string, error) {
+	ho, ok := lastHandover(e)
+	if e.st.PR == 0 || !ok {
+		return false, "", nil
+	}
+	return true, fmt.Sprintf("pr:%d:%d", e.st.PR, ho.Seq), nil
+}
+
+// handedOver reports whether the item's worktree is with its babysitter.
 func handedOver(e *entity) bool {
+	_, ok := lastHandover(e)
+	return ok
+}
+
+// lastHandover returns the item's newest handover, when it is newer than
+// its newest handback.
+func lastHandover(e *entity) (events.Event, bool) {
 	for i := len(e.evs) - 1; i >= 0; i-- {
 		switch e.evs[i].Kind {
 		case events.KindHandover:
-			return true
+			return e.evs[i], true
 		case events.KindHandback:
-			return false
+			return events.Event{}, false
 		}
 	}
-	return false
+	return events.Event{}, false
 }
 
 // prState: on a full reconcile, GitHub shows the item's PR in state. A
@@ -548,11 +574,13 @@ func (r *run) workFinished(e *entity) (bool, string, error) {
 
 // resumeAllowed: the session's owner has work for it and does not wait for
 // the user, and the account is ok or asked for this resume after a pause.
+// The account's status is read again last: another tick's account step may
+// have paused it since this tick's.
 func (r *run) resumeAllowed(e *entity) (bool, string, error) {
 	owner := r.ents[e.session.Task]
 	afterPause := e.req != nil && e.req.Request == RequestResume
 	if owner == nil || owner.cur.State == stateNeedsYou || !r.accountOK && !afterPause {
 		return false, "", nil
 	}
-	return r.needsSession(owner), "", nil
+	return r.needsSession(owner) && r.accountAllows(afterPause), "", nil
 }

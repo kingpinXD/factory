@@ -19,11 +19,13 @@ import (
 	"github.com/kingpinXD/factory/internal/reconcile"
 )
 
-// Deadlines: one adapter call, the account step, and one repo job (a clone
-// of a large repo can take minutes).
+// Deadlines: one adapter call, the account step, the whole tick (under the
+// one-minute interval, so the next tick's account step is never late), and
+// one repo job (a clone of a large repo can take minutes).
 const (
 	callTimeout    = 30 * time.Second
 	accountTimeout = 20 * time.Second
+	tickTimeout    = 50 * time.Second
 	repoJobTimeout = 30 * time.Minute
 )
 
@@ -47,6 +49,7 @@ var newDeps = func(out io.Writer) (reconcile.Deps, error) {
 		GHToken:        os.Getenv("GH_TOKEN"),
 		CallTimeout:    callTimeout,
 		AccountTimeout: accountTimeout,
+		TickTimeout:    tickTimeout,
 		Out:            out,
 	}
 	d.Account = reconcile.PlanAccount{Deps: d, Probe: reconcile.Probe{Runner: proc.Exec{}, Claude: cl.Bin, Home: cl.Home}}

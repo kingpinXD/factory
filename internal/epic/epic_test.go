@@ -37,9 +37,10 @@ links:
 `
 
 var testRepos = map[string]repos.Repo{
-	"factory":      {Name: "factory", FullName: "kingpinXD/factory", Default: "main", Branches: []string{"main"}},
-	"sdk":          {Name: "sdk", FullName: "anuma-ai/sdk", Default: "main", Branches: []string{"main"}},
-	"argo-cd-apps": {Name: "argo-cd-apps", FullName: "zeta-chain/argo-cd-apps", Default: "env-dev", Branches: []string{"env-dev", "env-prod"}},
+	"factory":      {Name: "factory", FullName: "kingpinXD/factory", Path: "/src/factory", Default: "main", Branches: []string{"main"}},
+	"sdk":          {Name: "sdk", FullName: "anuma-ai/sdk", Path: "/src/sdk", Default: "main", Branches: []string{"main"}},
+	"argo-cd-apps": {Name: "argo-cd-apps", FullName: "zeta-chain/argo-cd-apps", Path: "/src/argo-cd-apps", Default: "env-dev", Branches: []string{"env-dev", "env-prod"}},
+	"no-path":      {Name: "no-path", FullName: "anuma-ai/sdk", Default: "main", Branches: []string{"main"}},
 }
 
 func testEnv() Env {
@@ -51,8 +52,10 @@ func testEnv() Env {
 			}
 			return r, nil
 		},
-		Deny:    blueprint.Deny{Repos: []string{"text"}, Branches: []blueprint.RepoBranch{{Repo: "argo-cd-apps", Branch: "env-prod"}}},
-		Foreign: func(id string) bool { return id == "e2-sdk-7" },
+		Deny:      blueprint.Deny{Repos: []string{"text"}, Branches: []blueprint.RepoBranch{{Repo: "argo-cd-apps", Branch: "env-prod"}}},
+		Foreign:   func(id string) bool { return id == "e2-sdk-7" },
+		Cancelled: func(id string) bool { return id == "sdk-old" },
+		TookOver:  func(issue Ref) bool { return issue.Is(Ref{Repo: "anuma-ai/sdk", Number: 40}) },
 	}
 }
 
@@ -142,6 +145,13 @@ func TestEachRuleIsRefusedWithItsMessage(t *testing.T) {
 		{"uat unknown", "uat: none", "uat: later", "uat: want none or required, got \"later\""},
 		{"bad item id", "{id: factory-13, repo", "{id: Factory_13, repo", `item id "Factory_13": want lowercase letters, digits and dashes, starting with a letter or digit`},
 		{"bad feature name", "uat: none", "uat: none\nfeature: My Feature", `feature "My Feature": want lowercase letters, digits, - and _`},
+		{"a set with an item's id", "{id: s2, items: [sdk-42, sdk-40]}", "{id: sdk-42, items: [sdk-42, sdk-40]}",
+			"set sdk-42 has the id of an item: give it its own"},
+		{"a cancelled item's id planned again", "{id: sdk-40, repo: sdk", "{id: sdk-old, repo: sdk",
+			"item sdk-old was cancelled, and an ended item keeps its id: give the new work a new id"},
+		{"a PR adopted with no take over", "{id: sdk-42, repo: sdk, issue: anuma-ai/sdk#42}", "{id: sdk-42, repo: sdk, issue: anuma-ai/sdk#42, pr: 43}",
+			`item sdk-42 adopts PR #43, but the user has not answered "take over" for anuma-ai/sdk#42`},
+		{"a repo with no Path", "{id: sdk-42, repo: sdk,", "{id: sdk-42, repo: no-path,", "item sdk-42: repo no-path has no absolute **Path:** in its registry file"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.rule, func(t *testing.T) {

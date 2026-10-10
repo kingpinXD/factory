@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/proc"
@@ -420,5 +422,263 @@ links:
 		if got := r.chainLength(r.ents[id]); got != want {
 			t.Errorf("chainLength(%s) = %d, want %d", id, got, want)
 		}
+	}
+}
+
+// planFirst puts epic id through its first check up to plan, which it ends;
+// the next tick checks it.
+func (w *world) planFirst(id, plan string) {
+	w.t.Helper()
+	w.epic(id, "checking")
+	w.end(id, "state-check.v1.md", stateCheck)
+	w.end(id, "epic.v1.yaml", plan)
+}
+
+// plannedAdopting is planned for a plan whose item on issue adopts PR n:
+// before the plan ends, the user answered take over for issue, and a
+// re-check took the answer. n is a PR on GitHub; the test puts it in w.prs.
+func (w *world) plannedAdopting(id, plan, issue string, n int) {
+	w.t.Helper()
+	w.hub.issue("o/r", n).PullRequest = &struct{}{}
+	w.planFirst(id, plan)
+	ans := w.append(w.dir(id), events.Event{Kind: events.KindRequest, Sender: senderUser, Recipient: recipientRecheck,
+		Request: signalAnswer, Text: issue + " " + answerTakeOver})
+	w.append(w.dir(id), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Text: issue, Key: consumedKey(ans)})
+	w.tick(false)
+	if got := w.status(id).State; got != epicPlanned {
+		w.t.Fatalf("%s is %s, want planned\n%s", id, got, w.out.String())
+	}
+}
+
+// refusedWith fails the test unless epic id's log refused a plan for want.
+func (w *world) refusedWith(id, want string) {
+	w.t.Helper()
+	errs := w.kinds(id, events.KindError)
+	if !slices.ContainsFunc(errs, func(ev events.Event) bool { return strings.Contains(ev.Text, want) }) {
+		w.t.Errorf("%s's errors %+v lack %q", id, errs, want)
+	}
+}
+
+func TestASetAndAnItemWithOneIDAreRefused(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planFirst("e1", strings.Replace(oneItem("[]"), "{id: s1, items: [w1]}", "{id: w1, items: [w1]}", 1))
+	w.tick(false)
+	if got := w.status("e1").State; got != epicPlanning {
+		t.Errorf("e1 is %s, want planning until a fixed plan ends", got)
+	}
+	w.refusedWith("e1", "set w1 has the id of an item: give it its own")
+	w.noErrors()
+}
+
+// A re-check's plan may name a set like an item an earlier plan made, or an
+// item like an earlier set: that one is not made, and the tick goes on.
+func TestAnIDOfAnEarlierItemOrSetIsAnErrorNotACrash(t *testing.T) {
+	for _, tc := range []struct{ name, items, sets, want string }{
+		{"a set named like an item", "  - {id: w2, repo: r, issue: o/r#13}", "  - {id: w1, items: [w2]}", "set e1-w1: the id is a work's"},
+		{"an item named like a set", "  - {id: s1, repo: r, issue: o/r#13}", "  - {id: s9, items: [s1]}", "item e1-s1: the id is a set's"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.registry()
+			w.planned("e1", twoItems("[]"))
+			if _, err := Replan(context.Background(), w.deps(), "e1", "regroup"); err != nil {
+				t.Fatal(err)
+			}
+			w.tick(false)
+			w.end("e1", "state-check.v2.md", stateCheck)
+			w.end("e1", "epic.v2.yaml", "uat: none\nissues:\n  - {ref: o/r#12, result: done, evidence: \"commit:abc1234\"}\n  - {ref: o/r#13, result: ready}\n"+
+				"items:\n"+tc.items+"\nsets:\n"+tc.sets+"\nlinks: []\n")
+			w.tick(false)
+			o, err := store.ReadOverall(w.brain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.ContainsFunc(o.Errors, func(s string) bool { return strings.Contains(s, tc.want) }) {
+				t.Errorf("tick errors %q, want %q", o.Errors, tc.want)
+			}
+		})
+	}
+}
+
+// A registry file that lost its Path after the plan check makes no item.
+func TestAnItemIsNotMadeForARepoWithNoPath(t *testing.T) {
+	w := newWorld(t)
+	put(t, filepath.Join(w.brain, "repos", "r.md"), "# r\n\n- **Repo:** `o/r`\n- **Language:** `go`   **Default branch:** `main`   **UAT:** No\n")
+	w.epic("e1", "planned")
+	r := loadRun(t, w)
+	err := r.ensureItem(r.ents["e1"], "e1-s1", filepath.Join(w.epicDir("e1"), "sets", "e1-s1"), epic.Item{ID: "w1", Repo: "r", Issue: "o/r#14"})
+	if want := "item e1-w1: repo r has no absolute **Path:** in its registry file"; err == nil || err.Error() != want {
+		t.Errorf("ensureItem = %v, want %q", err, want)
+	}
+}
+
+// One entity that panics stops only itself: the tick logs it and moves the
+// rest. A stale signal with a key the tick cannot read makes the panic.
+func TestAPanicStopsOnlyItsEntity(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", oneItem("[]"))
+	w.append(w.dir("e1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientRecheck,
+		Request: signalStale, Text: "o/r#14", Key: "stale"})
+	w.planFirst("e2", twoItems("[]"))
+	w.tick(false)
+	if got := w.status("e2").State; got != epicPlanned {
+		t.Errorf("e2 is %s, want planned: e1's panic must not stop it", got)
+	}
+	panics := slices.DeleteFunc(w.kinds("e1", events.KindError), func(ev events.Event) bool { return !strings.HasPrefix(ev.Text, "panic: ") })
+	if len(panics) != 1 {
+		t.Errorf("e1's error events %+v, want one naming the panic", w.kinds("e1", events.KindError))
+	}
+	o, err := store.ReadOverall(w.brain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(o.Errors, func(s string) bool { return strings.HasPrefix(s, "e1: panic: ") }) {
+		t.Errorf("tick errors %q, want e1's panic", o.Errors)
+	}
+}
+
+// A re-check that dropped an item cancels it; a later plan that gives new
+// work on the same issue the old id is refused, and a new id starts it.
+func TestACancelledItemsIDIsNeverPlannedAgain(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	w.tick(false)
+	if _, err := Replan(context.Background(), w.deps(), "e1", "is #12 done?"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	w.end("e1", "state-check.v2.md", stateCheck)
+	w.end("e1", "epic.v2.yaml", `uat: none
+issues:
+  - {ref: o/r#12, result: done, evidence: "commit:abc1234"}
+  - {ref: o/r#13, result: ready}
+items:
+  - {id: w2, repo: r, issue: o/r#13}
+sets:
+  - {id: s2, items: [w2]}
+links: []
+`)
+	w.tick(false)
+	if got := w.status("e1-w1").State; got != workCancelled {
+		t.Fatalf("e1-w1 is %s, want cancelled", got)
+	}
+	if _, err := Replan(context.Background(), w.deps(), "e1", "#12 is not done after all"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	w.end("e1", "state-check.v3.md", stateCheck)
+	w.end("e1", "epic.v3.yaml", twoItems("[]"))
+	w.now = w.now.Add(time.Minute)
+	w.tick(false)
+	w.refusedWith("e1", "item w1 was cancelled, and an ended item keeps its id: give the new work a new id")
+	w.end("e1", "epic.v4.yaml", strings.NewReplacer("{id: w1,", "{id: w3,", "[w1]", "[w3]", "{id: s1,", "{id: s3,").Replace(twoItems("[]")))
+	for range 2 {
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+	}
+	if got := w.status("e1-w3").State; got == "" || got == workCancelled {
+		t.Errorf("e1-w3 is %q, want the new work on o/r#12 made", got)
+	}
+}
+
+// A plan adopts a PR only after the user answered take over for its issue,
+// and only the user's own PR in the item's repo.
+func TestAPlanAdoptsOnlyTheUsersPRAfterTakeOver(t *testing.T) {
+	const plan = `uat: none
+issues:
+  - {ref: o/r#14, result: yours, why: "your open PR #7", answers: [take over, leave]}
+items:
+  - {id: w1, repo: r, issue: o/r#14, pr: 7}
+sets:
+  - {id: s1, items: [w1]}
+links: []
+`
+	for _, tc := range []struct {
+		name    string
+		answer  string
+		author  string
+		fork    bool
+		notAPR  bool
+		refusal string
+	}{
+		{name: "no answer yet", author: "me", refusal: `item w1 adopts PR #7, but the user has not answered "take over" for o/r#14`},
+		{name: "answered leave", answer: "leave", author: "me", refusal: `has not answered "take over"`},
+		{name: "a colleague's PR", answer: "take over", author: "alice", refusal: "item w1 adopts o/r#7, which alice opened, not the user"},
+		{name: "a PR from a fork", answer: "take over", author: "me", fork: true, refusal: "item w1 adopts o/r#7, which is from a fork"},
+		{name: "an issue, not a PR", answer: "take over", author: "me", notAPR: true, refusal: "item w1 adopts o/r#7: no such PR in r"},
+		{name: "the user's own PR after take over", answer: "take over", author: "me"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.registry()
+			w.prs["their/branch"] = gh.PR{ID: "PR_7", Number: 7, URL: "https://github.com/o/r/pull/7", State: "OPEN", HeadRefName: "their/branch",
+				HeadRefOid: head2, BaseRefName: "main", Author: gh.User{Login: tc.author}, IsCrossRepository: tc.fork}
+			if !tc.notAPR {
+				w.hub.issue("o/r", 7).PullRequest = &struct{}{}
+			}
+			w.planFirst("e1", plan)
+			if tc.answer != "" {
+				w.append(w.dir("e1"), events.Event{Kind: events.KindRequest, Sender: senderUser, Recipient: recipientRecheck,
+					Request: signalAnswer, Text: "o/r#14 " + tc.answer})
+			}
+			w.tick(false)
+			if tc.refusal != "" {
+				w.refusedWith("e1", tc.refusal)
+				if ix, err := store.ReadIndex(w.brain); err != nil || ix[item] != (store.Entry{}) {
+					t.Errorf("%s was made (%v) by a refused plan", item, err)
+				}
+				return
+			}
+			var in WorkInputs
+			if err := store.ReadInputs(w.dir(item), &in); err != nil || in.PR != 7 {
+				t.Errorf("e1-w1 inputs %+v (%v), want PR 7 adopted", in, err)
+			}
+		})
+	}
+}
+
+// A registry file with no **Path:** has no clone to make a worktree in: the
+// plan is refused, and no work item points git at the current folder.
+func TestARepoWithNoPathIsRefused(t *testing.T) {
+	w := newWorld(t)
+	put(t, filepath.Join(w.brain, "repos", "r.md"), "# r\n\n- **Repo:** `o/r`\n- **Language:** `go`   **Default branch:** `main`   **UAT:** No\n")
+	w.planFirst("e1", oneItem("[]"))
+	w.tick(false)
+	w.refusedWith("e1", "item w1: repo r has no absolute **Path:** in its registry file")
+	ix, err := store.ReadIndex(w.brain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, made := ix[item]; made {
+		t.Errorf("%s was made for a repo with no clone path", item)
+	}
+}
+
+// A re-check copies each result, and the planner rewords its why: the user
+// gets one DM per issue and result, and another only when the result changes.
+func TestAResultDMIsSentOncePerIssueAndResult(t *testing.T) {
+	plan := func(result, why string) string {
+		return strings.Replace(oneItem("[]"), "  - {ref: o/r#14, result: ready}",
+			fmt.Sprintf("  - {ref: o/r#14, result: ready}\n  - {ref: o/r#30, result: %s, why: %q}", result, why), 1)
+	}
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", plan("not_code", "a person must rotate the key"))
+	for n, step := range []struct{ result, why string }{{"not_code", "someone has to rotate the key by hand"}, {"external", "waits on the vendor"}} {
+		if _, err := Replan(context.Background(), w.deps(), "e1", "again"); err != nil {
+			t.Fatal(err)
+		}
+		w.tick(false)
+		w.end("e1", fmt.Sprintf("state-check.v%d.md", n+2), stateCheck)
+		w.end("e1", fmt.Sprintf("epic.v%d.yaml", n+2), plan(step.result, step.why))
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+	}
+	got := w.dmsWith("o/r#30 is ")
+	if len(got) != 2 || !strings.Contains(got[0], "is not_code: a person must rotate the key") || !strings.Contains(got[1], "is external: waits on the vendor") {
+		t.Errorf("DMs about o/r#30 = %q, want one for not_code and one for external", got)
 	}
 }

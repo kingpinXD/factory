@@ -55,10 +55,11 @@ var Guards = map[string]string{
 	"resume_allowed":      "the account is ok and the session's work needs it again",
 	"work_finished":       "the session's work is over and nothing will wake it",
 	// account
-	"usage_near_limit":  "the newest figure is fresh and at or above usage.near_limit in either window",
-	"usage_under_limit": "the newest figure is fresh and under usage.near_limit in both windows",
-	"usage_pause":       "a figure at or above usage.pause in either window, or a factory session shows a limit message",
-	"reset_passed":      "usage.resume_after_reset has passed since the reset and the probe's fresh figure is under usage.near_limit",
-	"all_resumed":       "every session stopped for the pause is resumed",
-	"usage_stale":       "the newest figure is older than usage.stale_after",
+	"usage_near_limit":        "the newest figure is fresh and at or above usage.near_limit in either window",
+	"usage_under_limit":       "the newest figure is fresh and under usage.near_limit in both windows",
+	"usage_pause":             "a figure at or above usage.pause in either window, or a factory session shows a limit message",
+	"reset_passed":            "usage.resume_after_reset has passed since the reset and the probe's fresh figure is under usage.near_limit",
+	"reset_passed_near_limit": "usage.resume_after_reset has passed since the reset and the probe's fresh figure is under usage.pause, at or above usage.near_limit",
+	"all_resumed":             "every session stopped for the pause is resumed",
+	"usage_stale":             "the newest figure is older than usage.stale_after",
 }

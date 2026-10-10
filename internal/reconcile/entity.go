@@ -2,6 +2,8 @@ package reconcile
 
 import (
 	"reflect"
+	"strconv"
+	"strings"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
@@ -22,8 +24,10 @@ type entity struct {
 	st     store.Status
 	cur    fsm.Cur
 	// entered is the seq of the transition that entered cur.State, 0 for
-	// none: events newer than it happened in this state.
-	entered int
+	// none: events newer than it happened in this state. enteredBy is that
+	// transition; in a dry run, the one this tick would have logged.
+	entered   int
+	enteredBy events.Event
 	// req is the request being applied, for the guards that read it.
 	req *events.Event
 	// pr is the entity's pull request as GitHub shows it this tick, on a
@@ -53,14 +57,46 @@ func loadEntity(id string, entry store.Entry) (*entity, error) {
 		return nil, err
 	}
 	e.st = e.loaded
+	e.st.Lease = max(e.st.Lease, grantedLease(e.evs))
 	if t, ok := lastTransition(e.evs); ok {
 		e.cur = fsm.Cur{State: t.To, Prev: t.Prev, Attempt: t.Attempt, Since: t.At}
-		e.entered = t.Seq
+		e.entered, e.enteredBy = t.Seq, t
 		if e.loaded.State == t.To && e.loaded.Since.Equal(t.At) {
 			e.cur.Held, e.cur.HeldSince = e.loaded.Held, e.loaded.HeldSince
 		}
 	}
 	return e, e.readInputs()
+}
+
+// leasePrefix starts the key of the program's heartbeat that grants a set
+// lease n, leaseKey(n).
+const leasePrefix = "lease:"
+
+func leaseKey(n int) string { return leasePrefix + strconv.Itoa(n) }
+
+// grantedLease returns the newest lease the program granted in a set's log,
+// 0 for none. A grant is logged before the orchestrator that holds it starts,
+// so it may be newer than status.json.
+func grantedLease(evs []events.Event) int {
+	for i := len(evs) - 1; i >= 0; i-- {
+		if ev := evs[i]; ev.Kind == events.KindHeartbeat && ev.Sender == events.SenderProgram && strings.HasPrefix(ev.Key, leasePrefix) {
+			return ev.Lease
+		}
+	}
+	return 0
+}
+
+// Lease returns the current lease of the set whose folder is dir.
+func Lease(dir string) (int, error) {
+	evs, err := events.Read(store.EventsPath(dir))
+	if err != nil {
+		return 0, err
+	}
+	st, err := store.ReadStatus(dir)
+	if err != nil {
+		return 0, err
+	}
+	return max(st.Lease, grantedLease(evs)), nil
 }
 
 func lastTransition(evs []events.Event) (events.Event, bool) {

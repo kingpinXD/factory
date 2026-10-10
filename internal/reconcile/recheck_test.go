@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
@@ -151,13 +152,35 @@ func TestAColleagueMergeTouchingAListedFileStartsOneRecheck(t *testing.T) {
 	}
 }
 
+// A colleague's merge already in the item's base when its worktree was made
+// changes nothing the item started from: only a later one re-checks it.
+func TestOnlyAColleagueMergeAfterTheWorktreeWasMadeRechecks(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	w.tick(false)
+	req, _ := lastRepoRequest(&entity{evs: w.log("e1-w1")}, worktreeRequest)
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindWorktreeReady, At: t0.Add(10 * time.Minute), Text: "/wt", Key: repoResultKey(req)})
+	w.moveTo("e1-w1", "implementing")
+	w.end("e1-w1", "explore.md", "## Summary\n## Files\n- `pkg/a.go`\n## Baseline tests\n## Issue check\n")
+	w.hub.merged["o/r"] = []gh.MergedPR{
+		{Number: 90, HeadRefName: "fix/a", MergedAt: t0.Add(5 * time.Minute), Files: []gh.File{{Path: "pkg/a.go"}}},
+		{Number: 93, HeadRefName: "fix/a-again", MergedAt: t0.Add(20 * time.Minute), Files: []gh.File{{Path: "pkg/a.go"}}},
+	}
+	w.fullNext()
+	w.tick(false)
+	if got := w.signals("e1"); !slices.Equal(got, []string{"merged:o/r#93"}) {
+		t.Errorf("signals = %v, want only the merge after e1-w1's worktree was made", got)
+	}
+}
+
 // inReview puts item id in in_review with PR n recorded on GitHub, its
 // worktree ready and handed over, and a live babysitter, which it returns.
 func (w *world) inReview(id string, n int) claude.Session {
 	w.t.Helper()
 	w.readyWorktree(id)
 	w.prs[git.Branch(id)] = gh.PR{Number: n, URL: "https://github.com/o/r/pull/" + strconv.Itoa(n), State: "OPEN", HeadRefName: git.Branch(id),
-		HeadRefOid: "abc1234", AutoMergeRequest: &struct{}{}}
+		HeadRefOid: "abc1234", AutoMergeRequest: &struct{}{}, CreatedAt: w.now}
 	w.moveTo(id, workPROpen)
 	w.append(w.dir(id), events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: "fixture"})
 	w.moveTo(id, workInReview)
@@ -238,8 +261,8 @@ links: []
 func TestCancellingAnAdoptedPRLeavesItOpen(t *testing.T) {
 	w := newWorld(t)
 	w.registry()
-	w.planned("e1", strings.Replace(twoItems("[]"), "{id: w1, repo: r, issue: o/r#12}", "{id: w1, repo: r, issue: o/r#12, pr: 31}", 1))
-	w.prs["alice/own"] = gh.PR{Number: 31, URL: "https://github.com/o/r/pull/31", State: "OPEN", HeadRefName: "alice/own", AutoMergeRequest: &struct{}{}}
+	w.prs["me/own"] = gh.PR{Number: 31, URL: "https://github.com/o/r/pull/31", State: "OPEN", HeadRefName: "me/own", AutoMergeRequest: &struct{}{}, Author: gh.User{Login: "me"}}
+	w.plannedAdopting("e1", strings.Replace(twoItems("[]"), "{id: w1, repo: r, issue: o/r#12}", "{id: w1, repo: r, issue: o/r#12, pr: 31}", 1), "o/r#12", 31)
 	w.tick(false)
 	w.readyWorktree("e1-w1")
 	w.append(w.dir("e1-w1"), Request(RequestStop, workCancelled, blueprint.TriggerUser, "not needed"))
@@ -327,7 +350,7 @@ func TestAnOrchestratorThatDiesBeforeHandoverStillGetsTheItemToReview(t *testing
 	w.tick(false)
 	w.readyWorktree("e1-w1")
 	w.moveTo("e1-w1", workPROpen)
-	w.prs["factory/e1-w1"] = gh.PR{Number: 42, State: "OPEN", HeadRefName: "factory/e1-w1"}
+	w.prs["factory/e1-w1"] = gh.PR{Number: 42, State: "OPEN", HeadRefName: "factory/e1-w1", CreatedAt: w.now}
 	w.fullNext()
 	w.tick(false)
 	if got := w.status("e1-w1").State; got != workPROpen {
@@ -352,7 +375,7 @@ func TestTheProgramHandsOverWhenThePROpenerEnds(t *testing.T) {
 	w.tick(false)
 	w.readyWorktree("e1-w1")
 	w.moveTo("e1-w1", workPROpen)
-	w.prs["factory/e1-w1"] = gh.PR{Number: 43, State: "OPEN", HeadRefName: "factory/e1-w1"}
+	w.prs["factory/e1-w1"] = gh.PR{Number: 43, State: "OPEN", HeadRefName: "factory/e1-w1", CreatedAt: w.now}
 	w.end("e1-w1", "pr.md", "## PR\n## Checks\n## Reviewers\n")
 	w.fullNext()
 	w.tick(false)
@@ -361,5 +384,255 @@ func TestTheProgramHandsOverWhenThePROpenerEnds(t *testing.T) {
 	}
 	if got := w.status("e1-w1").State; got != workInReview {
 		t.Errorf("e1-w1 is %s, want in_review", got)
+	}
+}
+
+// The epic's 2h checking timeout restarts the planner; the re-check it was
+// running goes on, holding its items, and is neither ended nor begun again.
+func TestACheckingTimeoutKeepsTheRecheckRunning(t *testing.T) {
+	w := newWorld(t)
+	w.inReviewWith(oneItem("[]"), 20*time.Minute)
+	if _, err := Replan(context.Background(), w.deps(), "e1", "check #14 again"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	if got := w.status(item).State; got != workRechecking {
+		t.Fatalf("%s is %s, want rechecking", item, got)
+	}
+	w.now = w.now.Add(2*time.Hour + time.Minute)
+	w.fullNext()
+	w.tick(false)
+	if got := last(w.moves("e1")); got != "checking→checking" {
+		t.Fatalf("e1's last move %s, want the timeout's restart; moves %v", got, w.moves("e1"))
+	}
+	if got := w.status(item).State; got != workRechecking {
+		t.Errorf("%s is %s while the planner has not ended its re-check, want rechecking; moves %v", item, got, w.moves(item))
+	}
+	if got := w.called("gh pr merge 5"); len(got) != 0 {
+		t.Errorf("merged while the re-check still runs: %q", got)
+	}
+	var asks []string
+	for _, m := range w.inbox("e1") {
+		if strings.HasPrefix(m, "Re-check:") {
+			asks = append(asks, m)
+		}
+	}
+	if len(asks) != 1 || w.status("e1").Rechecks != 1 {
+		t.Errorf("planner asked %q, re-checks counted %d; want one of each", asks, w.status("e1").Rechecks)
+	}
+	w.recheckReady()
+	w.now = w.now.Add(time.Minute)
+	w.tick(false)
+	if got := last(w.moves(item)); got != "rechecking→in_review" {
+		t.Errorf("%s's last move %s once the re-check ended, want rechecking→in_review", item, got)
+	}
+}
+
+// escalate blocks e1-w1 past its restarts at the world's time, after an
+// instruction to its set at instructed, when that is set; the next tick
+// starts the escalation's re-check.
+func (w *world) escalate(instructed time.Time) {
+	w.t.Helper()
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	w.tick(false)
+	w.moveTo("e1-w1", "implementing")
+	if !instructed.IsZero() {
+		w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: instructed, Text: "an old instruction"})
+	}
+	ref := restartsRef + "e1-w1:6@2026-10-09T12:00:00Z"
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, At: w.now, From: "implementing", To: workBlocked,
+		Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: ref})
+	w.tick(false)
+	if got := w.status("e1-w1").State; got != workRechecking {
+		w.t.Fatalf("e1-w1 is %s, want rechecking", got)
+	}
+}
+
+// The planner instructs the escalated item's set during the re-check, then
+// ends it: the item goes back to blocked, and the instruction releases it.
+func TestAnInstructionSentDuringTheEscalationRecheckReleasesTheItem(t *testing.T) {
+	w := newWorld(t)
+	w.escalate(time.Time{})
+	w.now = w.now.Add(time.Minute)
+	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "split the change"})
+	w.end("e1", "state-check.v2.md", stateCheck)
+	w.end("e1", "epic.v2.yaml", twoItems("[]"))
+	for range 3 {
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+	}
+	want := []string{"implementing→blocked", "blocked→rechecking", "rechecking→blocked", "blocked→implementing"}
+	if got := w.moves("e1-w1"); !slices.Equal(got[len(got)-4:], want) {
+		t.Errorf("moves %v, want them to end %v", got, want)
+	}
+}
+
+// An instruction to the set from before the escalation is not the answer to
+// it: the item stays blocked after the re-check.
+func TestAnInstructionFromBeforeTheEscalationReleasesNothing(t *testing.T) {
+	w := newWorld(t)
+	w.escalate(t0.Add(-time.Minute))
+	w.end("e1", "state-check.v2.md", stateCheck)
+	w.end("e1", "epic.v2.yaml", twoItems("[]"))
+	for range 3 {
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+	}
+	if got := w.status("e1-w1").State; got != workBlocked {
+		t.Errorf("e1-w1 is %s, want blocked until the planner instructs its set; moves %v", got, w.moves("e1-w1"))
+	}
+}
+
+// After a handback the old pr-opener's end hands nothing over: the redo
+// reaches pr_open with the orchestrator's new pr-opener still in the
+// worktree, and only its own end hands the worktree over again.
+func TestAnOldPROpenerEndDoesNotHandOverAfterAHandback(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", oneItem("[]"))
+	w.tick(false)
+	w.readyWorktree(item)
+	w.moveTo(item, workPROpen)
+	w.prs[git.Branch(item)] = gh.PR{Number: 43, State: "OPEN", HeadRefName: git.Branch(item), CreatedAt: w.now}
+	w.end(item, "pr.md", "## PR\n## Checks\n## Reviewers\n")
+	w.fullNext()
+	w.tick(false)
+	if got := w.status(item).State; got != workInReview {
+		t.Fatalf("%s is %s, want in_review after the first pr-opener ended", item, got)
+	}
+	w.append(w.dir(item), events.Event{Kind: events.KindHandback, Sender: events.SenderProgram, Text: "the scope changed"})
+	w.moveTo(item, workImplementing)
+	w.moveTo(item, workPROpen)
+	w.fullNext()
+	w.tick(false)
+	if got := len(w.kinds(item, events.KindHandover)); got != 1 || w.status(item).State != workPROpen {
+		t.Fatalf("%s is %s with %d handovers, want pr_open with the first one only", item, w.status(item).State, got)
+	}
+	w.end(item, "pr.v2.md", "## PR\n## Checks\n## Reviewers\n")
+	w.fullNext()
+	w.tick(false)
+	if got := len(w.kinds(item, events.KindHandover)); got != 2 || w.status(item).State != workInReview {
+		t.Errorf("%s is %s with %d handovers, want in_review after the new pr-opener ended", item, w.status(item).State, got)
+	}
+}
+
+// An item a re-check result left waiting on the user moves on only by
+// factory answer: a retry is refused with that command, and status shows
+// the result and its answers.
+func TestARetryOnAnItemAwaitingAnAnswerIsRefused(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	w.planned("e2", oneItem("\n  - {from: e1-w1, to: w1, gate: start, when: merged, rollback: none}"))
+	w.tick(false)
+	w.moveTo("e1-w1", workCancelled)
+	w.tick(false)
+	w.end("e2", "state-check.v2.md", stateCheck)
+	w.end("e2", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", `conflict, why: "its blocker e1-w1 was cancelled", answers: [drop, wait]`))
+	w.tick(false)
+	if got := w.status("e2-w1").State; got != workNeedsYou {
+		t.Fatalf("e2-w1 is %s, want needs_you", got)
+	}
+	const hint = `o/r#14 is conflict: its blocker e1-w1 was cancelled; answer with factory answer e2 o/r#14 "<drop | wait>"`
+	err := Retry(context.Background(), w.deps(), "e2-w1")
+	if err == nil || !strings.Contains(err.Error(), "guard retry_allowed does not hold") || !strings.HasSuffix(err.Error(), hint) {
+		t.Errorf("retry = %v, want refused with %q", err, hint)
+	}
+	for range 3 {
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+	}
+	if got := w.status("e2-w1").State; got != workNeedsYou {
+		t.Errorf("e2-w1 is %s after a refused retry, want needs_you; moves %v", got, w.moves("e2-w1"))
+	}
+	rep, err := Status(context.Background(), w.deps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.IndexFunc(rep.Waiting, func(x Waiting) bool { return x.ID == "e2-w1" }); i < 0 || rep.Waiting[i].Why != hint {
+		t.Errorf("waiting on you = %+v, want e2-w1 with %q", rep.Waiting, hint)
+	}
+}
+
+// An updated result for an item taken out of merging returns it to
+// in_review and hands its worktree back; the orchestrator is told to
+// re-read the issue, not only that the worktree is its own again.
+func TestAnUpdatedResultWhileMergingTellsTheOrchestratorToReRead(t *testing.T) {
+	w := newWorld(t)
+	w.inReviewWith(oneItem("[]"), 20*time.Minute)
+	w.orchestrator("e1-s1", "turn_ended", 4410, "done")
+	w.moveTo(item, workMerging)
+	w.append(w.dir(item), events.Event{Kind: events.KindIntent, Text: "merge " + head1 + " by squash", Key: "merge:1:intent"})
+	if _, err := Replan(context.Background(), w.deps(), "e1", "the API changed"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	w.end("e1", "state-check.v2.md", stateCheck)
+	w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", "updated"))
+	w.tick(false)
+	w.tick(false)
+	inbox := strings.Join(w.inbox("e1-s1"), "\n")
+	if !strings.Contains(inbox, "the planner updated issue o/r#14. Re-read it") || !strings.Contains(inbox, "its worktree") {
+		t.Errorf("orchestrator inbox:\n%s\nwant the re-read and the handback; moves %v", inbox, w.moves(item))
+	}
+}
+
+// An item that waits on the user's answer to an earlier re-check is not
+// held by a new one, but may-merge still says a re-check of its issue runs,
+// and goes on saying it after checking's timeout restarts the planner.
+func TestMayMergeHoldsThroughACheckingRestart(t *testing.T) {
+	w := newWorld(t)
+	w.inReviewWith(oneItem("[]"), 20*time.Minute)
+	if _, err := Replan(context.Background(), w.deps(), "e1", "check #14"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	w.end("e1", "state-check.v2.md", stateCheck)
+	w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", `conflict, why: "a decision says no", answers: [drop, keep]`))
+	w.tick(false)
+	if got := w.status(item).State; got != workNeedsYou {
+		t.Fatalf("%s is %s, want needs_you", item, got)
+	}
+	if _, err := Replan(context.Background(), w.deps(), "e1", "check again"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	for _, at := range []string{"while the re-check runs", "after checking restarted"} {
+		ok, why, err := MayMerge(context.Background(), w.deps(), prURL)
+		if err != nil || ok || why != item+": a re-check of its issue is running" {
+			t.Errorf("may-merge %s = %v %q %v, want held by the re-check", at, ok, why, err)
+		}
+		w.now = w.now.Add(2*time.Hour + time.Minute)
+		w.tick(false)
+	}
+}
+
+// An item handed back for an updated issue comes back to in_review with its
+// redone PR; the same updated result does not hand it back again.
+func TestAnUpdatedItemBackInReviewIsNotHandedBackAgain(t *testing.T) {
+	w := newWorld(t)
+	w.inReviewWith(oneItem("[]"), 20*time.Minute)
+	if _, err := Replan(context.Background(), w.deps(), "e1", "the API changed"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	w.end("e1", "state-check.v2.md", stateCheck)
+	w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", "updated"))
+	w.tick(false)
+	if got := w.status(item).State; got != workImplementing {
+		t.Fatalf("%s is %s, want implementing after the handback", item, got)
+	}
+	w.moveTo(item, workPROpen)
+	w.append(w.dir(item), events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: "fixture"})
+	w.moveTo(item, workInReview)
+	w.now = w.now.Add(time.Minute)
+	w.fullNext()
+	w.tick(false)
+	if hb := w.kinds(item, events.KindHandback); len(hb) != 1 {
+		t.Errorf("handbacks = %d, want only the first; moves %v", len(hb), w.moves(item))
+	}
+	if got := w.status(item).State; got != workMerging {
+		t.Errorf("%s is %s, want its redone PR merging", item, got)
 	}
 }

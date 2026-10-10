@@ -300,19 +300,3 @@ func (r *run) redAfterPass(it *entity) (string, bool) {
 	}
 	return redAfterPassRef + sha, true
 }
-
-// dmPRNeedsYou DMs the user once when a PR's state moved its item to
-// needs_you: the PR was closed without merging, or its checks stayed red
-// after a babysitter pass.
-func (r *run) dmPRNeedsYou(it *entity, t events.Event) {
-	var why string
-	switch {
-	case t.From == workClosed:
-		why = fmt.Sprintf("its PR %s was closed without merging", it.st.PRURL)
-	case strings.HasPrefix(t.TriggerRef, redAfterPassRef):
-		why = fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", it.st.PRURL, abbrev(strings.TrimPrefix(t.TriggerRef, redAfterPassRef)))
-	default:
-		return
-	}
-	r.dm(it, "dm:needs-you:"+seqRef(t), fmt.Sprintf("factory: %s needs you: %s. When it is settled: factory retry %s, or factory stop %s --reason \"<why>\".", it.id, why, it.id, it.id))
-}

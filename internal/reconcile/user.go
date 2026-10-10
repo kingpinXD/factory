@@ -45,7 +45,18 @@ func Stop(ctx context.Context, d Deps, id, reason string) error {
 // Retry logs `factory retry <id>`: the tick returns the entity to the state
 // it left.
 func Retry(ctx context.Context, d Deps, id string) error {
-	_, err := ask(ctx, d, id, Request(RequestRetry, blueprint.Previous, blueprint.TriggerUser, ""))
+	r, err := readRun(ctx, d)
+	if err != nil {
+		return err
+	}
+	e := r.ents[id]
+	if e == nil {
+		return fmt.Errorf("unknown id %q: not in index.json", id)
+	}
+	_, err = r.ask(e, Request(RequestRetry, blueprint.Previous, blueprint.TriggerUser, ""))
+	if hint := r.answerHint(e); err != nil && hint != "" {
+		return fmt.Errorf("%w; it waits on your answer to a re-check: %s", err, hint)
+	}
 	return err
 }
 

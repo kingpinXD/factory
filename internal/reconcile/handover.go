@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
@@ -50,8 +51,16 @@ func (r *run) assign(it *entity) error {
 }
 
 // started reports whether the item's work has started: it entered starting.
-func started(it *entity) bool {
-	return slices.ContainsFunc(it.evs, func(ev events.Event) bool { return ev.Kind == events.KindTransition && ev.To == stateStarting })
+func started(it *entity) bool { return !itemStartedAt(it).IsZero() }
+
+// itemStartedAt returns when the item first entered starting; zero before.
+func itemStartedAt(it *entity) time.Time {
+	for _, ev := range it.evs {
+		if ev.Kind == events.KindTransition && ev.To == stateStarting {
+			return ev.At
+		}
+	}
+	return time.Time{}
 }
 
 // assignedByFactory reports whether the factory assigned the item's issue.

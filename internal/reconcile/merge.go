@@ -100,6 +100,9 @@ func (r *run) mergeHold(it *entity) (string, error) {
 	case pr.Mergeable != "MERGEABLE":
 		return "GitHub reports it " + strings.ToLower(pr.Mergeable), nil
 	}
+	if changed, _, err := r.scopeChanged(it); changed || err != nil {
+		return "a re-check marked its issue updated", err
+	}
 	if !approved(*pr) {
 		reg, err := repos.ByFullName(r.d.Brain, it.work.Repo)
 		if err != nil && !errors.Is(err, repos.ErrNotFound) {
@@ -115,6 +118,9 @@ func (r *run) mergeHold(it *entity) (string, error) {
 	}
 	if n := len(slices.DeleteFunc(slices.Clone(rd.threads), func(t gh.Thread) bool { return t.IsResolved })); n > 0 {
 		return fmt.Sprintf("%d review threads are unresolved", n), nil
+	}
+	if len(rd.checks) == 0 {
+		return "no checks ran on " + abbrev(pr.HeadRefOid), nil
 	}
 	if !allGreen(gating(rd.checks)) {
 		return "its required checks are not green on " + abbrev(pr.HeadRefOid), nil
@@ -149,9 +155,22 @@ func changesRequested(pr gh.PR) bool {
 	return pr.ReviewDecision == "CHANGES_REQUESTED" || reviewedAs(pr, "CHANGES_REQUESTED")
 }
 
-// approved: GitHub's review decision, or a reviewer's latest review,
-// approves.
-func approved(pr gh.PR) bool { return pr.ReviewDecision == "APPROVED" || reviewedAs(pr, "APPROVED") }
+// approvers are the review authors whose approval counts on a branch with
+// no review rule.
+var approvers = []string{"OWNER", "MEMBER", "COLLABORATOR"}
+
+// approved: GitHub's review decision approves; on a branch with no review
+// rule, which has no decision, the latest review of an owner, member or
+// collaborator that is not a bot does.
+func approved(pr gh.PR) bool {
+	if pr.ReviewDecision != "" {
+		return pr.ReviewDecision == "APPROVED"
+	}
+	pr.Reviews = slices.DeleteFunc(slices.Clone(pr.Reviews), func(rv gh.Review) bool {
+		return !slices.Contains(approvers, rv.AuthorAssociation) || strings.HasSuffix(rv.Author.Login, "[bot]")
+	})
+	return reviewedAs(pr, "APPROVED")
+}
 
 func reviewedAs(pr gh.PR, state string) bool {
 	return slices.Contains(slices.Collect(maps.Values(reviewStates(pr))), state)
@@ -195,7 +214,7 @@ func (r *run) sendMerge(it *entity, t events.Event) error {
 	if it.has(mergeKey(t)) || it.has(mergeErrorKey(t)) {
 		return nil
 	}
-	sha, method, err := r.mergeTarget(it, t)
+	sha, method, err := r.mergeTarget(it)
 	if err == nil {
 		err = r.mergeAt(it, t, sha, method)
 	}
@@ -223,22 +242,29 @@ func mergeText(sha string, method gh.MergeMethod) string {
 	return fmt.Sprintf("merge %s by %s", sha, method)
 }
 
-// mergeTarget returns the head commit to merge and how. On a move from
-// in_review it is the head the merge check passed this tick; on a return to
-// merging after a re-check, the one the last merge sent, whatever was pushed
-// since.
-func (r *run) mergeTarget(it *entity, t events.Event) (string, gh.MergeMethod, error) {
-	if t.From != workInReview || it.pr == nil {
-		sha, method, ok := lastMerge(it)
-		if !ok {
-			return "", "", errors.New("no checked head commit to merge")
-		}
-		return sha, method, nil
+// mergeTarget returns the head commit the merge check passed this tick, and
+// how to merge it. Merging is entered only from in_review: a hold that took
+// a merge back returns the item to in_review (returnFromMerging).
+func (r *run) mergeTarget(it *entity) (string, gh.MergeMethod, error) {
+	if it.pr == nil {
+		return "", "", errors.New("no checked head commit to merge")
 	}
 	ctx, cancel := r.call()
 	defer cancel()
 	method, err := r.d.GitHub.MergeMethodFor(ctx, it.work.Repo, it.pr.BaseRefName)
 	return it.pr.HeadRefOid, method, err
+}
+
+// returnFromMerging makes a work item that leaves merging for a hold
+// (rechecking, needs_you) return to in_review instead of merging, so the
+// merge goes out again only after a new merge check. prev is what the move
+// remembers.
+func returnFromMerging(e *entity, from string, prev []string) []string {
+	n := len(prev)
+	if e.work == nil || from != workMerging || n == 0 || prev[n-1] != workMerging {
+		return prev
+	}
+	return append(slices.Clone(prev[:n-1]), workInReview)
 }
 
 // lastMerge returns the head commit and method of the item's newest merge
@@ -264,19 +290,23 @@ func (r *run) mergeFailed(it *entity) (bool, string, error) {
 
 // pauseMerge takes back a merge sent before a re-check started: it takes
 // the PR out of the merge queue, or turns its auto-merge off. The merge goes
-// out again if the re-check returns the item to merging.
+// out again only once the item, back in in_review, passes the merge check.
 func (r *run) pauseMerge(it *entity, t events.Event) error {
-	if t.From != workMerging || it.st.PR == 0 {
+	key, repo, n := "unmerge:"+seqRef(t), it.work.Repo, it.st.PR
+	if t.From != workMerging || n == 0 || it.has(key) {
 		return nil
 	}
-	key, repo, n := "unmerge:"+seqRef(t), it.work.Repo, it.st.PR
 	if _, method, ok := lastMerge(it); ok && method == gh.MergeQueue {
 		return r.once(it, key, "take "+it.st.PRURL+" out of the merge queue", func(ctx context.Context) error { return r.d.GitHub.Dequeue(ctx, repo, n) })
 	}
 	ctx, cancel := r.call()
 	pr, err := r.d.GitHub.PR(ctx, repo, n)
 	cancel()
-	if err != nil || pr.AutoMergeRequest == nil {
+	if err != nil {
+		return err
+	}
+	if pr.AutoMergeRequest == nil {
+		_, err := r.append(it, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Text: "auto-merge is off on " + it.st.PRURL, Key: key})
 		return err
 	}
 	return r.once(it, key, "turn auto-merge off on "+it.st.PRURL, func(ctx context.Context) error { return r.d.GitHub.DisableAutoMerge(ctx, repo, n) })

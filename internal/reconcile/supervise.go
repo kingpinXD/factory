@@ -428,7 +428,7 @@ func (r *run) checkLease(set, sess *entity) {
 	set.st.Lease++
 	text := fmt.Sprintf("lease %d expired after %s with no heartbeat; lease %d granted", lease, r.elapsed(renewed).Round(time.Minute), set.st.Lease)
 	r.say("%s: %s", set.id, text)
-	r.logged(r.append(set, events.Event{At: r.now, Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: set.st.Lease, Text: text, Key: "lease:" + strconv.Itoa(set.st.Lease)}))
+	r.logged(r.append(set, events.Event{At: r.now, Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: set.st.Lease, Text: text, Key: leaseKey(set.st.Lease)}))
 }
 
 // leaseRenewed returns when the set's current lease was last renewed: a
@@ -678,6 +678,9 @@ var needsUserReasons = []func(r *run, e *entity) (ref string, ok bool){
 	(*run).deadLettered,
 	(*run).plannerRunsUsedUp,
 	(*run).deniedModelUsed,
+	(*run).babysitterDying,
+	(*run).plannerTimedOut,
+	(*run).plansRefused,
 }
 
 // needsUser: one of the reasons holds.
@@ -692,10 +695,16 @@ func (r *run) needsUser(e *entity) (bool, string, error) {
 
 // Refs of the moves to needs_you this file DMs about.
 const (
-	deadLetterRef  = "dead-letter:"
-	plannerRunsRef = "planner-runs:"
-	deniedModelRef = "denied-model:"
+	deadLetterRef     = "dead-letter:"
+	plannerRunsRef    = "planner-runs:"
+	deniedModelRef    = "denied-model:"
+	babysitterDiedRef = "babysitter-died:"
+	timedOutRef       = "timed-out:"
+	plansRefusedRef   = "plans-refused:"
 )
+
+// refusedPlanPrefix starts the key of the error that refuses a plan version.
+const refusedPlanPrefix = "refused-plan:"
 
 // deadLettered: an agent reported the same error the blueprint's number of
 // times since the user last retried the entity: it loops, so restarting it
@@ -739,8 +748,71 @@ func (r *run) deniedModelUsed(e *entity) (string, bool) {
 	return deniedModelRef + seqRef(used[len(used)-1]), true
 }
 
+// babysitterDying: a watched item's babysitter was found dead and resumed
+// as often as its component may be restarted in an hour, or as often as a
+// work item may be restarted at all, since the user last retried the item.
+// Something keeps killing it, so resuming it again does not help.
+func (r *run) babysitterDying(it *entity) (string, bool) {
+	if it.work == nil || !slices.Contains(watchStates, it.cur.State) {
+		return "", false
+	}
+	prefix := "restart:dead:" + babysitterID(it.id, 1)
+	all := countedSince(it, lastLeft(it, stateNeedsYou), func(ev events.Event) bool {
+		return ev.Kind == events.KindRestart && strings.HasPrefix(ev.Key, prefix)
+	})
+	hour := slices.DeleteFunc(slices.Clone(all), func(ev events.Event) bool { return !ev.At.After(r.now.Add(-time.Hour)) })
+	if len(hour) < r.restartLimit(babysitterComponent) && len(all) < r.b.Values.Supervision.RestartsPerItem {
+		return "", false
+	}
+	return fmt.Sprintf("%s%d:%s", babysitterDiedRef, len(all), seqRef(all[len(all)-1])), true
+}
+
+// stateEntered returns the seq of e's newest move into its state from
+// another one; a restart by the state's timeout enters it from itself.
+func stateEntered(e *entity) int {
+	for i := len(e.evs) - 1; i >= 0; i-- {
+		if ev := e.evs[i]; ev.Kind == events.KindTransition && ev.To == e.cur.State && ev.From != ev.To {
+			return ev.Seq
+		}
+	}
+	return 0
+}
+
+// plannerTimedOut: an epic's state timed out, each time restarting its
+// planner, as often as the planner may run for one problem since the epic
+// entered the state. Nothing above the planner re-plans an epic.
+func (r *run) plannerTimedOut(e *entity) (string, bool) {
+	if e.epic == nil {
+		return "", false
+	}
+	timeouts := countedSince(e, stateEntered(e), func(ev events.Event) bool {
+		return ev.Kind == events.KindTransition && ev.From == ev.To && strings.HasPrefix(ev.TriggerRef, timeoutRef)
+	})
+	if len(timeouts) < r.b.Values.Supervision.PlannerRunsPerProblem {
+		return "", false
+	}
+	return timedOutRef + seqRef(timeouts[len(timeouts)-1]), true
+}
+
+// plansRefused: the program refused as many plan versions as the planner may
+// run for one problem since the epic entered its state: the planner does
+// not fix what it is told.
+func (r *run) plansRefused(e *entity) (string, bool) {
+	if e.epic == nil {
+		return "", false
+	}
+	refused := countedSince(e, stateEntered(e), func(ev events.Event) bool {
+		return ev.Kind == events.KindError && strings.HasPrefix(ev.Key, refusedPlanPrefix)
+	})
+	if len(refused) < r.b.Values.Supervision.PlannerRunsPerProblem {
+		return "", false
+	}
+	return plansRefusedRef + seqRef(refused[len(refused)-1]), true
+}
+
 // dmNeedsYou DMs the user once for each move into needs_you this file's
-// reasons made, and for one made by a state's timeout.
+// reasons made, and for one made by a state's timeout or a closed PR. It
+// runs every tick, so a DM that failed is sent on a later one.
 func (r *run) dmNeedsYou() {
 	for _, id := range r.order() {
 		e := r.ents[id]
@@ -771,6 +843,20 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	case strings.HasPrefix(ref, deniedModelRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, deniedModelRef))
 		return ev.Text
+	case strings.HasPrefix(ref, babysitterDiedRef):
+		n, _, _ := strings.Cut(strings.TrimPrefix(ref, babysitterDiedRef), ":")
+		return fmt.Sprintf("its babysitter died and was resumed %s times (the limit is %d an hour, %d in all); its PR %s is not watched until you retry",
+			n, r.restartLimit(babysitterComponent), r.b.Values.Supervision.RestartsPerItem, e.st.PRURL)
+	case strings.HasPrefix(ref, timedOutRef):
+		return fmt.Sprintf("%s timed out %d times, and its planner was restarted each time", t.From, r.b.Values.Supervision.PlannerRunsPerProblem)
+	case strings.HasPrefix(ref, plansRefusedRef):
+		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, plansRefusedRef))
+		refusal, _, _ := strings.Cut(ev.Text, ". Write a fixed new version")
+		return fmt.Sprintf("%d plan versions in a row were refused; the last: %s", r.b.Values.Supervision.PlannerRunsPerProblem, refusal)
+	case e.work != nil && t.From == workClosed:
+		return fmt.Sprintf("its PR %s was closed without merging", e.st.PRURL)
+	case strings.HasPrefix(ref, redAfterPassRef):
+		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef)))
 	}
 	return ""
 }

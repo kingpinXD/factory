@@ -106,7 +106,7 @@ func (r *run) checkpointReady(sess *entity) (bool, string, error) {
 		return false, "", nil
 	}
 	ref := owner.id + "#" + seqRef(cp)
-	if usedRef(sess, ref) || r.stepOpen(owner) {
+	if usedRef(sess, ref) || r.stepOpen(owner) || !r.accountAllows(false) {
 		return false, "", nil
 	}
 	return true, ref, nil
@@ -232,6 +232,9 @@ func (r *run) deliver(sess *entity, text string) error {
 		return fmt.Errorf("%s is not listed", sess.session.Name)
 	case s.Live():
 		return r.act("post to "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
+	case !r.accountAllows(false):
+		r.say("%s: not resumed after its compaction: the account holds work back", s.Name)
+		return nil
 	}
 	return r.act("resume "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Resume(ctx, s.ID, text) })
 }

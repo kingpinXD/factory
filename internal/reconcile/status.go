@@ -150,6 +150,9 @@ func (r *run) waitingWhy(e *entity, t events.Event) string {
 		q, _ := eventBySeq(e, t.TriggerRef)
 		return q.Text
 	}
+	if hint := r.answerHint(e); hint != "" {
+		return hint
+	}
 	if why := r.needsYouWhy(e, t); why != "" {
 		return why
 	}

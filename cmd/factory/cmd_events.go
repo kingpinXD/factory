@@ -95,8 +95,34 @@ func logEvent(id string, ev events.Event, file, to string) (events.Event, error)
 		if ev.SHA256, err = events.HashFile(ev.File); err != nil {
 			return events.Event{}, err
 		}
+		if ev.Kind == events.KindEnd {
+			if err := checkOwnFile(id, ev.File); err != nil {
+				return events.Event{}, err
+			}
+		}
 	}
 	return store.AppendTo(blueprint.Brain(), id, ev)
+}
+
+// checkOwnFile refuses an end event's file outside the folder of the entity
+// whose step it ends: a step's output is that entity's own file.
+func checkOwnFile(id, file string) error {
+	entry, err := lookup(id)
+	if err != nil {
+		return err
+	}
+	dir, err := filepath.EvalSymlinks(entry.Dir)
+	if err != nil {
+		return err
+	}
+	real, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return err
+	}
+	if rel, err := filepath.Rel(dir, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is not in %s's folder %s", file, id, entry.Dir)
+	}
+	return nil
 }
 
 func checkEvent(kind, file, text, to string) error {
@@ -203,16 +229,16 @@ func checkLease(cmd string, args []string, stderr io.Writer) (string, int, int) 
 	if err == nil && entry.Kind != blueprint.MachineSet {
 		err = fmt.Errorf("%s is a %s, not a set", args[0], entry.Kind)
 	}
-	var st store.Status
+	current := 0
 	if err == nil {
-		st, err = store.ReadStatus(entry.Dir)
+		current, err = reconcile.Lease(entry.Dir)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "factory %s: %v\n", cmd, err)
 		return "", 0, 1
 	}
-	if st.Lease != lease {
-		fmt.Fprintf(stderr, "factory %s: lease %d is not the current lease of %s (current: %d)\n", cmd, lease, args[0], st.Lease)
+	if current != lease {
+		fmt.Fprintf(stderr, "factory %s: lease %d is not the current lease of %s (current: %d)\n", cmd, lease, args[0], current)
 		return "", 0, 1
 	}
 	return entry.Dir, lease, 0

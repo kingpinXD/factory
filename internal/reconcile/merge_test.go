@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
@@ -178,10 +179,16 @@ func (w *world) inReviewWith(plan string, quiet time.Duration) {
 	w.t.Helper()
 	w.registryMerging(true)
 	w.planned("e1", plan)
+	w.toInReview(quiet)
+}
+
+// toInReview puts the planned item e1-w1 in in_review, as inReviewWith says.
+func (w *world) toInReview(quiet time.Duration) {
+	w.t.Helper()
 	w.append(w.dir(item), events.Event{Kind: events.KindRequest, Recipient: events.RecipientRepoWorker, Request: worktreeRequest})
 	w.readyWorktree(item)
 	w.prs[git.Branch(item)] = gh.PR{ID: "PR_5", Number: 5, URL: prURL, State: "OPEN", HeadRefName: git.Branch(item), HeadRefOid: head1,
-		BaseRefName: "main", BaseRefOid: base1, Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN"}
+		BaseRefName: "main", BaseRefOid: base1, Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", Author: gh.User{Login: "me"}, CreatedAt: w.now}
 	w.moveTo(item, workPROpen)
 	w.append(w.dir(item), events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: "fixture"})
 	w.moveTo(item, workInReview)
@@ -272,7 +279,34 @@ func TestTheMergeCheckHoldsThePR(t *testing.T) {
 		{name: "no approval and no flag", hold: "it is not approved", setup: func(w *world) { w.registry() }},
 		{name: "an approval and no flag", setup: func(w *world) {
 			w.registry()
-			w.pr(func(pr *gh.PR) { pr.Reviews = []gh.Review{{Author: alice, State: "APPROVED", SubmittedAt: t0}} })
+			w.pr(func(pr *gh.PR) {
+				pr.Reviews = []gh.Review{{Author: alice, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
+			})
+		}},
+		{name: "a bot's approval and no flag", hold: "it is not approved", setup: func(w *world) {
+			w.registry()
+			w.pr(func(pr *gh.PR) {
+				pr.Reviews = []gh.Review{{Author: gh.User{Login: "some-bot"}, AuthorAssociation: "NONE", State: "APPROVED", SubmittedAt: t0}}
+			})
+		}},
+		{name: "a member bot's approval and no flag", hold: "it is not approved", setup: func(w *world) {
+			w.registry()
+			w.pr(func(pr *gh.PR) {
+				pr.Reviews = []gh.Review{{Author: gh.User{Login: "some-bot[bot]"}, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
+			})
+		}},
+		{name: "a contributor's approval and no flag", hold: "it is not approved", setup: func(w *world) {
+			w.registry()
+			w.pr(func(pr *gh.PR) {
+				pr.Reviews = []gh.Review{{Author: gh.User{Login: "bob"}, AuthorAssociation: "CONTRIBUTOR", State: "APPROVED", SubmittedAt: t0}}
+			})
+		}},
+		{name: "a member's approval while the review rule still requires one", hold: "it is not approved", setup: func(w *world) {
+			w.registry()
+			w.pr(func(pr *gh.PR) {
+				pr.ReviewDecision = "REVIEW_REQUIRED"
+				pr.Reviews = []gh.Review{{Author: alice, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
+			})
 		}},
 		{name: "a re-check covers the item", hold: workRechecking, setup: func(w *world) {
 			if _, err := Replan(context.Background(), w.deps(), "e1", "check #14 again"); err != nil {
@@ -291,6 +325,7 @@ func TestTheMergeCheckHoldsThePR(t *testing.T) {
 		{name: "no required check and one red", hold: "its required checks are not green", setup: func(w *world) {
 			w.pulls.checks[head1] = []gh.Check{{Name: "ci", State: "SUCCESS"}, {Name: "lint", State: "FAILURE"}}
 		}},
+		{name: "no checks at all on the head", hold: "no checks ran on 1111111", setup: func(w *world) { delete(w.pulls.checks, head1) }},
 		{name: "a draft", hold: "its PR is a draft", setup: func(w *world) { w.pr(func(pr *gh.PR) { pr.IsDraft = true }) }},
 		{name: "a conflict", hold: "GitHub reports it conflicting", setup: func(w *world) { w.pr(func(pr *gh.PR) { pr.Mergeable = "CONFLICTING" }) }},
 	} {
@@ -377,7 +412,7 @@ func (w *world) recheckReady() {
 	w.end("e1", "epic.v2.yaml", oneItem("[]"))
 }
 
-func TestARecheckWhileMergingTakesTheMergeBackThenSendsItAgain(t *testing.T) {
+func TestARecheckWhileMergingTakesTheMergeBackThenChecksItAgain(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, takeBack, again string
 	}{
@@ -404,8 +439,17 @@ func TestARecheckWhileMergingTakesTheMergeBackThenSendsItAgain(t *testing.T) {
 			before := len(w.called(tc.again))
 			w.recheckReady()
 			w.tick(false)
+			if got := w.status(item); got.State != workInReview || len(got.Prev) != 0 {
+				t.Fatalf("%s is %s (prev %v) after the re-check found it ready, want in_review\n%s", item, got.State, got.Prev, w.out.String())
+			}
+			if got := w.called(tc.again); len(got) != before {
+				t.Errorf("merge sent again with no new merge check: %q", got)
+			}
+			w.now = w.now.Add(time.Minute)
+			w.fullNext()
+			w.tick(false)
 			if got := w.status(item).State; got != workMerging {
-				t.Fatalf("%s is %s after the re-check found it ready, want merging again\n%s", item, got, w.out.String())
+				t.Fatalf("%s is %s after a merge check that passes, want merging\n%s", item, got, w.out.String())
 			}
 			if got := w.called(tc.again); len(got) != before+1 || !strings.Contains(last(got), head1) {
 				t.Errorf("merges sent again = %q, want one more at %s", got, abbrev(head1))
@@ -414,7 +458,59 @@ func TestARecheckWhileMergingTakesTheMergeBackThenSendsItAgain(t *testing.T) {
 	}
 }
 
-func TestARecheckEndingOnAFullReconcileMergesOnlyTheCheckedHead(t *testing.T) {
+// What changed during a re-check of an item it took out of merging holds
+// the merge: a link the new plan adds, a change request.
+func TestAMergeTakenBackByARecheckWaitsForTheMergeCheck(t *testing.T) {
+	changes := func(w *world) {
+		w.pr(func(pr *gh.PR) {
+			pr.Reviews = []gh.Review{{Author: gh.User{Login: "alice"}, AuthorAssociation: "MEMBER", State: "CHANGES_REQUESTED", SubmittedAt: t0}}
+			pr.ReviewDecision = "CHANGES_REQUESTED"
+		})
+	}
+	for _, tc := range []struct {
+		name, method, plan, hold string
+		during                   func(w *world)
+	}{
+		{name: "a new blocker link", method: "squash", plan: oneItem("[{from: o/r#20, to: w1, gate: merge, when: merged, rollback: none}]"), hold: "may-merge: waits on o/r#20"},
+		{name: "a change request", method: "squash", plan: oneItem("[]"), during: changes, hold: "a reviewer requested changes"},
+		{name: "both, in a merge queue", method: "queue", plan: oneItem("[{from: o/r#99, to: w1, gate: merge, when: merged, rollback: x}]"), during: changes, hold: "a reviewer requested changes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.inReviewWith(oneItem("[]"), 20*time.Minute)
+			w.pulls.queues["o/r@main"] = tc.method == "queue"
+			w.pr(func(pr *gh.PR) { pr.AutoMergeRequest = &struct{}{} })
+			w.moveTo(item, workMerging)
+			w.append(w.dir(item), events.Event{Kind: events.KindIntent, Text: "merge " + head1 + " by " + tc.method, Key: "merge:1:intent"})
+			if _, err := Replan(context.Background(), w.deps(), "e1", "check #14 again"); err != nil {
+				t.Fatal(err)
+			}
+			w.tick(false)
+			if got := w.status(item).State; got != workRechecking {
+				t.Fatalf("%s is %s, want rechecking", item, got)
+			}
+			if tc.during != nil {
+				tc.during(w)
+			}
+			w.end("e1", "state-check.v2.md", stateCheck)
+			w.end("e1", "epic.v2.yaml", tc.plan)
+			for range 2 {
+				w.now = w.now.Add(time.Minute)
+				w.fullNext()
+				w.tick(false)
+			}
+			const enqueue = "gh api graphql -f query=mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest("
+			if got := append(w.called(squashMerge), w.called(enqueue)...); len(got) != 0 {
+				t.Errorf("merge sent again past the merge check: %q; moves %v", got, w.moves(item))
+			}
+			if st := w.status(item); st.State != workInReview || !strings.HasPrefix(st.MergeHold, tc.hold) {
+				t.Errorf("%s is %s held by %q, want in_review held by %q", item, st.State, st.MergeHold, tc.hold)
+			}
+		})
+	}
+}
+
+func TestAHeadPushedDuringARecheckIsCheckedBeforeItMerges(t *testing.T) {
 	w := newWorld(t)
 	w.inReviewWith(oneItem("[]"), 20*time.Minute)
 	w.moveTo(item, workMerging)
@@ -429,11 +525,11 @@ func TestARecheckEndingOnAFullReconcileMergesOnlyTheCheckedHead(t *testing.T) {
 	w.now = w.now.Add(time.Minute)
 	w.fullNext()
 	w.tick(false)
-	if got := w.called("gh pr merge 5"); !slices.Equal(got, []string{squashMerge + head1}) {
-		t.Fatalf("merges = %q, want only the head the check passed, %s", got, abbrev(head1))
+	if got := w.called("gh pr merge 5"); len(got) != 0 {
+		t.Fatalf("merges = %q, want none before the new head's quiet time", got)
 	}
-	if w.prs[git.Branch(item)].State != "OPEN" {
-		t.Error("merged a head pushed during the re-check")
+	if st := w.status(item); st.State != workInReview || !strings.HasPrefix(st.MergeHold, "its head 2222222 was first seen 0s ago") {
+		t.Errorf("%s is %s held by %q, want in_review held by the new head's quiet time", item, st.State, st.MergeHold)
 	}
 }
 
@@ -475,10 +571,10 @@ func TestABehindPRIsUpdatedOncePerBaseCommit(t *testing.T) {
 func TestReviewStates(t *testing.T) {
 	at := func(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
 	pr := gh.PR{Reviews: []gh.Review{
-		{Author: gh.User{Login: "bob"}, State: "APPROVED", SubmittedAt: at(5)},
-		{Author: gh.User{Login: "alice"}, State: "APPROVED", SubmittedAt: at(3)},
-		{Author: gh.User{Login: "alice"}, State: "CHANGES_REQUESTED", SubmittedAt: at(1)},
-		{Author: gh.User{Login: "bob"}, State: "COMMENTED", SubmittedAt: at(6)},
+		{Author: gh.User{Login: "bob"}, AuthorAssociation: "COLLABORATOR", State: "APPROVED", SubmittedAt: at(5)},
+		{Author: gh.User{Login: "alice"}, AuthorAssociation: "OWNER", State: "APPROVED", SubmittedAt: at(3)},
+		{Author: gh.User{Login: "alice"}, AuthorAssociation: "OWNER", State: "CHANGES_REQUESTED", SubmittedAt: at(1)},
+		{Author: gh.User{Login: "bob"}, AuthorAssociation: "COLLABORATOR", State: "COMMENTED", SubmittedAt: at(6)},
 	}}
 	if got := reviewStates(pr); got["alice"] != "APPROVED" || got["bob"] != "APPROVED" || len(got) != 2 {
 		t.Errorf("reviewStates = %v, want each reviewer's latest decisive review", got)
@@ -527,7 +623,7 @@ func TestAnUpdatedResultWhileMergingGoesToImplementing(t *testing.T) {
 			w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", "updated"))
 			w.tick(false)
 			moves := w.moves(item)
-			if got := moves[len(moves)-2:]; !slices.Equal(got, []string{"merging→rechecking", "rechecking→implementing"}) {
+			if got := moves[len(moves)-3:]; !slices.Equal(got, []string{"merging→rechecking", "rechecking→in_review", "in_review→implementing"}) {
 				t.Fatalf("moves = %v\n%s", moves, w.out.String())
 			}
 			if got := w.called(tc.takeBack); len(got) != 1 {
@@ -555,5 +651,43 @@ func TestTheMergeHoldIsClearedOnceThePRMerges(t *testing.T) {
 	w.tick(false)
 	if st := w.status(item); st.State != workMerging || st.MergeHold != "" {
 		t.Errorf("%s is %s with merge_hold %q, want merging and none", item, st.State, st.MergeHold)
+	}
+}
+
+// An updated result that returns an item to in_review on a full reconcile
+// hands its worktree back; it never merges, whichever move the blueprint
+// lists first.
+func TestAnUpdatedResultOnAFullReconcileIsNeverMerged(t *testing.T) {
+	const scopeFirst = "      - {from: in_review, to: implementing, trigger: file, guard: scope_changed}\n      - {from: in_review, to: merging, trigger: tick, guard: merge_ready}\n"
+	const mergeFirst = "      - {from: in_review, to: merging, trigger: tick, guard: merge_ready}\n      - {from: in_review, to: implementing, trigger: file, guard: scope_changed}\n"
+	for _, tc := range []struct{ name, order string }{{"scope_changed listed first", scopeFirst}, {"merge_ready listed first", mergeFirst}} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			path := blueprint.Path(w.brain)
+			shipped := readFile(t, path)
+			if !strings.Contains(shipped, scopeFirst) {
+				t.Fatal("the shipped blueprint no longer lists scope_changed right before merge_ready")
+			}
+			put(t, path, strings.Replace(shipped, scopeFirst, tc.order, 1))
+			w.inReviewWith(oneItem("[]"), 20*time.Minute)
+			if _, err := Replan(context.Background(), w.deps(), "e1", "the API changed"); err != nil {
+				t.Fatal(err)
+			}
+			w.tick(false)
+			if got := w.status(item).State; got != workRechecking {
+				t.Fatalf("%s is %s, want rechecking", item, got)
+			}
+			w.end("e1", "state-check.v2.md", stateCheck)
+			w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", "updated"))
+			w.now = w.now.Add(time.Minute)
+			w.fullNext()
+			w.tick(false)
+			if got := w.called("gh pr merge 5"); len(got) != 0 {
+				t.Errorf("merged a PR whose issue the re-check just marked updated: %q", got)
+			}
+			if got := last(w.moves(item)); got != "in_review→implementing" {
+				t.Errorf("last move %s, want in_review→implementing; moves %v", got, w.moves(item))
+			}
+		})
 	}
 }

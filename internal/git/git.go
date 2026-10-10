@@ -42,7 +42,7 @@ func (c Client) git(ctx context.Context, args ...string) ([]byte, error) {
 // Worktree only before the worktree is handed to an agent. A branch left
 // without its worktree is checked out again as it is.
 func (c Client) Worktree(ctx context.Context, clone, base, workID string) (string, error) {
-	if err := store.CheckID(workID); err != nil {
+	if err := checkWork(clone, workID); err != nil {
 		return "", err
 	}
 	unlock, err := lock(ctx, clone)
@@ -84,6 +84,9 @@ func (c Client) Worktree(ctx context.Context, clone, base, workID string) (strin
 // Clone clones repo (owner/name) to path over SSH, as the user's own clones
 // are. A clone already at path is left as it is.
 func (c Client) Clone(ctx context.Context, repo, path string) error {
+	if err := checkClone(path); err != nil {
+		return err
+	}
 	unlock, err := lock(ctx, path)
 	if err != nil {
 		return err
@@ -103,7 +106,7 @@ func (c Client) Clone(ctx context.Context, repo, path string) error {
 // which outlives the merged branch. With mergedHeadSHA empty, for cancelled
 // work, it removes both.
 func (c Client) Cleanup(ctx context.Context, clone, workID string, pr int, mergedHeadSHA string) (kept []string, err error) {
-	if err := store.CheckID(workID); err != nil {
+	if err := checkWork(clone, workID); err != nil {
 		return nil, err
 	}
 	unlock, err := lock(ctx, clone)
@@ -120,6 +123,24 @@ func (c Client) Cleanup(ctx context.Context, clone, workID string, pr int, merge
 		}
 	}
 	return c.remove(ctx, clone, WorktreePath(clone, workID), Branch(workID), mergedHeadSHA)
+}
+
+// checkWork refuses a work item's clone path or id that could make git run
+// somewhere else than next to the user's clone.
+func checkWork(clone, workID string) error {
+	if err := checkClone(clone); err != nil {
+		return err
+	}
+	return store.CheckID(workID)
+}
+
+// checkClone refuses a clone path that is not absolute: `git -C ""`, or a
+// relative path, runs in the current folder.
+func checkClone(clone string) error {
+	if !filepath.IsAbs(clone) {
+		return fmt.Errorf("clone path %q is not absolute", clone)
+	}
+	return nil
 }
 
 // remove removes the worktree at path and then branch, unless either holds

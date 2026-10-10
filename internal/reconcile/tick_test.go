@@ -109,10 +109,10 @@ func TestItemStartsAndItsOrchestratorGetsTheWorktree(t *testing.T) {
 
 func TestNoDoubleStart(t *testing.T) {
 	w := newWorld(t)
-	w.listSession("factory:e1:planner", 0, "stopped")
+	w.listSession("factory:e2610091:planner", 0, "stopped")
 	id, err := Add(context.Background(), w.deps(), "add a flag", Overrides{})
-	if err != nil || id != "e1" {
-		t.Fatalf("Add = %q, %v", id, err)
+	if err != nil || id != "e2610091" {
+		t.Fatalf("Add = %q, %v; want e2610091, the first epic of t0's day", id, err)
 	}
 	for range 3 {
 		w.now = w.now.Add(time.Minute)
@@ -121,10 +121,10 @@ func TestNoDoubleStart(t *testing.T) {
 	if got := w.called("claude --bg --model"); len(got) != 0 {
 		t.Errorf("started a session already listed under its name: %q", got)
 	}
-	if _, err := os.Stat(w.dir("e1-planner")); err != nil {
+	if _, err := os.Stat(w.dir("e2610091-planner")); err != nil {
 		t.Errorf("the listed session was not adopted as an entity: %v", err)
 	}
-	if !strings.Contains(w.out.String(), "factory:e1:planner: listed already, so not started again") {
+	if !strings.Contains(w.out.String(), "factory:e2610091:planner: listed already, so not started again") {
 		t.Errorf("output:\n%s", w.out.String())
 	}
 }
@@ -192,7 +192,7 @@ func TestOverridesReachTheSpawn(t *testing.T) {
 		t.Errorf("explorer = %+v, want its own opus at medium", h)
 	}
 	prompt := planner[len(planner)-1]
-	for _, want := range []string{"factory-task: e1\n", "epic folder: " + w.epicDir("e1"), "inputs: " + filepath.Join(w.epicDir("e1"), "inputs.yaml"), "input (text): add a flag"} {
+	for _, want := range []string{"factory-task: " + id + "\n", "epic folder: " + w.epicDir(id), "inputs: " + filepath.Join(w.epicDir(id), "inputs.yaml"), "input (text): add a flag"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("planner prompt lacks %q:\n%s", want, prompt)
 		}
@@ -250,24 +250,24 @@ func TestAddMakesAnEpicInChecking(t *testing.T) {
 		t.Fatal(err)
 	}
 	id, err := Add(context.Background(), w.deps(), plan, Overrides{})
-	if err != nil || id != "e2" {
-		t.Fatalf("Add = %q, %v; want e2", id, err)
+	if err != nil || id != "e2610092" {
+		t.Fatalf("Add = %q, %v; want e2610092, the second epic of t0's day", id, err)
 	}
 	var in EpicInputs
-	if err := store.ReadInputs(w.dir("e2"), &in); err != nil {
+	if err := store.ReadInputs(w.dir(id), &in); err != nil {
 		t.Fatal(err)
 	}
 	if in.Kind != "plan" || in.Path != plan || in.Input != plan || !in.AddedAt.Equal(t0) {
 		t.Errorf("inputs = %+v", in)
 	}
-	if st := w.status("e2"); st.State != "checking" || !st.Since.Equal(t0) {
+	if st := w.status(id); st.State != "checking" || !st.Since.Equal(t0) {
 		t.Errorf("status = %+v, want checking since t0", st)
 	}
 	ix, _ := store.ReadIndex(w.brain)
-	if e := ix["e2"]; e.Kind != "epic" || e.Dir != w.epicDir("e2") || e.Epic != "e2" {
+	if e := ix[id]; e.Kind != "epic" || e.Dir != w.epicDir(id) || e.Epic != id {
 		t.Errorf("index entry = %+v", e)
 	}
-	if e := ix["e2-planner"]; e.Kind != "session" || e.Epic != "e2" {
+	if e := ix[id+"-planner"]; e.Kind != "session" || e.Epic != id {
 		t.Errorf("planner entry = %+v", e)
 	}
 	if _, err := Add(context.Background(), w.deps(), "./no-such-plan.md", Overrides{}); err == nil || !strings.Contains(err.Error(), "no such file") {
@@ -369,7 +369,7 @@ func TestEarlyMergeWhileImplementing(t *testing.T) {
 	w.append(w.dir("e1-w3"), events.Event{Kind: events.KindRequest, Recipient: events.RecipientRepoWorker, Request: worktreeRequest})
 	w.readyWorktree("e1-w3")
 	w.append(w.dir("e1-w3"), events.Event{Kind: events.KindTransition, At: t0, From: "starting", To: "implementing", Trigger: "file"})
-	w.prs["factory/e1-w3"] = gh.PR{Number: 5, HeadRefName: "factory/e1-w3", State: "MERGED", HeadRefOid: "abc"}
+	w.prs["factory/e1-w3"] = gh.PR{Number: 5, HeadRefName: "factory/e1-w3", State: "MERGED", HeadRefOid: "abc", CreatedAt: t0}
 
 	w.tick(false)
 	if got := w.moves("e1-w3"); !reflect.DeepEqual(got, []string{"→starting", "starting→implementing", "implementing→merged"}) {
@@ -763,5 +763,25 @@ func TestAReadyWorktreeIsNotAskedForAgain(t *testing.T) {
 	}
 	if reqs := w.kinds("e1-w3", events.KindRequest); len(reqs) != 2 {
 		t.Errorf("requests = %+v, want the first worktree request and the answer only", reqs)
+	}
+}
+
+// A merged PR on the item's branch from before the item started is an
+// earlier item's under the same id: it never finishes the new item.
+func TestAnOldPROnTheItemsBranchIsNotItsOwn(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", oneItem("[]"))
+	w.prs[git.Branch(item)] = gh.PR{ID: "PR_3", Number: 3, URL: "https://github.com/o/r/pull/3", State: "MERGED", HeadRefName: git.Branch(item),
+		HeadRefOid: head2, BaseRefName: "main", MergedAt: t0.Add(-30 * 24 * time.Hour), CreatedAt: t0.Add(-31 * 24 * time.Hour)}
+	for range 6 {
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+		if st := w.status(item).State; st == "starting" && len(w.kinds(item, events.KindWorktreeReady)) == 0 {
+			w.readyWorktree(item)
+		}
+	}
+	if st := w.status(item); st.State == stateMerged || st.State == "done" || st.PR != 0 {
+		t.Errorf("%s is %s with PR %d: an old PR #3 it never opened finished it; moves %v", item, st.State, st.PR, w.moves(item))
 	}
 }

@@ -122,6 +122,17 @@ func (r *run) undelivered(owner, sess *entity) []delivery {
 	return slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return slices.Contains(sess.st.Delivered, d.ref) })
 }
 
+// unacknowledged returns what a session being resumed is told: every
+// message in its owner's inbox, given to it before or not, since it may have
+// stopped before acting on one, and whatever else it has not been given.
+func (r *run) unacknowledged(owner, sess *entity) []delivery {
+	inbox := map[string]bool{}
+	for _, m := range events.Inbox(owner.evs) {
+		inbox[owner.id+"#"+seqRef(m)] = true
+	}
+	return slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return !inbox[d.ref] && slices.Contains(sess.st.Delivered, d.ref) })
+}
+
 func markDelivered(sess *entity, ds []delivery) {
 	for _, d := range ds {
 		if !slices.Contains(sess.st.Delivered, d.ref) {
@@ -132,8 +143,8 @@ func markDelivered(sess *entity, ds []delivery) {
 
 // needsSession reports whether the owner has work for its session: a
 // message or ready item to deliver, an epic its planner is checking or
-// planning, a set with an item being worked in its worktree, or a work item
-// whose PR needs its babysitter.
+// planning, a set with an item being worked in its worktree or whose PR it
+// is opening, or a work item whose PR needs its babysitter.
 func (r *run) needsSession(owner *entity) bool {
 	if !owner.open() {
 		return false
@@ -151,10 +162,17 @@ func (r *run) needsSession(owner *entity) bool {
 		items, _ := r.itemsOf(owner)
 		return slices.ContainsFunc(items, func(it *entity) bool {
 			_, ok := worktreeReady(it)
-			return ok && active(it)
+			return ok && (active(it) || r.openingPR(it))
 		})
 	}
 	return false
+}
+
+// openingPR reports whether the orchestrator is opening the item's PR: the
+// item is in pr_open and nothing hands its worktree over yet. With its PR
+// recorded and its orchestrator dead, the handover is due instead.
+func (r *run) openingPR(it *entity) bool {
+	return it.cur.State == workPROpen && !handedOver(it) && (it.st.PR == 0 || r.handoverDue(it) == "")
 }
 
 // driveSessions starts the sessions entities need and posts new work to
@@ -203,6 +221,10 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 		r.say("%s: not started: the session listing is unknown", name)
 		return nil
 	}
+	if !r.accountAllows(false) {
+		r.say("%s: not started: the account holds work back", name)
+		return nil
+	}
 	sess, err := r.create(id, store.Entry{
 		Kind: blueprint.MachineSession,
 		Dir:  filepath.Join(owner.entry.Dir, "sessions", strings.TrimPrefix(id, owner.id+"-")),
@@ -219,7 +241,9 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 }
 
 // launch starts the session with the full spec and its start prompt. An
-// orchestrator gets a new lease each time it starts.
+// orchestrator gets a new lease each time it starts. The lease and the
+// session's index entry are written before the start, so a tick killed
+// after it loses neither.
 func (r *run) launch(owner *entity, sess *entity) error {
 	component := sess.session.Component
 	if owner.set != nil {
@@ -228,6 +252,15 @@ func (r *run) launch(owner *entity, sess *entity) error {
 	prompt := r.startPrompt(owner, component)
 	spec, err := r.spec(owner, sess.session, prompt)
 	if err != nil {
+		return err
+	}
+	if owner.set != nil {
+		text := fmt.Sprintf("lease %d granted to %s", owner.st.Lease, sess.session.Name)
+		if _, err := r.append(owner, events.Event{At: r.now, Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: owner.st.Lease, Text: text, Key: leaseKey(owner.st.Lease)}); err != nil {
+			return err
+		}
+	}
+	if err := r.writeIndex(); err != nil {
 		return err
 	}
 	what := fmt.Sprintf("start %s on %s at %s effort", spec.Name, spec.Model, spec.Effort)
@@ -268,10 +301,10 @@ func (r *run) wake(sess *entity) error {
 	if !listed {
 		return r.launch(owner, sess)
 	}
-	news := r.undelivered(owner, sess)
 	if s.Live() {
-		return r.post(owner, sess, s, news)
+		return r.post(owner, sess, s, r.undelivered(owner, sess))
 	}
+	news := r.unacknowledged(owner, sess)
 	prompt := r.resumePrompt(owner, sess.session.Component, news)
 	err := r.act("resume "+sess.session.Name, func(ctx context.Context) error {
 		if s.State == listedWorking {

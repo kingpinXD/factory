@@ -2,6 +2,9 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -10,6 +13,8 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -497,5 +502,287 @@ func TestAHelperOnADeniedModelStopsItsSession(t *testing.T) {
 	}
 	if got := w.called("claude stop"); len(got) != 1 {
 		t.Errorf("stops = %q, want no second one", got)
+	}
+}
+
+func TestADyingBabysitterWaitsForTheUser(t *testing.T) {
+	w := watching(t)
+	w.pulls.threads[5] = []gh.Thread{thread("T1", 11, "alice")}
+	w.babysitter(1, sessionDead, 0, "stopped")
+	w.append(w.dir(item), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientBabysitter,
+		Request: "thread", Text: "alice commented on a review thread", Key: "babysit:thread:T1:11"})
+	w.delivered(1)
+	for range 2 * 60 {
+		w.tick(false)
+		// It crashes as soon as it is resumed.
+		w.setState(babysitterName(item, 1), 0, "stopped")
+		w.now = w.now.Add(time.Minute)
+	}
+	if got := w.called("claude --bg --resume"); len(got) != 2 {
+		t.Errorf("resumes = %d, want 2, the babysitter's restarts an hour", len(got))
+	}
+	if st := w.status(item).State; st != workNeedsYou {
+		t.Errorf("%s is %s, want needs_you", item, st)
+	}
+	if got := w.dmsWith("its babysitter died and was resumed 2 times"); len(got) != 1 || len(w.dms) != 1 {
+		t.Errorf("DMs = %q, want one about the babysitter", w.dms)
+	}
+}
+
+func TestAPlannerTimingOutThreeTimesWaitsForTheUser(t *testing.T) {
+	w := newWorld(t)
+	w.epic("e1", "planning")
+	w.planner("e1", "running", 4101, "working")
+	for m := range 7 * 60 {
+		// It keeps working, so it is never nudged, yet never ends a plan.
+		if m%20 == 0 {
+			w.append(w.dir("e1"), events.Event{At: w.now, Kind: events.KindIntent, Sender: "e1", Text: "comment on o/r#12"})
+			w.append(w.dir("e1"), events.Event{At: w.now, Kind: events.KindDone, Sender: "e1", Text: "comment on o/r#12"})
+		}
+		w.tick(false)
+		w.now = w.now.Add(time.Minute)
+	}
+	if got := w.called("claude stop"); len(got) != 3 {
+		t.Errorf("stops = %q, want one per timeout, 3", got)
+	}
+	if st := w.status("e1").State; st != stateNeedsYou {
+		t.Errorf("e1 is %s, want needs_you", st)
+	}
+	if got := w.dmsWith("e1 needs you: planning timed out 3 times"); len(got) != 1 || len(w.dms) != 1 {
+		t.Errorf("DMs = %q, want one about the timeouts", w.dms)
+	}
+}
+
+func TestThreeRefusedPlansWaitForTheUser(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.epic("e1", "checking")
+	w.end("e1", "state-check.v1.md", stateCheck)
+	w.planner("e1", "running", 4101, "working")
+	// The base branch is not in the registry: no new version fixes that.
+	bad := strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, base: release}", 1)
+	for n := 1; n <= 4; n++ {
+		w.end("e1", fmt.Sprintf("epic.v%d.yaml", n), bad)
+		w.tick(false)
+		w.now = w.now.Add(time.Minute)
+	}
+	refused := 0
+	for _, ev := range w.kinds("e1", events.KindError) {
+		if strings.Contains(ev.Text, "is refused") {
+			refused++
+		}
+	}
+	if refused != 3 {
+		t.Errorf("refused %d versions, want 3", refused)
+	}
+	if st := w.status("e1").State; st != stateNeedsYou {
+		t.Errorf("e1 is %s, want needs_you", st)
+	}
+	if got := w.dmsWith("3 plan versions in a row were refused; the last: epic.v3.yaml is refused: item w1: base release is not a branch of r in the registry (main). When"); len(got) != 1 || len(w.dms) != 1 {
+		t.Errorf("DMs = %q, want one naming the last refusal", w.dms)
+	}
+}
+
+// snapshotState keeps every index.json and status.json under the brain but
+// the account's, and returns a func that puts them back and removes those
+// made since: what a tick killed after its side effects and before it saved
+// leaves behind.
+func snapshotState(t *testing.T, brain string) func() {
+	t.Helper()
+	keep := map[string][]byte{}
+	walk := func(fn func(path string)) {
+		filepath.WalkDir(brain, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && (d.Name() == "status.json" || d.Name() == "index.json") && !strings.Contains(path, "/account/") {
+				fn(path)
+			}
+			return nil
+		})
+	}
+	walk(func(p string) { keep[p], _ = os.ReadFile(p) })
+	return func() {
+		walk(func(p string) {
+			if data, ok := keep[p]; ok {
+				os.WriteFile(p, data, 0o644)
+			} else {
+				os.Remove(p)
+			}
+		})
+	}
+}
+
+func TestAKilledTickKeepsTheLeaseItGranted(t *testing.T) {
+	w := newWorld(t)
+	oneSet(w)
+	w.tick(false)
+	w.readyWorktree("e1-w1")
+	w.now = w.now.Add(time.Minute)
+	restore := snapshotState(t, w.brain)
+	// The orchestrator's index entry is written before it starts.
+	indexed := false
+	orig := w.fake.Respond
+	w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+		if c.Name == claudeBin && len(c.Args) > 1 && c.Args[0] == "--bg" && c.Args[1] == "--model" {
+			ix, _ := store.ReadIndex(w.brain)
+			_, indexed = ix["e1-s1-orchestrator"]
+		}
+		return orig(c)
+	}
+	w.tick(false)
+	if got := w.called("claude --bg --model"); len(got) != 1 || !strings.Contains(got[0], "lease: 1") {
+		t.Fatalf("starts = %q, want one with lease 1", got)
+	}
+	if !indexed {
+		t.Errorf("the orchestrator started before its index entry was written")
+	}
+	restore()
+	if lease, err := Lease(w.dir("e1-s1")); err != nil || lease != 1 {
+		t.Errorf("lease after the kill = %d, %v; want 1, the one the orchestrator holds", lease, err)
+	}
+	for range 3 {
+		w.now = w.now.Add(time.Minute)
+		w.tick(false)
+	}
+	if st := w.status("e1-s1"); st.Lease != 1 || st.State != setRunning {
+		t.Errorf("set %s with lease %d, want running with lease 1", st.State, st.Lease)
+	}
+	if got := w.called("claude --bg --model"); len(got) != 1 {
+		t.Errorf("starts = %q, want the orchestrator adopted, not started again", got)
+	}
+}
+
+func TestAnOrchestratorStoppedWhileItsPROpensIsResumed(t *testing.T) {
+	// A usage pause stops it; with no PR recorded yet, a dead one is
+	// resumed too, since there is nothing to hand over.
+	for _, state := range []string{sessionStopped, sessionDead} {
+		t.Run(state, func(t *testing.T) {
+			w := newWorld(t)
+			w.working(workPROpen)
+			w.orchestrator("e1-s1", state, 0, "stopped")
+			w.tick(false)
+			if got := w.called("claude --bg --resume"); len(got) != 1 {
+				t.Errorf("resumes = %q, want the orchestrator back to finish its pr-opener", got)
+			}
+		})
+	}
+}
+
+func TestAResumedSessionIsToldEveryUnacknowledgedMessage(t *testing.T) {
+	w := newWorld(t)
+	w.working("implementing")
+	s := w.orchestrator("e1-s1", "turn_ended", 4209, "done")
+	posted := w.listen(s.PID)
+	m := w.append(w.dir("e1-s1"), events.Event{At: w.now, Kind: events.KindInstruction, Sender: "e1", Text: "use the v2 API"})
+	w.tick(false)
+	if got := posted(); len(got) != 1 {
+		t.Fatalf("posted %q, want the message", got)
+	}
+	// It is stopped before it acts on the message.
+	w.append(w.dir("e1-s1-orchestrator"), events.Event{At: w.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: stopText, Key: "stop:test"})
+	w.setState("factory:e1-s1:orchestrator", 0, "stopped")
+	w.at(time.Minute)
+	w.tick(false)
+	w.at(2 * time.Minute)
+	w.tick(false)
+	resumes := w.called("claude --bg --resume")
+	if len(resumes) != 1 || !strings.Contains(resumes[0], "seq "+seqRef(m)+", instruction from e1: use the v2 API") {
+		t.Errorf("resumes = %q, want the unacknowledged message in the prompt", resumes)
+	}
+}
+
+func TestNothingStartsOrIsPostedWhileTheAccountHoldsWork(t *testing.T) {
+	w := newWorld(t)
+	w.working("implementing")
+	s := w.orchestrator("e1-s1", "turn_ended", 4210, "done")
+	posted := w.listen(s.PID)
+	w.epic("e2", "checking")
+	w.append(w.dir("e1-s1"), events.Event{At: w.now, Kind: events.KindInstruction, Sender: "e1", Text: "use the v2 API"})
+	w.acct.ok = false
+	w.tick(false)
+	if got := w.called("claude --bg"); len(got) != 0 {
+		t.Errorf("started %q while the account holds work", got)
+	}
+	if got := posted(); len(got) != 0 {
+		t.Errorf("posted %q while the account holds work", got)
+	}
+}
+
+func TestASessionWhoseOwnerWaitsForTheUserIsNotResumed(t *testing.T) {
+	w := newWorld(t)
+	w.working("implementing")
+	w.moveTo("e1-s1", stateNeedsYou)
+	w.orchestrator("e1-s1", "stopped", 0, "stopped")
+	w.append(w.dir("e1-s1"), events.Event{At: w.now, Kind: events.KindInstruction, Sender: "e1", Text: "use the v2 API"})
+	w.tick(false)
+	if got := w.called("claude --bg --resume"); len(got) != 0 {
+		t.Errorf("resumed %q for a set that waits for the user", got)
+	}
+}
+
+func TestAHeartbeatUnderAnOldLeaseDoesNotHoldTheNudge(t *testing.T) {
+	w := newWorld(t)
+	w.working("implementing")
+	if err := store.WriteStatus(w.dir("e1-s1"), store.Status{State: "running", Since: t0, Lease: 2}); err != nil {
+		t.Fatal(err)
+	}
+	s := w.orchestrator("e1-s1", "running", 4211, "working")
+	posted := w.listen(s.PID)
+	m := w.append(w.dir("e1-s1"), events.Event{At: w.now, Kind: events.KindInstruction, Sender: "e1", Text: "use the v2 API"})
+	for d := time.Duration(0); d <= 15*time.Minute; d += 5 * time.Minute {
+		w.at(d)
+		// A helper of the orchestrator that lost lease 1 heartbeats.
+		w.append(w.dir("e1-s1"), events.Event{Kind: events.KindHeartbeat, Sender: "e1-s1", Lease: 1, At: w.now})
+		w.tick(false)
+	}
+	if got := posted(); len(got) != 2 || !strings.Contains(got[1], "message seq "+seqRef(m)+" unacknowledged for 15m") {
+		t.Errorf("posted %q, want the delivery then a nudge", got)
+	}
+}
+
+func TestTheProgramsOwnErrorsAreNotDeadLettered(t *testing.T) {
+	w := newWorld(t)
+	w.working("implementing")
+	for range 3 {
+		w.append(w.dir("e1-w1"), events.Event{At: w.now, Kind: events.KindError, Sender: events.SenderProgram, Text: "explore.md lacks ## Files"})
+	}
+	w.tick(false)
+	if st := w.status("e1-w1").State; st != "implementing" {
+		t.Errorf("e1-w1 is %s, want implementing: the program's own errors are not the agent looping", st)
+	}
+}
+
+func TestABabysitterDyingOnceAnHourStillWaitsForTheUser(t *testing.T) {
+	w := watching(t)
+	died := func(i int) {
+		w.append(w.dir(item), events.Event{At: w.now.Add(time.Duration(i-7) * 61 * time.Minute), Kind: events.KindRestart, Sender: events.SenderProgram,
+			Text: babysitterName(item, 1) + " was dead", Key: fmt.Sprintf("restart:dead:%s:%d", babysitterID(item, 1), i)})
+	}
+	for i := range 5 {
+		died(i)
+	}
+	w.tick(false)
+	if st := w.status(item).State; st != workInReview {
+		t.Fatalf("%s is %s after 5 restarts an hour apart, want in_review", item, st)
+	}
+	died(5)
+	w.tick(false)
+	if st := w.status(item).State; st != workNeedsYou || len(w.dmsWith("its babysitter died and was resumed 6 times")) != 1 {
+		t.Errorf("%s is %s with DMs %q, want needs_you after 6, the limit a work item has", item, st, w.dms)
+	}
+}
+
+func TestOnlyTimeoutsSinceTheEpicEnteredItsStateCount(t *testing.T) {
+	w := newWorld(t)
+	w.epic("e1", "checking")
+	long := w.now.Add(-3 * time.Hour)
+	move := func(from, to, ref string) {
+		w.append(w.dir("e1"), events.Event{Kind: events.KindTransition, At: long, From: from, To: to, Trigger: "tick", TriggerRef: ref})
+	}
+	move("checking", "checking", "timeout:1")
+	move("checking", "checking", "timeout:2")
+	move("checking", "planning", "fixture")
+	move("planning", "planning", "timeout:3")
+	w.tick(false)
+	if st := w.status("e1").State; st != epicPlanning {
+		t.Errorf("e1 is %s, want planning: its one timeout in planning is under the limit", st)
 	}
 }

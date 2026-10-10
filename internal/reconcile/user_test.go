@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
@@ -211,7 +213,10 @@ func TestAnAnswerTakesAnEpicOutOfNeedsYou(t *testing.T) {
 
 func TestCancellingAnAdoptedPRInTheMergeQueueDequeuesIt(t *testing.T) {
 	w := newWorld(t)
-	w.inReviewWith(strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, pr: 5}", 1), 20*time.Minute)
+	w.registryMerging(true)
+	w.prs[git.Branch(item)] = gh.PR{Number: 5, State: "OPEN", HeadRefName: git.Branch(item), Author: gh.User{Login: "me"}}
+	w.plannedAdopting("e1", strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, pr: 5}", 1), "o/r#14", 5)
+	w.toInReview(20 * time.Minute)
 	w.pulls.queues["o/r@main"] = true
 	w.moveTo(item, workMerging)
 	w.append(w.dir(item), events.Event{Kind: events.KindIntent, Text: "merge " + head1 + " by queue", Key: "merge:1:intent"})
@@ -230,5 +235,29 @@ func TestCancellingAnAdoptedPRInTheMergeQueueDequeuesIt(t *testing.T) {
 	}
 	if w.prs[git.Branch(item)].State != "OPEN" {
 		t.Error("the adopted PR is not open")
+	}
+}
+
+func TestUserCommandsJudgeOnTheBlueprintTheTickRuns(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	// A tick ran, so the last good copy is saved.
+	w.planned("e1", oneItem("[]"))
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, From: "queued", To: workNeedsYou, Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: "fixture"})
+	// An edit that fails factory check: the retry names a guard no code has.
+	path := blueprint.Path(w.brain)
+	put(t, path, strings.Replace(readFile(t, path), "guard: retry_allowed}", "guard: retry_allowed_v2}", 1))
+	if _, problems := blueprint.Check(w.brain, nil); len(problems) == 0 {
+		t.Fatal("the edited blueprint passes its check")
+	}
+	if err := Retry(context.Background(), w.deps(), "e1-w1"); err != nil {
+		t.Fatalf("retry = %v, want it judged on the last good copy, which the tick runs on", err)
+	}
+	if _, err := Status(context.Background(), w.deps()); err != nil {
+		t.Errorf("status = %v", err)
+	}
+	w.tick(false)
+	if got := w.status("e1-w1").State; got != "implementing" {
+		t.Errorf("e1-w1 is %s, want back in implementing", got)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/repos"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -72,13 +73,11 @@ func prRef(it *entity) epic.Ref {
 }
 
 func (r *run) refRelease(ep *entity, ref epic.Ref, when string) (epic.Release, error) {
-	ctx, cancel := r.call()
-	defer cancel()
-	i, err := r.d.GitHub.Issue(ctx, ref.Repo, ref.Number)
-	if err != nil {
-		return epic.Waiting, err
+	b := r.readBlocker(ref)
+	if b.err != nil {
+		return epic.Waiting, b.err
 	}
-	if i.PullRequest == nil {
+	if i := b.issue; i.PullRequest == nil {
 		switch {
 		case i.State != "closed":
 			return epic.Waiting, nil
@@ -87,16 +86,41 @@ func (r *run) refRelease(ep *entity, ref epic.Ref, when string) (epic.Release, e
 		}
 		return epic.Ended, nil
 	}
-	pr, err := r.d.GitHub.PR(ctx, ref.Repo, ref.Number)
 	switch {
-	case err != nil:
-		return epic.Waiting, err
-	case pr.State == "MERGED" && (when != epic.WhenDeployed || deployed(ep, ref)):
+	case b.pr.State == "MERGED" && (when != epic.WhenDeployed || deployed(ep, ref)):
 		return epic.Released, nil
-	case pr.State == prClosed:
+	case b.pr.State == prClosed:
 		return epic.Ended, nil
 	}
 	return epic.Waiting, nil
+}
+
+// blockerRead is what GitHub shows of a blocker issue or PR.
+type blockerRead struct {
+	issue gh.Issue
+	pr    gh.PR
+	err   error
+}
+
+// readBlocker reads a blocker issue, and the PR when it is one, once a tick:
+// every guard of every item, set and epic that waits on it asks.
+func (r *run) readBlocker(ref epic.Ref) blockerRead {
+	k := strings.ToLower(ref.String())
+	if b, ok := r.blockerReads[k]; ok {
+		return b
+	}
+	ctx, cancel := r.call()
+	defer cancel()
+	var b blockerRead
+	b.issue, b.err = r.d.GitHub.Issue(ctx, ref.Repo, ref.Number)
+	if b.err == nil && b.issue.PullRequest != nil {
+		b.pr, b.err = r.d.GitHub.PR(ctx, ref.Repo, ref.Number)
+	}
+	if r.blockerReads == nil {
+		r.blockerReads = map[string]blockerRead{}
+	}
+	r.blockerReads[k] = b
+	return b
 }
 
 // deployed reports whether `factory deployed` recorded the PR in the epic.
@@ -174,16 +198,15 @@ func (r *run) waitDM(it *entity) error {
 }
 
 // readRun is a run for a command that reads the factory's state without the
-// tick lock: its entities on the brain's blueprint, or its last good copy.
+// tick lock: its entities on the blueprint the tick runs on, the brain's or,
+// while that fails its check, the last good copy.
 func readRun(ctx context.Context, d Deps) (*run, error) {
 	r, err := newRun(ctx, d, true)
 	if err != nil {
 		return nil, err
 	}
-	if r.b, err = blueprint.Load(blueprint.Path(d.Brain)); err != nil {
-		if r.b, err = blueprint.Load(blueprint.GoodPath(d.Brain)); err != nil {
-			return nil, err
-		}
+	if r.b, err = blueprint.Running(d.Brain, r.live()); err != nil {
+		return nil, err
 	}
 	r.attachMachines()
 	return r, nil

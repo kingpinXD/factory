@@ -2,6 +2,7 @@ package epic
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -18,6 +19,12 @@ type Env struct {
 	Deny blueprint.Deny
 	// Foreign reports whether id is a work item of another epic.
 	Foreign func(id string) bool
+	// Cancelled reports whether the plan's item id names a work item of this
+	// epic that was cancelled: its id is never planned again.
+	Cancelled func(id string) bool
+	// TookOver reports whether the user answered "take over" for issue, which
+	// lets an item adopt the PR it names.
+	TookOver func(issue Ref) bool
 	// UATRunner is set once the uat-runner is built, not a placeholder.
 	UATRunner bool
 }
@@ -141,6 +148,9 @@ func (v *validator) items() {
 			v.add("item %s is listed twice", it.ID)
 		}
 		seen[it.ID] = true
+		if v.env.Cancelled != nil && v.env.Cancelled(it.ID) {
+			v.add("item %s was cancelled, and an ended item keeps its id: give the new work a new id", it.ID)
+		}
 		v.itemRepo(it)
 		v.itemIssue(it)
 		var in []string
@@ -170,6 +180,9 @@ func (v *validator) itemRepo(it Item) {
 	if err != nil {
 		v.add("item %s: repo %s: %v", it.ID, it.Repo, err)
 		return
+	}
+	if !filepath.IsAbs(repo.Path) {
+		v.add("item %s: repo %s has no absolute **Path:** in its registry file", it.ID, it.Repo)
 	}
 	base := it.Base
 	if base == "" {
@@ -201,6 +214,9 @@ func (v *validator) itemIssue(it Item) {
 	case slices.Contains(closing, issue.Result):
 		v.add("item %s is for %s, whose result is %s", it.ID, ref, issue.Result)
 	}
+	if it.PR != 0 && (v.env.TookOver == nil || !v.env.TookOver(ref)) {
+		v.add("item %s adopts PR #%d, but the user has not answered \"take over\" for %s", it.ID, it.PR, ref)
+	}
 }
 
 func (v *validator) sets() {
@@ -216,6 +232,9 @@ func (v *validator) sets() {
 		seen[s.ID] = true
 		if len(s.Items) == 0 {
 			v.add("set %s has no items", s.ID)
+		}
+		if _, ok := v.p.Item(s.ID); ok {
+			v.add("set %s has the id of an item: give it its own", s.ID)
 		}
 		for _, id := range s.Items {
 			if _, ok := v.p.Item(id); !ok {

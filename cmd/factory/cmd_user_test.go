@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
@@ -40,6 +42,22 @@ func workBrain(t *testing.T) string {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(brain, "factory", "blueprint.yaml"), string(shipped))
+	// The brain passes factory check, as user commands judge on the blueprint
+	// the tick runs on.
+	b, err := blueprint.Parse(shipped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range b.Components {
+		body := "# " + name + "\n"
+		if c.RunsAs == blueprint.RunsAsHelper {
+			body = fmt.Sprintf("---\nname: %s\ndescription: The %s.\ntools: %s\n---\n%s", name, name, strings.Join(c.Tools, ", "), body)
+		}
+		if c.Instructions != "" {
+			writeFile(t, filepath.Join(brain, "factory", c.Instructions), body)
+		}
+	}
+	writeFile(t, filepath.Join(brain, "AGENTS.md"), "## Model tiers\n\n| Tier | Claude |\n| --- | --- |\n| ultra low | haiku |\n| low | sonnet |\n| medium | opus |\n")
 	dir := filepath.Join(brain, "factory", "work", "e1", "e1-w1")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)

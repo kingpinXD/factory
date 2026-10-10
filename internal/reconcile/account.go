@@ -26,9 +26,11 @@ const RequestResume = "resume"
 
 // Account states the step acts on.
 const (
-	stateOK       = "ok"
-	statePaused   = "paused"
-	stateResuming = "resuming"
+	stateOK        = "ok"
+	stateNearLimit = "near_limit"
+	statePaused    = "paused"
+	stateResuming  = "resuming"
+	stateStale     = "stale"
 )
 
 // PlanAccount is the account step: the account machine on the plan usage
@@ -161,7 +163,7 @@ func (r *run) loadAccount() (*entity, error) {
 	}
 	e := &entity{id: accountID, entry: store.Entry{Kind: blueprint.MachineAccount, Dir: dir}, m: r.b.Machines[blueprint.MachineAccount], evs: evs}
 	if t, ok := lastTransition(evs); ok {
-		e.cur, e.entered = fsm.Cur{State: t.To, Since: t.At}, t.Seq
+		e.cur, e.entered, e.enteredBy = fsm.Cur{State: t.To, Since: t.At}, t.Seq, t
 		return e, nil
 	}
 	if !r.dry {
@@ -174,7 +176,7 @@ func (r *run) loadAccount() (*entity, error) {
 		Kind: events.KindTransition, Sender: events.SenderProgram, At: r.now,
 		To: e.m.Start, Trigger: blueprint.TriggerTick, TriggerRef: "create", Key: events.Key(accountID, "", e.m.Start, "create", 0),
 	})
-	e.entered = logged.Seq
+	e.entered, e.enteredBy = logged.Seq, logged
 	return e, err
 }
 
@@ -310,15 +312,36 @@ func (r *run) usagePause(*entity) (bool, string, error) {
 
 // resetPassed: resume_after_reset has passed since the reset the pause
 // waits for, and a figure written after the reset is under the near limit.
-// A pause entered this tick has not noted its reset yet.
 func (r *run) resetPassed(acct *entity) (bool, string, error) {
-	u, v := r.sup.usage, r.b.Values.Usage
-	f := u.fig
-	if f == nil || !acct.cur.Since.Before(r.now) || r.now.Before(u.st.ResetsAt.Add(time.Duration(v.ResumeAfterReset))) ||
-		!f.WrittenAt.After(u.st.ResetsAt) || f.highest(r.now) >= float64(v.NearLimit) {
+	f := r.figureAfterReset(acct)
+	if f == nil || f.highest(r.now) >= float64(r.b.Values.Usage.NearLimit) {
 		return false, "", nil
 	}
 	return true, figureRef(f), nil
+}
+
+// resetPassedNearLimit: as reset_passed, but the figure is at or above the
+// near limit and under the pause point. The near limit stops only new work,
+// so the sessions the pause stopped resume.
+func (r *run) resetPassedNearLimit(acct *entity) (bool, string, error) {
+	f, v := r.figureAfterReset(acct), r.b.Values.Usage
+	if f == nil || f.highest(r.now) < float64(v.NearLimit) || f.highest(r.now) >= float64(v.Pause) {
+		return false, "", nil
+	}
+	return true, figureRef(f), nil
+}
+
+// figureAfterReset returns the newest figure once resume_after_reset has
+// passed since the reset the pause waits for, if it was written after that
+// reset; nil otherwise. A pause entered this tick has not noted its reset
+// yet.
+func (r *run) figureAfterReset(acct *entity) *Figure {
+	u, v := r.sup.usage, r.b.Values.Usage
+	f := u.fig
+	if f == nil || !acct.cur.Since.Before(r.now) || r.now.Before(u.st.ResetsAt.Add(time.Duration(v.ResumeAfterReset))) || !f.WrittenAt.After(u.st.ResetsAt) {
+		return nil
+	}
+	return f
 }
 
 // allResumed: every session stopped in this pause cycle is resumed, or no
@@ -332,11 +355,14 @@ func (r *run) allResumed(acct *entity) (bool, string, error) {
 
 // actOnAccount does what the account's state asks each tick: while paused,
 // stop every factory session and note the reset to wait for; while
-// resuming, ask for the next resume; in every state, keep the probe's
-// figure fresh.
+// resuming, or near the limit after a pause, ask for the next resume; while
+// stale, tell the user once if factory sessions run; in every state, keep
+// the probe's figure fresh.
 func (r *run) actOnAccount(acct *entity, before string, p Probe) {
 	u := r.sup.usage
 	switch acct.cur.State {
+	case stateStale:
+		r.dmStale(acct)
 	case statePaused:
 		pause, _ := newestTransitionTo(acct, statePaused)
 		if before != statePaused {
@@ -349,10 +375,24 @@ func (r *run) actOnAccount(acct *entity, before string, p Probe) {
 				"factory: paused for the weekly usage limit until %s. Every factory session is stopped and resumes after the reset.",
 				u.st.ResetsAt.Local().Format("Mon Jan 2 15:04 MST")))
 		}
-	case stateResuming:
+	case stateResuming, stateNearLimit:
 		r.resumeNext(acct)
 	}
 	r.driveProbe(acct, p)
+}
+
+// dmStale tells the user once per stale spell, while factory sessions run,
+// that the usage figure is unknown: nothing new starts, and the sessions
+// are stopped as for a pause once the account stays stale for its timeout.
+func (r *run) dmStale(acct *entity) {
+	sessions, known := r.listing()
+	if !known || !slices.ContainsFunc(sessions, func(s claude.Session) bool { return factorySession(s) && s.Live() }) {
+		return
+	}
+	v := r.b.Values.Usage
+	r.dm(acct, "dm:stale:"+strconv.Itoa(acct.entered), fmt.Sprintf(
+		"factory: no usage figure is younger than %s while factory sessions run, so nothing new starts. If none comes within %s, every factory session is stopped as for a usage pause. The usage probe is factory:usage-probe in tmux session %s.",
+		time.Duration(v.StaleAfter), time.Duration(acct.m.States[stateStale].Timeout), probePane))
 }
 
 // notePauseReset keeps the latest reset of each limit the pause hit.
@@ -481,11 +521,15 @@ func answered(e *entity, req events.Event) bool {
 
 // resumeNext asks for one more stopped session to resume, the one whose
 // work has the longest chain behind it first, while the figure stays under
-// the near limit. The tick applies the request in this same tick, through
-// the session's machine.
+// the near limit; near the limit, while it stays under the pause point. The
+// tick applies the request in this same tick, through the session's machine.
 func (r *run) resumeNext(acct *entity) {
+	limit := r.b.Values.Usage.NearLimit
+	if acct.cur.State == stateNearLimit {
+		limit = r.b.Values.Usage.Pause
+	}
 	f := r.sup.usage.fig
-	if f == nil || f.highest(r.now) >= float64(r.b.Values.Usage.NearLimit) {
+	if f == nil || f.highest(r.now) >= float64(limit) {
 		return
 	}
 	pause, _ := newestTransitionTo(acct, statePaused)
@@ -555,7 +599,29 @@ func (r *run) driveProbe(acct *entity, p Probe) {
 	}
 	if err := r.act("start the usage probe on "+model, func(ctx context.Context) error { return p.Start(ctx, r.d.Brain, model) }); err != nil {
 		r.fail("%v", err)
+		u.st.ProbedAt = r.now
 	}
+}
+
+// accountAllows re-reads the account's status.json right before a session
+// starts or resumes: an account step that ran while this tick was slow may
+// have paused the account since this tick's own step. Work starts only
+// while the account is ok; a session stopped for a pause resumes when the
+// account step asked for it, while it is resuming or near its limit. With
+// no account status yet, nothing holds work back.
+func (r *run) accountAllows(afterPause bool) bool {
+	st, err := readAccountStatus(r.d.Brain)
+	if err != nil {
+		r.fail("%v", err)
+		return false
+	}
+	switch st.State {
+	case "", stateOK:
+		return true
+	case stateResuming, stateNearLimit:
+		return afterPause
+	}
+	return false
 }
 
 // saveAccount writes the account's status.json.

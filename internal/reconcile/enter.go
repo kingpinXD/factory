@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
@@ -13,25 +14,17 @@ import (
 
 // enter runs what entering e's state does, after t, the transition into it,
 // is logged. Each action is keyed by t, so a replayed move repeats nothing.
+// Settle runs first, and with it the entry actions a failure or a crash must
+// not lose, which it retries every tick the entity stays in the state.
 func (r *run) enter(e *entity, t events.Event) error {
 	r.settle(e)
 	switch {
 	case e.work != nil && e.cur.State == stateStarting:
 		if _, ok := worktreeReady(e); !ok {
-			return r.queueRepoWork(e, worktreeRequest, t)
-		}
-	case e.work != nil && e.cur.State == stateWaitingUser:
-		return r.dmQuestion(e, t)
-	case e.work != nil && e.cur.State == stateMerged:
-		if _, ok := lastRepoRequest(e, worktreeRequest); ok {
-			return r.queueRepoWork(e, cleanupRequest, t)
+			return r.queueRepoWork(e, worktreeRequest, repoKey(worktreeRequest, t))
 		}
 	case e.work != nil && e.cur.State == workMerging:
 		return r.sendMerge(e, t)
-	case e.work != nil && e.cur.State == workRechecking:
-		return r.pauseMerge(e, t)
-	case e.work != nil && e.cur.State == workNeedsYou:
-		r.dmPRNeedsYou(e, t)
 	case e.session != nil && e.cur.State == sessionStarting:
 		return r.wake(e)
 	case e.session != nil && e.cur.State == sessionCompacting:
@@ -42,12 +35,34 @@ func (r *run) enter(e *entity, t events.Event) error {
 	return nil
 }
 
-// queueRepoWork asks `factory repo-worker` for slow repo work on the item:
-// a worktree, or the cleanup of one. The tick never runs it itself.
-func (r *run) queueRepoWork(e *entity, kind string, t events.Event) error {
+// entryActions runs, every tick a work item stays in its state, what
+// entering that state does and a failure or a crash must not lose: asking
+// the user its question, taking back a merge sent before a re-check, and
+// the cleanup once merged. Each step is keyed by the transition into the
+// state and logs a done when it succeeds, so it runs once. The DMs of a move
+// to needs_you are dmNeedsYou's, which also runs every tick.
+func (r *run) entryActions(it *entity) error {
+	t := it.enteredBy
+	switch it.cur.State {
+	case stateWaitingUser:
+		return r.dmQuestion(it, t)
+	case workRechecking:
+		return r.pauseMerge(it, t)
+	case stateMerged:
+		return r.cleanUp(it, t)
+	}
+	return nil
+}
+
+func repoKey(kind string, t events.Event) string { return fmt.Sprintf("repo:%s:%d", kind, t.Seq) }
+
+// queueRepoWork asks `factory repo-worker` for slow repo work on the item,
+// once per key: a worktree, or the cleanup of one. The tick never runs it
+// itself.
+func (r *run) queueRepoWork(e *entity, kind, key string) error {
 	_, err := r.append(e, events.Event{
-		Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker,
-		Request: kind, Key: fmt.Sprintf("repo:%s:%d", kind, t.Seq),
+		At: r.now, Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker,
+		Request: kind, Key: key,
 	})
 	if err != nil {
 		return err
@@ -58,6 +73,43 @@ func (r *run) queueRepoWork(e *entity, kind string, t events.Event) error {
 	}
 	r.say("%s: %s %s for the repo worker", e.id, verb, kind)
 	return nil
+}
+
+// cleanupBackoff is how long the tick waits after the nth failed cleanup of
+// a merged item before it asks again; the last wait repeats.
+var cleanupBackoff = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+
+// cleanupFailuresDM is how many failed cleanups of a merged item DM the user,
+// once.
+const cleanupFailuresDM = 3
+
+// cleanUp asks the repo worker to remove a merged item's worktree and local
+// branch, if it ever had a worktree, and asks again after each failure,
+// waiting longer each time. The third failure DMs the user once.
+func (r *run) cleanUp(it *entity, t events.Event) error {
+	if _, ok := lastRepoRequest(it, worktreeRequest); !ok {
+		return nil
+	}
+	asked := countedSince(it, t.Seq, func(ev events.Event) bool {
+		return ev.Kind == events.KindRequest && ev.Recipient == events.RecipientRepoWorker && ev.Request == cleanupRequest
+	})
+	n := len(asked)
+	if n == 0 {
+		return r.queueRepoWork(it, cleanupRequest, repoKey(cleanupRequest, t))
+	}
+	res, answered := repoResult(it, asked[n-1])
+	if !answered || res.Kind != events.KindError {
+		return nil
+	}
+	wait := cleanupBackoff[min(n, len(cleanupBackoff))-1]
+	if n >= cleanupFailuresDM {
+		r.dm(it, "dm:cleanup:"+seqRef(t), fmt.Sprintf("factory: removing the worktree and branch of %s, merged, failed %d times. The last error: %s. The program tries again every %s.",
+			it.id, n, res.Text, wait))
+	}
+	if r.now.Sub(asked[n-1].At) < wait {
+		return nil
+	}
+	return r.queueRepoWork(it, cleanupRequest, fmt.Sprintf("%s:%d", repoKey(cleanupRequest, t), n+1))
 }
 
 // lastRepoRequest returns the item's newest request to the repo worker of kind.
@@ -89,15 +141,17 @@ func worktreeReady(it *entity) (events.Event, bool) {
 }
 
 // dmQuestion sends the user the question that moved the item to
-// waiting_user, once: an intent before the DM and a done after it.
+// waiting_user on t, once: an intent before the DM and a done after it.
 func (r *run) dmQuestion(e *entity, t events.Event) error {
 	done := fmt.Sprintf("dm:%d", t.Seq)
 	if e.has(done) {
 		return nil
 	}
 	q, ok := eventBySeq(e, t.TriggerRef)
-	if !ok {
-		return fmt.Errorf("the question %s that moved it to %s is not in its log", t.TriggerRef, e.cur.State)
+	if !ok || q.Kind != events.KindMessage || q.Recipient != events.RecipientUser {
+		// A return to waiting_user, after a re-check: the question was
+		// asked when it first came.
+		return nil
 	}
 	text := fmt.Sprintf("factory: %s (%s#%d) asks: %s\nAnswer with: factory answer %s %s#%d \"<answer>\"",
 		e.id, e.work.Repo, e.work.Issue, q.Text, e.entry.Epic, e.work.Repo, e.work.Issue)
@@ -161,7 +215,7 @@ func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (
 	if err != nil {
 		return nil, err
 	}
-	e.entered = logged.Seq
+	e.entered, e.enteredBy = logged.Seq, logged
 	r.ix[id], r.ents[id], r.indexed = entry, e, true
 	r.say("%s: created in %s", id, m.Start)
 	return e, nil

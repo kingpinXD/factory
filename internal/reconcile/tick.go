@@ -35,10 +35,12 @@ type Deps struct {
 	Account Account
 	// GHToken, when set, is every new session's GH_TOKEN.
 	GHToken string
-	// CallTimeout is the deadline of each adapter call, and AccountTimeout
-	// the account step's whole budget.
+	// CallTimeout is the deadline of each adapter call, AccountTimeout the
+	// account step's whole budget, and TickTimeout the whole tick's, if set:
+	// calls past it fail at once, and the next tick does what they did not.
 	CallTimeout    time.Duration
 	AccountTimeout time.Duration
+	TickTimeout    time.Duration
 	// Out gets one line per move and action; in a dry run, one per side
 	// effect the tick would have had instead.
 	Out io.Writer
@@ -63,6 +65,19 @@ const maxMoves = 10
 // Tick runs one tick under the tick lock. A dry run takes no lock and makes
 // no side effect: it reads what a tick reads and prints what it would do.
 func Tick(ctx context.Context, d Deps, dryRun bool) error {
+	if d.TickTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d.TickTimeout)
+		defer cancel()
+	}
+	if dryRun && d.Out != nil {
+		fmt.Fprintln(d.Out, "dry run: what the next tick would do; nothing below happens")
+	}
+	// The account step runs first, under its own lock rather than the tick's,
+	// so a slow tick never delays a stop at the pause point. It runs before
+	// anything is read, so the tick sees the sessions it stopped and the
+	// resumes it asked for.
+	acctOK, acctErr := stepAccount(ctx, d, dryRun)
 	if !dryRun {
 		unlock, err := store.Lock(d.Brain, "tick")
 		if err != nil {
@@ -70,12 +85,6 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 		}
 		defer unlock()
 	}
-	if dryRun && d.Out != nil {
-		fmt.Fprintln(d.Out, "dry run: what the next tick would do; nothing below happens")
-	}
-	// The account step runs before anything is read, so the tick sees the
-	// sessions it stopped and the resumes it asked for.
-	acctOK, acctErr := stepAccount(ctx, d, dryRun)
 	r, err := newRun(ctx, d, dryRun)
 	if err != nil {
 		return err
@@ -89,17 +98,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 		r.reconcileGitHub()
 	}
 	for _, id := range r.order() {
-		e := r.ents[id]
-		if e.session != nil {
-			if _, known := r.listing(); !known {
-				continue
-			}
-			r.observe(e)
-			r.measure(e)
-		}
-		r.prepare(e)
-		r.applyRequests(e)
-		r.advance(e)
+		r.tickEntity(r.ents[id])
 	}
 	if r.full {
 		r.watchPRs()
@@ -125,6 +124,30 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	return store.WriteOverall(r.d.Brain, overall)
 }
 
+// tickEntity reads and moves one entity. A panic stops only this entity: it
+// is logged as an error, and the tick goes on with the others.
+func (r *run) tickEntity(e *entity) {
+	defer func() {
+		if p := recover(); p != nil {
+			text := fmt.Sprintf("panic: %v", p)
+			r.fail("%s: %s", e.id, text)
+			if _, err := r.append(e, events.Event{Kind: events.KindError, Sender: events.SenderProgram, Text: text, Key: "panic:" + text}); err != nil {
+				r.fail("%s: %v", e.id, err)
+			}
+		}
+	}()
+	if e.session != nil {
+		if _, known := r.listing(); !known {
+			return
+		}
+		r.observe(e)
+		r.measure(e)
+	}
+	r.prepare(e)
+	r.applyRequests(e)
+	r.advance(e)
+}
+
 // run is one tick's view of the factory.
 type run struct {
 	d   Deps
@@ -147,6 +170,7 @@ type run struct {
 	sessions      []claude.Session
 	sessionsKnown bool
 	bases         map[string]baseResult
+	blockerReads  map[string]blockerRead
 	agents        map[string]agents.Agent
 	errs          []string
 	sup           supervision
@@ -189,10 +213,18 @@ func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
 // account runs the account step on its own budget.
 func (r *run) account() { r.useAccount(stepAccount(r.ctx, r.d, r.dry)) }
 
-// stepAccount runs the account step on its own budget.
+// stepAccount runs the account step on its own budget, under the account
+// lock: a second step waits for the first. A dry run takes no lock.
 func stepAccount(ctx context.Context, d Deps, dryRun bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.AccountTimeout)
 	defer cancel()
+	if !dryRun {
+		unlock, err := waitLock(ctx, d.Brain, "account")
+		if err != nil {
+			return false, err
+		}
+		defer unlock()
+	}
 	return d.Account.Step(ctx, d.Now().UTC().Round(0), dryRun)
 }
 
@@ -386,6 +418,7 @@ func candidates(m blueprint.Machine, state string) []blueprint.Transition {
 // transition, so they are safe to repeat.
 func (r *run) move(e *entity, next fsm.Cur, trigger, ref string) (bool, error) {
 	from := e.cur.State
+	next.Prev = returnFromMerging(e, from, next.Prev)
 	key := events.Key(e.id, from, next.State, ref, next.Attempt)
 	if e.has(key) {
 		return false, nil
@@ -405,7 +438,7 @@ func (r *run) move(e *entity, next fsm.Cur, trigger, ref string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	e.cur, e.entered = next, logged.Seq
+	e.cur, e.entered, e.enteredBy = next, logged.Seq, logged
 	r.say("%s: %s → %s (%s %s)", e.id, from, next.State, trigger, ref)
 	return true, r.enter(e, logged)
 }
@@ -438,7 +471,13 @@ func (r *run) save() error {
 			}
 		}
 	}
-	if !r.indexed {
+	return r.writeIndex()
+}
+
+// writeIndex writes index.json when an entity was added. A dry run writes
+// nothing.
+func (r *run) writeIndex() error {
+	if !r.indexed || r.dry {
 		return nil
 	}
 	return store.WriteIndex(r.d.Brain, r.ix)

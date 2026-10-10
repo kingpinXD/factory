@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/epic"
@@ -153,13 +154,26 @@ func covered(ep *entity) []string {
 	if ep.cur.State != epicChecking || len(ep.cur.Prev) == 0 {
 		return nil
 	}
+	began := strconv.Itoa(recheckBegan(ep))
 	var refs []string
-	for _, ev := range ep.since() {
-		if ev.Kind == events.KindDone && strings.HasPrefix(ev.Key, "signal:") && ev.TriggerRef == strconv.Itoa(ep.entered) {
+	for _, ev := range ep.evs {
+		if ev.Kind == events.KindDone && strings.HasPrefix(ev.Key, "signal:") && ev.TriggerRef == began {
 			refs = append(refs, strings.Fields(ev.Text)...)
 		}
 	}
 	return refs
+}
+
+// recheckBegan returns the seq of the move into checking that began the
+// epic's newest check: the newest one from another state, since checking's
+// timeout restarts it with a move from checking to itself.
+func recheckBegan(ep *entity) int {
+	for i := len(ep.evs) - 1; i >= 0; i-- {
+		if t := ep.evs[i]; t.Kind == events.KindTransition && t.To == epicChecking && t.From != epicChecking {
+			return t.Seq
+		}
+	}
+	return 0
 }
 
 // covers reports whether the epic's running re-check covers the item's issue.
@@ -179,19 +193,37 @@ func awaitsAnswer(it *entity) bool {
 	return it.cur.State == workNeedsYou && n > 0 && it.cur.Prev[n-1] == workRechecking
 }
 
+// answerHint says, for an item that waits on the user's answer to a
+// re-check, its issue's result and the command that answers it; "" for any
+// other item.
+func (r *run) answerHint(it *entity) string {
+	if it.work == nil || !awaitsAnswer(it) {
+		return ""
+	}
+	ep, p, err := r.itemPlan(it)
+	if p == nil || err != nil {
+		return ""
+	}
+	i, ok := p.Issue(issueRef(it))
+	if !ok {
+		return ""
+	}
+	return resultLine(i) + "; answer with " + answerCommand(ep.id, i)
+}
+
 // recheckStarted: the epic's running re-check covers the item.
 func (r *run) recheckStarted(it *entity) (bool, string, error) {
 	ep := r.ents[it.entry.Epic]
 	if it.work == nil || ep == nil || ep.epic == nil || awaitsAnswer(it) || !r.covers(ep, it) {
 		return false, "", nil
 	}
-	return true, fmt.Sprintf("recheck:%s:%d", ep.id, ep.entered), nil
+	return true, fmt.Sprintf("recheck:%s:%d", ep.id, recheckBegan(ep)), nil
 }
 
 // recheckOutcome returns what the epic's plan says about an item a re-check
-// holds, once that re-check has ended, and the plan's end seq as the ref.
-// Until then, ok is false: the item stays held while a new epic.yaml is
-// being written.
+// holds, once that re-check has ended (the epic left checking; a restart of
+// checking is no end), and the plan's end seq as the ref. Until then, ok is
+// false: the item stays held while a new epic.yaml is being written.
 func (r *run) recheckOutcome(it *entity) (out epic.Outcome, ref string, ok bool, err error) {
 	ep := r.ents[it.entry.Epic]
 	if ep == nil || ep.epic == nil || it.cur.State != workRechecking && !awaitsAnswer(it) {
@@ -199,7 +231,7 @@ func (r *run) recheckOutcome(it *entity) (out epic.Outcome, ref string, ok bool,
 	}
 	start := recheckStart(it)
 	if !slices.ContainsFunc(ep.evs, func(t events.Event) bool {
-		return t.Kind == events.KindTransition && t.From == epicChecking && t.Seq > start
+		return t.Kind == events.KindTransition && t.From == epicChecking && t.To != epicChecking && t.Seq > start
 	}) {
 		return 0, "", false, nil
 	}
@@ -248,20 +280,11 @@ func issueResult(p *epic.Plan, it *entity) string {
 }
 
 // scopeChanged: a re-check marked the item's issue updated while its
-// worktree is with the babysitter: the item came back to in_review from
-// it, or the re-check took it out of merging and has ended (the merge was
-// taken back on entering rechecking, so it must not go back to merging).
+// worktree is with the babysitter, and returned the item to in_review (from
+// merging too: the merge was taken back on entering rechecking).
 func (r *run) scopeChanged(it *entity) (bool, string, error) {
 	t, _ := lastTransition(it.evs)
-	if !handedOver(it) {
-		return false, "", nil
-	}
-	switch n := len(it.cur.Prev); {
-	case it.cur.State == workRechecking:
-		if out, _, ok, err := r.recheckOutcome(it); n == 0 || it.cur.Prev[n-1] != workMerging || !ok || out != epic.Work || err != nil {
-			return false, "", err
-		}
-	case t.From != workRechecking:
+	if !handedOver(it) || t.From != workRechecking {
 		return false, "", nil
 	}
 	_, p, err := r.itemPlan(it)
@@ -501,7 +524,8 @@ func (r *run) noticeMerges(ep *entity, p *epic.Plan, items []*entity, add addSig
 }
 
 // mergedCovers returns the epic's issues a merged PR links, and those of
-// the open items in its repo whose explore output lists a file it changed.
+// the open items in its repo whose explore output lists a file it changed,
+// unless it merged before the item's worktree was made, which has it then.
 func mergedCovers(p *epic.Plan, items []*entity, repo string, pr gh.MergedPR) ([]string, error) {
 	var refs []string
 	add := func(ref epic.Ref) {
@@ -528,11 +552,22 @@ func mergedCovers(p *epic.Plan, items []*entity, repo string, pr gh.MergedPR) ([
 		if err != nil {
 			return nil, err
 		}
-		if files != nil && epic.Overlap(files, changed) {
+		if files != nil && epic.Overlap(files, changed) && !pr.MergedAt.Before(worktreeMadeAt(it)) {
 			add(issueRef(it))
 		}
 	}
 	return refs, nil
+}
+
+// worktreeMadeAt returns when the item's first worktree was made; zero
+// before.
+func worktreeMadeAt(it *entity) time.Time {
+	for _, ev := range it.evs {
+		if ev.Kind == events.KindWorktreeReady {
+			return ev.At
+		}
+	}
+	return time.Time{}
 }
 
 // AnswerTo logs `factory answer <epic> <issue> "<choice>"`. The answer goes
@@ -598,6 +633,25 @@ func AnswerTo(ctx context.Context, d Deps, epicID, issue, choice string) (string
 		return "", err
 	}
 	return fmt.Sprintf("%s re-checks %s with your answer: %s", epicID, ref, i.Answers[k]), nil
+}
+
+// answerTakeOver is the answer to a yours result that adopts the user's PR.
+const answerTakeOver = "take over"
+
+// tookOver reports whether the user's newest answer for issue in the epic is
+// take over.
+func tookOver(ep *entity, issue epic.Ref) bool {
+	for i := len(ep.evs) - 1; i >= 0; i-- {
+		ev := ep.evs[i]
+		if ev.Kind != events.KindRequest || ev.Recipient != recipientRecheck || ev.Request != signalAnswer {
+			continue
+		}
+		s, choice, _ := strings.Cut(ev.Text, " ")
+		if ref, err := epic.ParseRef(s); err == nil && ref.Is(issue) {
+			return strings.EqualFold(choice, answerTakeOver)
+		}
+	}
+	return false
 }
 
 // resolveIssue reads the issue argument of factory answer: owner/repo#n, a

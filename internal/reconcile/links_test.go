@@ -295,8 +295,8 @@ func TestMayMergeAndDeployed(t *testing.T) {
 	w.registry()
 	w.planned("e1", twoItems("[]"))
 	w.planned("e2", oneItem("\n  - {from: e1-w1, to: w1, gate: merge, when: deployed, rollback: revert e2-w1}"))
-	w.prs["factory/e1-w1"] = gh.PR{Number: 40, State: "OPEN", HeadRefName: "factory/e1-w1"}
-	w.prs["factory/e2-w1"] = gh.PR{Number: 41, State: "OPEN", HeadRefName: "factory/e2-w1"}
+	w.prs["factory/e1-w1"] = gh.PR{Number: 40, State: "OPEN", HeadRefName: "factory/e1-w1", CreatedAt: t0}
+	w.prs["factory/e2-w1"] = gh.PR{Number: 41, State: "OPEN", HeadRefName: "factory/e2-w1", CreatedAt: t0}
 	w.prs["factory/e9-w9"] = gh.PR{Number: 49, State: "OPEN", HeadRefName: "factory/e9-w9"}
 	w.prs["alice/fix"] = gh.PR{Number: 50, State: "OPEN", HeadRefName: "alice/fix"}
 	w.tick(false)
@@ -332,7 +332,8 @@ func TestMayMergeAndDeployed(t *testing.T) {
 		t.Errorf("may-merge 41 = %q once e1-w1 is deployed", why)
 	}
 	// An adopted PR whose item is not made yet is held.
-	w.planned("e3", strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, pr: 60}", 1))
+	w.prs["me/sixty"] = gh.PR{Number: 60, State: "OPEN", HeadRefName: "me/sixty", Author: gh.User{Login: "me"}}
+	w.plannedAdopting("e3", strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, pr: 60}", 1), "o/r#14", 60)
 	r, err := readRun(ctx, w.deps())
 	if err != nil {
 		t.Fatal(err)
@@ -417,5 +418,71 @@ func TestTheEpicDoesNotMoveWhileThePlannerWorks(t *testing.T) {
 	w.tick(false)
 	if got := w.dir("e1"); got != w.epicDir("e1") {
 		t.Errorf("moved to %s while the planner works", got)
+	}
+}
+
+// Each guard of each item, set and epic waiting on a blocker asks where it
+// stands; GitHub is read for it once a tick.
+func TestABlockerIsReadOnceATick(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[{from: o/r#20, to: w1, gate: start, when: merged, rollback: none}, {from: o/r#20, to: w2, gate: start, when: merged, rollback: none}]"))
+	w.tick(false)
+	w.moveTo("e1", "blocked")
+	w.moveTo("e1-s1", "blocked")
+	w.moveTo("e1-s2", "blocked")
+	w.tick(false)
+	before := len(w.called("gh api repos/o/r/issues/20"))
+	w.now = w.now.Add(time.Minute)
+	w.tick(false)
+	if got := len(w.called("gh api repos/o/r/issues/20")) - before; got != 1 {
+		t.Errorf("o/r#20 read %d times in one tick, want once", got)
+	}
+	if st := w.status("e1-w1").State; st != workQueued {
+		t.Errorf("e1-w1 is %s, want queued behind o/r#20", st)
+	}
+}
+
+// A blocker item whose PR GitHub shows closed has ended, even on a tick
+// before the item itself moves to closed.
+func TestABlockerItemWithAClosedPRHasEnded(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[{from: w1, to: w2, gate: merge, when: merged, rollback: none}]"))
+	w.moveTo("e1-w1", workInReview)
+	w.tick(false)
+	if got := w.signals("e1"); len(got) != 0 {
+		t.Fatalf("signals %v while e1-w1's PR is open", got)
+	}
+	w.writeStatus("e1-w1", func(st *store.Status) { st.PR, st.PRState = 40, prClosed })
+	w.tick(false)
+	if got := w.signals("e1"); !slices.Equal(got, []string{"ended:w1"}) {
+		t.Errorf("signals = %v, want e1-w1's closed PR to end it as a blocker", got)
+	}
+}
+
+// An orchestrator works its set's items in the set's order: of two ready
+// items, the one listed first starts; a later one starts only while the
+// earlier one cannot.
+func TestASetStartsItsFirstReadyItem(t *testing.T) {
+	inOrder := func(links string) string {
+		return strings.NewReplacer("{id: s1, items: [w1]}", "{id: s1, items: [w2, w1]}", "  - {id: s2, items: [w2]}\n", "").Replace(twoItems(links))
+	}
+	for _, tc := range []struct{ name, links, starts, waits string }{
+		{"both ready", "[]", "e1-w2", "e1-w1"},
+		{"the first waits on an open issue", "[{from: o/r#20, to: w2, gate: start, when: merged, rollback: none}]", "e1-w1", "e1-w2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.registry()
+			w.planned("e1", inOrder(tc.links))
+			w.tick(false)
+			if got := w.status(tc.starts).State; got != "starting" {
+				t.Errorf("%s is %s, want starting", tc.starts, got)
+			}
+			if got := w.status(tc.waits).State; got != workQueued {
+				t.Errorf("%s is %s, want queued", tc.waits, got)
+			}
+		})
 	}
 }

@@ -372,7 +372,7 @@ func TestABabysitterWaitsForTheHandover(t *testing.T) {
 	w.pulls.threads[5] = []gh.Thread{thread("T1", 11, "alice")}
 	w.fullNext()
 	w.tick(false)
-	if got := w.called("claude --bg"); len(got) != 0 || len(w.toBabysitter()) != 0 {
+	if got := slices.DeleteFunc(w.called("claude --bg"), func(c string) bool { return !strings.Contains(c, "factory:e1-w1:babysitter") }); len(got) != 0 || len(w.toBabysitter()) != 0 {
 		t.Fatalf("babysat a worktree the orchestrator still holds: starts %q, requests %+v", got, w.toBabysitter())
 	}
 	w.append(w.dir(item), events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: "fixture"})

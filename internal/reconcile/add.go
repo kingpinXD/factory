@@ -40,7 +40,7 @@ func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error
 	if err != nil {
 		return "", err
 	}
-	unlock, err := waitLock(ctx, d.Brain)
+	unlock, err := waitLock(ctx, d.Brain, "tick")
 	if err != nil {
 		return "", err
 	}
@@ -117,24 +117,27 @@ func overridable(b *blueprint.Blueprint, name string) error {
 	return nil
 }
 
-var epicIDRule = regexp.MustCompile(`^e(\d+)$`)
+var epicIDRule = regexp.MustCompile(`^e(\d{6})(\d+)$`)
 
-// newEpicID returns e<n>, one past the highest epic number in the index.
+// newEpicID returns e<yymmdd><n>: today's date, and n one past the highest
+// number of today's epics in the index. The date keeps a reset index from
+// reusing an old id, and with it an old work item's factory/<work-id> branch.
 func (r *run) newEpicID() string {
+	day := r.now.Format("060102")
 	n := 0
 	for id := range r.ix {
-		if m := epicIDRule.FindStringSubmatch(id); m != nil {
-			k, _ := strconv.Atoi(m[1])
+		if m := epicIDRule.FindStringSubmatch(id); m != nil && m[1] == day {
+			k, _ := strconv.Atoi(m[2])
 			n = max(n, k)
 		}
 	}
-	return "e" + strconv.Itoa(n+1)
+	return "e" + day + strconv.Itoa(n+1)
 }
 
-// waitLock takes the tick lock, waiting while a tick holds it.
-func waitLock(ctx context.Context, brain string) (func() error, error) {
+// waitLock takes the lock called name, waiting while another holds it.
+func waitLock(ctx context.Context, brain, name string) (func() error, error) {
 	for {
-		unlock, err := store.Lock(brain, "tick")
+		unlock, err := store.Lock(brain, name)
 		var locked *store.LockedError
 		if !errors.As(err, &locked) {
 			return unlock, err

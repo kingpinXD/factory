@@ -229,22 +229,24 @@ func (w *world) listSession(name string, pid int, state string) claude.Session {
 	return s
 }
 
-// listen opens pid's inbox socket and returns what is posted to it.
+// listen opens pid's inbox socket and returns what is posted to it so far.
+// A post is queued on the socket before claude.Post returns, so reading the
+// queue in the caller misses none, and finds none still on its way.
 func (w *world) listen(pid int) func() []string {
 	w.t.Helper()
-	ln, err := net.Listen("unix", filepath.Join(w.socks, strconv.Itoa(pid)+".sock"))
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(w.socks, strconv.Itoa(pid)+".sock"), Net: "unix"})
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	var mu sync.Mutex
+	w.t.Cleanup(func() { ln.Close() })
 	var got []string
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	return func() []string {
 		for {
+			// The deadline only ends the wait on an empty queue.
+			ln.SetDeadline(time.Now().Add(100 * time.Millisecond))
 			conn, err := ln.Accept()
 			if err != nil {
-				return
+				return slices.Clone(got)
 			}
 			var m struct {
 				Message struct{ Content string }
@@ -252,17 +254,9 @@ func (w *world) listen(pid int) func() []string {
 			line, _ := bufio.NewReader(conn).ReadBytes('\n')
 			conn.Close()
 			if json.Unmarshal(line, &m) == nil {
-				mu.Lock()
 				got = append(got, m.Message.Content)
-				mu.Unlock()
 			}
 		}
-	}()
-	w.t.Cleanup(func() { ln.Close(); <-done })
-	return func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return slices.Clone(got)
 	}
 }
 

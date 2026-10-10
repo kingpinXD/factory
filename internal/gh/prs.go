@@ -27,6 +27,8 @@ type PR struct {
 	Files            []File    `json:"files"`
 	MergedAt         time.Time `json:"mergedAt"`
 	AutoMergeRequest *struct{} `json:"autoMergeRequest"`
+	Author           User      `json:"author"`
+	CreatedAt        time.Time `json:"createdAt"`
 
 	// IsCrossRepository is true for a PR from a fork, whose head is in
 	// HeadRepositoryOwner's copy of the repository.
@@ -36,10 +38,11 @@ type PR struct {
 
 // Review is a submitted review.
 type Review struct {
-	Author      User      `json:"author"`
-	State       string    `json:"state"` // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED
-	Body        string    `json:"body"`
-	SubmittedAt time.Time `json:"submittedAt"`
+	Author            User      `json:"author"`
+	AuthorAssociation string    `json:"authorAssociation"` // OWNER | MEMBER | COLLABORATOR | CONTRIBUTOR | NONE …
+	State             string    `json:"state"`             // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED
+	Body              string    `json:"body"`
+	SubmittedAt       time.Time `json:"submittedAt"`
 }
 
 // File is a file the pull request changes.
@@ -48,7 +51,7 @@ type File struct {
 }
 
 const prFields = "id,number,url,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus," +
-	"reviewDecision,reviews,files,mergedAt,autoMergeRequest,isCrossRepository,headRepositoryOwner"
+	"reviewDecision,reviews,files,mergedAt,autoMergeRequest,isCrossRepository,headRepositoryOwner,author,createdAt"
 
 // PR reads pull request n.
 func (c Client) PR(ctx context.Context, repo string, n int) (PR, error) {

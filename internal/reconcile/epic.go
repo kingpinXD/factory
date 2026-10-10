@@ -14,6 +14,7 @@ import (
 	"github.com/kingpinXD/factory/internal/claude"
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/repos"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -132,7 +133,7 @@ func (r *run) checkedPlan(ep *entity) (events.Event, bool, error) {
 
 func checkedPlanKey(end events.Event) string { return "checked-plan:" + seqRef(end) }
 
-func refusedPlanKey(end events.Event) string { return "refused-plan:" + seqRef(end) }
+func refusedPlanKey(end events.Event) string { return refusedPlanPrefix + seqRef(end) }
 
 // planProblems checks an ended epic.yaml: its hash and keys, the plan's own
 // rules, and on GitHub that each issue and blocker exists and no item is
@@ -154,15 +155,62 @@ func (r *run) planProblems(ep *entity, end events.Event) ([]string, error) {
 		return []string{err.Error()}, nil
 	}
 	problems := p.Validate(epic.Env{
-		Repo:      func(name string) (repos.Repo, error) { return repos.Read(r.d.Brain, name) },
-		Deny:      r.b.Deny,
-		Foreign:   func(id string) bool { return r.foreignItem(ep, id) != nil },
+		Repo:    func(name string) (repos.Repo, error) { return repos.Read(r.d.Brain, name) },
+		Deny:    r.b.Deny,
+		Foreign: func(id string) bool { return r.foreignItem(ep, id) != nil },
+		Cancelled: func(id string) bool {
+			it := r.ents[entityID(ep.id, id)]
+			return it != nil && it.work != nil && it.cur.State == workCancelled
+		},
+		TookOver:  func(issue epic.Ref) bool { return tookOver(ep, issue) },
 		UATRunner: !r.b.Components["uat-runner"].Placeholder,
 	})
 	if len(problems) > 0 {
 		return problems, nil
 	}
-	return r.githubProblems(p)
+	problems, err = r.githubProblems(p)
+	if len(problems) > 0 || err != nil {
+		return problems, err
+	}
+	return r.adoptionProblems(p)
+}
+
+// adoptionProblems reads each PR the plan adopts on GitHub: it must be a PR
+// in its item's repo, not from a fork, and opened by the user.
+func (r *run) adoptionProblems(p *epic.Plan) ([]string, error) {
+	var problems []string
+	me := ""
+	for _, it := range p.Items {
+		if it.PR == 0 {
+			continue
+		}
+		repo, err := repos.Read(r.d.Brain, it.Repo)
+		if err != nil {
+			return nil, err
+		}
+		ref := epic.Ref{Repo: repo.FullName, Number: it.PR}
+		ctx, cancel := r.call()
+		i, err := r.d.GitHub.Issue(ctx, ref.Repo, ref.Number)
+		var pr gh.PR
+		if err == nil && i.PullRequest != nil {
+			pr, err = r.d.GitHub.PR(ctx, ref.Repo, ref.Number)
+		}
+		if err == nil && me == "" {
+			me, err = r.d.GitHub.Me(ctx)
+		}
+		cancel()
+		switch {
+		case notFound(err), err == nil && i.PullRequest == nil:
+			problems = append(problems, fmt.Sprintf("item %s adopts %s: no such PR in %s", it.ID, ref, it.Repo))
+		case err != nil:
+			return nil, err
+		case pr.IsCrossRepository:
+			problems = append(problems, fmt.Sprintf("item %s adopts %s, which is from a fork", it.ID, ref))
+		case pr.Author.Login != me:
+			problems = append(problems, fmt.Sprintf("item %s adopts %s, which %s opened, not the user", it.ID, ref, pr.Author.Login))
+		}
+	}
+	return problems, nil
 }
 
 // githubProblems reads each issue and blocker the plan names on GitHub: each
@@ -351,6 +399,9 @@ func (r *run) ensureSet(ep *entity, id, dir string, items []string) error {
 		_, err := r.create(id, store.Entry{Kind: blueprint.MachineSet, Dir: dir, Epic: ep.id}, &SetInputs{ID: id, Epic: ep.id, Items: items}, blueprint.TriggerFile)
 		return err
 	}
+	if set.set == nil {
+		return fmt.Errorf("set %s: the id is a %s's", id, set.entry.Kind)
+	}
 	for _, old := range set.set.Items {
 		if !slices.Contains(items, old) {
 			items = append(items, old)
@@ -369,12 +420,18 @@ func (r *run) ensureSet(ep *entity, id, dir string, items []string) error {
 
 func (r *run) ensureItem(ep *entity, setID, setDir string, it epic.Item) error {
 	id := entityID(ep.id, it.ID)
-	if r.ents[id] != nil {
+	if e := r.ents[id]; e != nil {
+		if e.work == nil {
+			return fmt.Errorf("item %s: the id is a %s's", id, e.entry.Kind)
+		}
 		return nil
 	}
 	repo, err := repos.Read(r.d.Brain, it.Repo)
 	if err != nil {
 		return err
+	}
+	if !filepath.IsAbs(repo.Path) {
+		return fmt.Errorf("item %s: repo %s has no absolute **Path:** in its registry file", id, it.Repo)
 	}
 	ref, err := epic.ParseRef(it.Issue)
 	if err != nil {
@@ -390,7 +447,8 @@ func (r *run) ensureItem(ep *entity, setID, setDir string, it epic.Item) error {
 }
 
 // dmResults sends the user one DM per issue whose result waits on them,
-// with its allowed answers, or that a person or someone else must move.
+// with its allowed answers, or that a person or someone else must move. A
+// re-check that copies the result, with its why reworded, sends none again.
 func (r *run) dmResults(ep *entity) error {
 	p, _, err := r.appliedPlan(ep)
 	if p == nil || err != nil {
@@ -402,7 +460,7 @@ func (r *run) dmResults(ep *entity) error {
 		if text == "" {
 			continue
 		}
-		key := fmt.Sprintf("dm-result:%s:%s:%s", i.Ref, i.Result, i.Why)
+		key := fmt.Sprintf("dm-result:%s:%s", i.Ref, i.Result)
 		errs = append(errs, r.once(ep, key, "DM the user "+i.Result+" for "+i.Ref, func(ctx context.Context) error { return r.d.Notify.DM(ctx, text) }))
 	}
 	return errors.Join(errs...)
@@ -410,19 +468,30 @@ func (r *run) dmResults(ep *entity) error {
 
 // resultDM is the DM for an issue's result, or "" when it needs none.
 func resultDM(epicID string, i epic.Issue) string {
-	head := fmt.Sprintf("factory: %s %s is %s", epicID, i.Ref, i.Result)
-	if i.Why != "" {
-		head += ": " + i.Why
-	}
+	head := fmt.Sprintf("factory: %s %s", epicID, resultLine(i))
 	switch {
 	case i.NeedsUser():
-		return fmt.Sprintf("%s\nAnswer with: factory answer %s %s \"<%s>\"", head, epicID, i.Ref, strings.Join(i.Answers, " | "))
+		return head + "\nAnswer with: " + answerCommand(epicID, i)
 	case i.Result == epic.ResultNotCode:
 		return head + "\nA person must do it; what waits on it waits until it is closed."
 	case i.Result == epic.ResultElsewhere, i.Result == epic.ResultExternal:
 		return head + "\nThe factory leaves it alone; what waits on it waits."
 	}
 	return ""
+}
+
+// resultLine says an issue's result, and why.
+func resultLine(i epic.Issue) string {
+	if i.Why == "" {
+		return i.Ref + " is " + i.Result
+	}
+	return i.Ref + " is " + i.Result + ": " + i.Why
+}
+
+// answerCommand is the factory answer command for an issue whose result
+// waits on the user, with its allowed answers.
+func answerCommand(epicID string, i epic.Issue) string {
+	return fmt.Sprintf("factory answer %s %s \"<%s>\"", epicID, i.Ref, strings.Join(i.Answers, " | "))
 }
 
 // mirror mirrors the links between the plan's items to GitHub, once per
@@ -551,7 +620,7 @@ func (r *run) settle(e *entity) {
 	case e.epic != nil:
 		e.st.Rechecks = rechecks(e)
 		if e.cur.State == epicChecking && len(e.cur.Prev) > 0 {
-			if t, ok := eventBySeq(e, strconv.Itoa(e.entered)); ok {
+			if t, ok := eventBySeq(e, strconv.Itoa(recheckBegan(e))); ok {
 				err = r.startRecheck(e, t)
 			}
 		}
@@ -559,18 +628,19 @@ func (r *run) settle(e *entity) {
 	case e.set != nil:
 		err = errors.Join(r.writeInstructions(e), r.cancelUnder(e))
 	case e.work != nil:
-		err = errors.Join(r.assign(e), r.handOver(e), r.handBack(e), r.reread(e), r.cancelItem(e), r.waitDM(e))
+		err = errors.Join(r.entryActions(e), r.assign(e), r.handOver(e), r.handBack(e), r.reread(e), r.cancelItem(e), r.waitDM(e))
 	}
 	if err != nil {
 		r.fail("%s: %v", e.id, err)
 	}
 }
 
-// rechecks counts the epic's moves into checking for a re-check.
+// rechecks counts the epic's moves into checking for a re-check; a timeout's
+// restart of checking is not one.
 func rechecks(ep *entity) int {
 	n := 0
 	for _, ev := range ep.evs {
-		if ev.Kind == events.KindTransition && ev.To == epicChecking && len(ev.Prev) > 0 {
+		if ev.Kind == events.KindTransition && ev.To == epicChecking && ev.From != epicChecking && len(ev.Prev) > 0 {
 			n++
 		}
 	}

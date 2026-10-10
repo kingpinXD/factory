@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
@@ -337,5 +339,215 @@ func TestOnlyAFigureFromAfterTheResetResumes(t *testing.T) {
 	w.tickAccount()
 	if st := w.accountStatus(); st.State != "paused" || st.Usage == nil {
 		t.Errorf("account = %+v, want paused: its figure is fresh but from before the reset", st)
+	}
+}
+
+func TestAFiveHourPauseWithTheWeekNearItsLimitResumesAtTheReset(t *testing.T) {
+	w, reset := pausedWorld(t)
+	w.set("e1", "e1-s2", "queued", "e1-w2")
+	w.item("e1", "e1-s2", "e1-w2", "queued")
+	weekly := t0.Add(72 * time.Hour)
+	w.usage("u1", t0, 89, 82, reset, weekly)
+	w.tickAccount()
+	if st := w.accountStatus(); st.State != "paused" {
+		t.Fatalf("account = %+v, want paused", st)
+	}
+	// After the 5-hour reset the week is near its limit, under the pause
+	// point: the sessions the pause stopped resume, one per tick.
+	w.now = reset.Add(3 * time.Minute)
+	w.usage("probe", w.now, 3, 83, reset.Add(5*time.Hour), weekly)
+	var resumes []int
+	for range 3 {
+		w.tickAccount()
+		resumes = append(resumes, len(w.called("claude --bg --resume")))
+		w.now = w.now.Add(time.Minute)
+	}
+	if got := w.accountMoves(); last(got) != "paused→near_limit" {
+		t.Errorf("account moves = %v, want paused→near_limit", got)
+	}
+	if !reflect.DeepEqual(resumes, []int{1, 2, 2}) {
+		t.Errorf("resumes after each tick = %v, want one per tick", resumes)
+	}
+	if got := w.moves("e1-w2"); len(got) != 1 {
+		t.Errorf("e1-w2 moves = %v, want it held in queued: near the limit nothing new starts", got)
+	}
+	if len(w.dms) != 0 {
+		t.Errorf("DMs = %q, want none", w.dms)
+	}
+}
+
+func TestAStaleFigureDMsOnceThenStopsSessionsAsForAPause(t *testing.T) {
+	w, reset := pausedWorld(t)
+	w.usage("u1", t0, 50, 40, reset, reset.Add(72*time.Hour))
+	// The probe cannot start, so no fresh figure comes.
+	orig := w.fake.Respond
+	w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+		if c.Name == "tmux" {
+			return nil, &proc.Error{Cmd: "tmux", Err: errors.New("exit status 1")}
+		}
+		return orig(c)
+	}
+	for m := range 45 {
+		w.at(time.Duration(m) * time.Minute)
+		w.tickAccount()
+	}
+	if st := w.accountStatus(); st.State != "stale" {
+		t.Fatalf("account = %s at t0+44m, want stale", st.State)
+	}
+	if got := w.called("claude stop"); len(got) != 0 {
+		t.Fatalf("stopped %q before the stale figure's timeout", got)
+	}
+	if len(w.dms) != 1 || !strings.Contains(w.dms[0], "no usage figure is younger than 15m0s while factory sessions run") {
+		t.Fatalf("DMs = %q, want one about the stale figure", w.dms)
+	}
+	w.at(45 * time.Minute)
+	w.tickAccount()
+	if got := w.accountMoves(); last(got) != "stale→paused" {
+		t.Fatalf("account moves = %v, want paused 30m after it went stale", got)
+	}
+	if got := w.called("claude stop"); len(got) != 2 {
+		t.Errorf("stops = %q, want both factory sessions", got)
+	}
+	if starts := len(w.called("tmux new-session")); starts > 12 {
+		t.Errorf("tried to start the probe %d times in 45 minutes, want at most one per probe interval", starts)
+	}
+
+	// A fresh figure comes back: the stopped sessions resume as after any
+	// pause, with no more DMs.
+	w.at(50 * time.Minute)
+	w.usage("u2", w.now, 30, 40, reset, reset.Add(72*time.Hour))
+	w.tickAccount()
+	if st := w.accountStatus(); st.State != "resuming" || len(w.called("claude --bg --resume")) != 1 {
+		t.Errorf("account %s, resumes %q; want resuming, one resumed", st.State, w.called("claude --bg --resume"))
+	}
+	if len(w.dms) != 1 {
+		t.Errorf("DMs = %q, want only the first", w.dms)
+	}
+}
+
+func TestASlowTickNeitherDelaysThePauseNorStartsWorkAfterIt(t *testing.T) {
+	w, reset := pausedWorld(t)
+	// e3's planner starts on the next tick that drives sessions.
+	w.epic("e3", "checking")
+	w.usage("u1", t0, 50, 40, reset, reset.Add(72*time.Hour))
+	release := make(chan struct{})
+	orig := w.fake.Respond
+	w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+		if c.Name == "gh" {
+			<-release
+		}
+		return orig(c)
+	}
+	slow := make(chan error, 1)
+	go func() { slow <- Tick(context.Background(), w.accountDeps(), false) }()
+	for !hasText(w.calls(), "gh pr list") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// A minute later usage is at 95%, and launchd runs the next tick while
+	// the slow one waits on GitHub.
+	w.usage("u2", t0.Add(time.Minute), 95, 40, reset, reset.Add(72*time.Hour))
+	err := Tick(context.Background(), w.accountDeps(), false)
+	if !errors.As(err, new(*store.LockedError)) {
+		t.Errorf("next tick: %v, want it to find the slow tick running", err)
+	}
+	if got := w.called("claude stop"); len(got) != 2 {
+		t.Errorf("stops = %q, want both factory sessions stopped at 95%% while the slow tick runs", got)
+	}
+	close(release)
+	if err := <-slow; err != nil {
+		t.Fatal(err)
+	}
+	if got := w.called("claude --bg --model"); len(got) != 0 {
+		t.Errorf("the slow tick started %q after the other tick's account step paused", got)
+	}
+}
+
+// hangingGitHub answers a gh call only with its deadline's error.
+type hangingGitHub struct{ proc.Runner }
+
+func (h hangingGitHub) Run(ctx context.Context, c proc.Cmd) ([]byte, error) {
+	if c.Name == "gh" {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return h.Runner.Run(ctx, c)
+}
+
+func TestATickEndsAtItsDeadline(t *testing.T) {
+	w := newWorld(t)
+	w.working("implementing")
+	d := w.deps()
+	d.GitHub = gh.Client{Runner: hangingGitHub{w.fake}}
+	d.TickTimeout = 300 * time.Millisecond
+	start := time.Now()
+	if err := Tick(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+	// Each call alone may take CallTimeout, 5s here.
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("the tick took %v, past its deadline", took)
+	}
+	o, err := store.ReadOverall(w.brain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.LastTick.Equal(t0) || !strings.Contains(strings.Join(o.Errors, "\n"), "deadline exceeded") {
+		t.Errorf("overall = %+v, want the tick written with its failed calls", o)
+	}
+}
+
+// pausedElsewhere writes the account's status as another tick's account step
+// leaves it when it paused after this tick's own step found the account ok.
+func (w *world) pausedElsewhere() {
+	put(w.t, store.StatusPath(accountDir(w.brain)), `{"state": "paused"}`+"\n")
+}
+
+func TestNothingStartsOnceAnotherTicksAccountStepPaused(t *testing.T) {
+	t.Run("a new session", func(t *testing.T) {
+		w := newWorld(t)
+		w.epic("e1", "checking")
+		w.pausedElsewhere()
+		w.tick(false)
+		if got := w.called("claude --bg"); len(got) != 0 {
+			t.Errorf("started %q", got)
+		}
+	})
+	t.Run("a stopped session", func(t *testing.T) {
+		w := newWorld(t)
+		w.working("implementing")
+		w.orchestrator("e1-s1", "stopped", 0, "stopped")
+		w.pausedElsewhere()
+		w.tick(false)
+		if got := w.called("claude --bg"); len(got) != 0 {
+			t.Errorf("resumed %q", got)
+		}
+		if st := w.status("e1-s1-orchestrator").State; st != sessionStopped {
+			t.Errorf("session is %s, want stopped", st)
+		}
+	})
+	t.Run("a compaction", func(t *testing.T) {
+		w := newWorld(t)
+		checkpointed(t, w, events.KindStart, events.KindEnd)
+		w.pausedElsewhere()
+		w.tick(false)
+		if got := w.called("claude stop"); len(got) != 0 {
+			t.Errorf("compacted: %q", got)
+		}
+		if st := w.status("e1-s1-orchestrator").State; st != sessionTurnEnded {
+			t.Errorf("session is %s, want turn_ended", st)
+		}
+	})
+}
+
+func TestAStaleFigureWithNoSessionRunningDMsNobody(t *testing.T) {
+	w := newWorld(t)
+	w.realAccount()
+	w.usage("u1", t0, 50, 40, t0.Add(time.Hour), t0.Add(72*time.Hour))
+	for m := range 20 {
+		w.at(time.Duration(m) * time.Minute)
+		w.tickAccount()
+	}
+	if st := w.accountStatus(); st.State != "stale" || len(w.dms) != 0 {
+		t.Errorf("account %s, DMs %q; want stale and no DM with no factory session running", st.State, w.dms)
 	}
 }

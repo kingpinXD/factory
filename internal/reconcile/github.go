@@ -19,8 +19,9 @@ func (r *run) reconcileGitHub() {
 
 // readPR reads the item's PR: the recorded or adopted one by number, else
 // the newest one from the item's own branch once it has started. Only a PR
-// whose head is the item's factory/<work-id> branch is ever recorded; gh
-// leaves out PRs from forks.
+// whose head is the item's factory/<work-id> branch, opened after the item
+// started, is ever recorded: an older one is an earlier item's under the
+// same id. gh leaves out PRs from forks.
 func (r *run) readPR(e *entity) error {
 	ctx, cancel := r.call()
 	defer cancel()
@@ -36,7 +37,7 @@ func (r *run) readPR(e *entity) error {
 	}
 	branch := git.Branch(e.id)
 	pr, found, err := r.d.GitHub.PRByBranch(ctx, e.work.Repo, branch)
-	if err != nil || !found || pr.HeadRefName != branch {
+	if err != nil || !found || pr.HeadRefName != branch || pr.CreatedAt.Before(itemStartedAt(e)) {
 		return err
 	}
 	r.record(e, pr)

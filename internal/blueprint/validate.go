@@ -36,15 +36,20 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 	}
 	v.components(brain, b)
 	v.live(b, live)
-	if w := b.Values.Context.Window; w < minContextWindow || w > maxContextWindow {
-		v.add("context", "values.context.window %d is outside %d..%d, the range Claude Code's auto-compact window takes", w, minContextWindow, maxContextWindow)
+	switch w := b.Values.Context.Window; {
+	case w < minContextWindow:
+		v.add("context", "values.context.window %d is under %d: a session's system prompt and tools take about 50k tokens, which leaves too little room", w, minContextWindow)
+	case w > maxContextWindow:
+		v.add("context", "values.context.window %d is over %d, the largest auto-compact window Claude Code takes", w, maxContextWindow)
 	}
 	return v.problems
 }
 
-// The auto-compact window range `claude --help` gives for --autocompact.
+// The context window's limits: the smallest that leaves room past a
+// session's system prompt and tools (48-56k tokens, measured on Haiku), and
+// the largest auto-compact window `claude --help` gives for --autocompact.
 const (
-	minContextWindow = 100_000
+	minContextWindow = 200_000
 	maxContextWindow = 1_000_000
 )
 

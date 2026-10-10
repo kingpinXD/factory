@@ -555,9 +555,9 @@ func (r *run) settle(e *entity) {
 				err = r.startRecheck(e, t)
 			}
 		}
-		err = errors.Join(err, r.applyPlan(e), r.dmResults(e), r.mirror(e), r.moveEpic(e))
+		err = errors.Join(err, r.applyPlan(e), r.dmResults(e), r.mirror(e), r.moveEpic(e), r.cancelUnder(e))
 	case e.set != nil:
-		err = r.writeInstructions(e)
+		err = errors.Join(r.writeInstructions(e), r.cancelUnder(e))
 	case e.work != nil:
 		err = errors.Join(r.assign(e), r.handOver(e), r.handBack(e), r.reread(e), r.cancelItem(e), r.waitDM(e))
 	}

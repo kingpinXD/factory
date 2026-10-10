@@ -70,9 +70,13 @@ func (r *run) findSession(name string) (claude.Session, bool) {
 	return claude.FindByName(sessions, name)
 }
 
-// observe keeps when a session was first seen without a pid.
+// observe keeps the session's short id, and when it was first seen without
+// a pid.
 func (r *run) observe(e *entity) {
 	s, ok := r.findSession(e.session.Name)
+	if ok {
+		e.st.ShortID = s.ID
+	}
 	switch {
 	case ok && s.Live():
 		e.st.NoPIDSince = time.Time{}

@@ -115,7 +115,7 @@ func (r *run) handBack(it *entity) error {
 	if err := r.stopBabysitter(it, key, "the scope changed"); err != nil {
 		return err
 	}
-	if _, err := r.append(it, events.Event{Kind: events.KindHandback, Sender: events.SenderProgram, Text: "the scope changed", Key: key}); err != nil {
+	if _, err := r.append(it, events.Event{At: r.now, Kind: events.KindHandback, Sender: events.SenderProgram, Text: "the scope changed", Key: key}); err != nil {
 		return err
 	}
 	ready, _ := worktreeReady(it)

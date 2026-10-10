@@ -53,6 +53,7 @@ func (r *run) watchPRs() {
 	me := ""
 	for _, id := range r.order() {
 		it := r.ents[id]
+		it.st.MergeHold = ""
 		if it.pr == nil || !watched(it) {
 			continue
 		}
@@ -96,6 +97,7 @@ func (r *run) watchPR(it *entity, me string) error {
 	if hold == "" || err != nil {
 		return err
 	}
+	it.st.MergeHold = hold
 	r.say("%s: not merged yet: %s", it.id, hold)
 	if hold != holdBehind {
 		return nil

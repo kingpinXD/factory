@@ -128,6 +128,12 @@ type Status struct {
 	// Unanswered counts the PR's unresolved review threads whose last
 	// comment is not the user's, as the last full reconcile saw them.
 	Unanswered int `json:"unanswered,omitempty"`
+	// MergeHold says what kept an in_review PR from merging at the last
+	// full reconcile; empty when nothing did or the item is not in review.
+	MergeHold string `json:"merge_hold,omitempty"`
+	// ShortID is the short id `claude agents` last listed a session under,
+	// which `claude attach` and `claude logs` take as well as its name.
+	ShortID string `json:"short_id,omitempty"`
 	// NoPIDSince is when a session was first listed with no pid, since it
 	// last had one.
 	NoPIDSince time.Time `json:"no_pid_since,omitzero"`
@@ -154,8 +160,9 @@ func WriteStatus(dir string, st Status) error { return writeJSON(StatusPath(dir)
 
 // Overall is the factory's own status.json.
 type Overall struct {
-	// LastTick is when the last tick finished, in UTC.
-	LastTick time.Time `json:"last_tick"`
+	// LastTick is when the last tick finished, in UTC; zero, and left out,
+	// once `factory launchd remove` stopped the ticks.
+	LastTick time.Time `json:"last_tick,omitzero"`
 	// Tick is the number of the last tick that finished. A tick that dies
 	// before finishing runs again under the same number, so its transition
 	// keys repeat and are not logged twice.

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 )
 
@@ -47,6 +48,49 @@ func (r *run) cancelItem(it *entity) error {
 	return err
 }
 
+// cancelUnder does what cancelling an epic or set does, each step once:
+// each of its open sets and items gets a stop with the same reason, which
+// the tick applies to them in turn, and each live session working for it
+// is stopped.
+func (r *run) cancelUnder(e *entity) error {
+	k := "cancel:" + strconv.Itoa(e.entered)
+	if e.work != nil || e.cur.State != workCancelled || e.has(k) {
+		return nil
+	}
+	items, err := r.itemsOf(e)
+	if err != nil {
+		return err
+	}
+	if e.epic != nil {
+		items = append(r.setsOf(e), items...)
+	}
+	t, _ := lastTransition(e.evs)
+	req, _ := eventBySeq(e, t.TriggerRef)
+	for _, c := range items {
+		if !c.open() {
+			continue
+		}
+		stop := Request(RequestStop, workCancelled, blueprint.TriggerUser, req.Text)
+		stop.Sender, stop.Key = events.SenderProgram, "stop:"+e.id+":"+strconv.Itoa(e.entered)
+		if _, err := r.append(c, stop); err != nil {
+			return err
+		}
+	}
+	for _, id := range r.order() {
+		sess := r.ents[id]
+		if sess.session == nil || sess.session.Task != e.id {
+			continue
+		}
+		if s, ok := r.findSession(sess.session.Name); ok && s.Live() {
+			if err := r.stopSession(sess, s, k, fmt.Sprintf("stop %s: %s is cancelled", s.Name, e.id)); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = r.append(e, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Text: "cancelled: factory stop: " + req.Text, Key: k})
+	return err
+}
+
 // cancelReason says why the item was cancelled: a stop's reason, or the
 // re-check's result.
 func (r *run) cancelReason(it *entity) string {
@@ -78,6 +122,10 @@ func (r *run) closePR(it *entity, k, why string) error {
 		return err
 	}
 	if it.work.PR != 0 {
+		t, _ := lastTransition(it.evs)
+		if err := r.pauseMerge(it, t); err != nil {
+			return err
+		}
 		comment := fmt.Sprintf("The factory stopped working on this PR (%s). It stays open.", why)
 		dm := fmt.Sprintf("factory: %s was cancelled (%s). It had adopted your PR %s, which stays open.", it.id, why, pr.URL)
 		if err := r.once(it, k+":comment", "comment on the adopted PR "+pr.URL, func(ctx context.Context) error { return r.d.GitHub.AddComment(ctx, repo, n, comment) }); err != nil {

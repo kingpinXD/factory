@@ -326,6 +326,9 @@ func TestTheMergeCheckHoldsThePR(t *testing.T) {
 				if want := item + ": not merged yet: " + tc.hold; !strings.Contains(w.out.String(), want) {
 					t.Errorf("output lacks %q:\n%s", want, w.out.String())
 				}
+				if got := w.status(item).MergeHold; !strings.HasPrefix(got, tc.hold) {
+					t.Errorf("status.json merge_hold = %q, want %q", got, tc.hold)
+				}
 			}
 		})
 	}
@@ -498,5 +501,59 @@ func TestGatingChecks(t *testing.T) {
 		if got := allGreen([]gh.Check{{Name: "ci", State: state}}); got != green {
 			t.Errorf("allGreen(%s) = %v, want %v", state, got, green)
 		}
+	}
+}
+
+func TestAnUpdatedResultWhileMergingGoesToImplementing(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, takeBack, again string
+	}{
+		{"merge queue", "queue", "gh api graphql -f query=mutation($id:ID!){dequeuePullRequest(", "gh api graphql -f query=mutation($id:ID!,$sha:GitObjectID!){enqueuePullRequest("},
+		{"auto-merge", "squash", "gh pr merge 5 -R o/r --disable-auto", squashMerge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.inReviewWith(oneItem("[]"), 20*time.Minute)
+			w.pulls.queues["o/r@main"] = tc.method == "queue"
+			w.pr(func(pr *gh.PR) { pr.AutoMergeRequest = &struct{}{} })
+			w.moveTo(item, workMerging)
+			w.append(w.dir(item), events.Event{Kind: events.KindIntent, Text: "merge " + head1 + " by " + tc.method, Key: "merge:1:intent"})
+			if _, err := Replan(context.Background(), w.deps(), "e1", "the API changed"); err != nil {
+				t.Fatal(err)
+			}
+			w.tick(false)
+			before := len(w.called(tc.again))
+			w.end("e1", "state-check.v2.md", stateCheck)
+			w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", "updated"))
+			w.tick(false)
+			moves := w.moves(item)
+			if got := moves[len(moves)-2:]; !slices.Equal(got, []string{"merging→rechecking", "rechecking→implementing"}) {
+				t.Fatalf("moves = %v\n%s", moves, w.out.String())
+			}
+			if got := w.called(tc.takeBack); len(got) != 1 {
+				t.Errorf("take-back calls = %q, want one", got)
+			}
+			if got := w.called(tc.again); len(got) != before {
+				t.Errorf("merges = %q, want none sent again", got)
+			}
+			if hb := w.kinds(item, events.KindHandback); len(hb) != 1 {
+				t.Errorf("handbacks = %+v, want the worktree given back", hb)
+			}
+		})
+	}
+}
+
+func TestTheMergeHoldIsClearedOnceThePRMerges(t *testing.T) {
+	w := newWorld(t)
+	w.inReviewWith(oneItem("[]"), 14*time.Minute)
+	w.tick(false)
+	if got := w.status(item).MergeHold; !strings.HasPrefix(got, "its head") {
+		t.Fatalf("merge_hold = %q, want the quiet time", got)
+	}
+	w.now = w.now.Add(2 * time.Minute)
+	w.fullNext()
+	w.tick(false)
+	if st := w.status(item); st.State != workMerging || st.MergeHold != "" {
+		t.Errorf("%s is %s with merge_hold %q, want merging and none", item, st.State, st.MergeHold)
 	}
 }

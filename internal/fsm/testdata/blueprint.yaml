@@ -245,7 +245,7 @@ machines:
         end: true
       rechecking:
         entry: the epic started a re-check that covers the item; merges are held
-        exits: back to the state it left on ready or updated; cancelled on done, obsolete or duplicate; needs_you when the result waits on the user or someone else
+        exits: back to the state it left on ready or updated, except implementing on updated after it left merging (the merge was taken back on entry); cancelled on done, obsolete or duplicate; needs_you when the result waits on the user or someone else
         health: waits
       waiting_user:
         entry: the session asked the user a question (DM sent)
@@ -297,6 +297,7 @@ machines:
       - {from: implementing, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: verifying, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: blocked, to: previous, trigger: file, guard: instruction_received}
+      - {from: rechecking, to: implementing, trigger: file, guard: scope_changed}
       - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
       - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
       - {from: rechecking, to: needs_you, trigger: file, guard: recheck_needs_user}
@@ -315,7 +316,7 @@ machines:
     states:
       queued:
         entry: the newest ended epic.yaml defines the set
-        exits: claimed once an orchestrator holds its lease
+        exits: claimed once an orchestrator holds its lease; done when every item is merged or cancelled
         health: waits
       claimed:
         entry: an orchestrator holds the set's lease
@@ -327,7 +328,7 @@ machines:
         health: events
       blocked:
         entry: nothing in the set can start (the orchestrator ended its turn), or it used up its restarts (one planner run)
-        exits: running when an item can start (the tick nudges the orchestrator) or the planner sends an instruction; done when every item is merged or cancelled
+        exits: running when an item can start (the tick nudges the orchestrator), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -343,11 +344,13 @@ machines:
         end: true
     transitions:
       - {from: queued, to: claimed, trigger: tick, guard: lease_taken}
+      - {from: queued, to: done, trigger: tick, guard: items_finished}
       - {from: claimed, to: running, trigger: tick, guard: session_started}
       - {from: running, to: blocked, trigger: file, guard: nothing_startable}
       - {from: running, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: blocked, to: running, trigger: tick, guard: item_startable}
       - {from: blocked, to: running, trigger: file, guard: instruction_received}
+      - {from: blocked, to: running, trigger: file, guard: handed_back}
       - {from: running, to: done, trigger: tick, guard: items_finished}
       - {from: blocked, to: done, trigger: tick, guard: items_finished}
       - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
@@ -392,7 +395,7 @@ machines:
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
-        exits: back to the state it left on factory retry; checking on factory answer; cancelled on factory stop
+        exits: back to the state it left on factory retry, or on factory answer, which then re-checks its issue; cancelled on factory stop
         health: waits
       done:
         entry: every item is merged or cancelled and UAT passed or is none
@@ -415,6 +418,7 @@ machines:
       - {from: merging, to: uat, trigger: tick, guard: items_finished}
       - {from: uat, to: done, trigger: file, guard: uat_passed}
       - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
+      - {from: needs_you, to: previous, trigger: user, guard: answered}
       - {to: checking, trigger: file, guard: recheck_signal, always_allowed: true}
       - {to: needs_you, trigger: tick, guard: needs_user, always_allowed: true}
       - {to: cancelled, trigger: user, guard: cancel_requested, always_allowed: true}

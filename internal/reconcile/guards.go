@@ -44,6 +44,7 @@ var guards = map[string]guard{
 	"items_finished":    (*run).itemsFinished,
 	"item_startable":    (*run).itemStartable,
 	"nothing_startable": (*run).nothingStartable,
+	"handed_back":       (*run).handedBack,
 	// session
 	"listed_working":  func(r *run, e *entity) (bool, string, error) { return r.listedState(e, listedWorking) },
 	"turn_ended":      func(r *run, e *entity) (bool, string, error) { return r.listedState(e, "done") },
@@ -456,9 +457,11 @@ func (r *run) sessionStarted(e *entity) (bool, string, error) {
 	return ok, "", nil
 }
 
+// itemsFinished: every item of the set or epic is merged or cancelled. An
+// epic may have no items; a set without its items has not been made yet.
 func (r *run) itemsFinished(e *entity) (bool, string, error) {
 	items, err := r.itemsOf(e)
-	if err != nil {
+	if err != nil || e.set != nil && len(items) == 0 {
 		return false, "", err
 	}
 	for _, it := range items {
@@ -494,6 +497,22 @@ func (r *run) nothingStartable(e *entity) (bool, string, error) {
 	}
 	ok, _, err := r.itemStartable(e)
 	return !ok, "", err
+}
+
+// handedBack: an item of the set got its worktree back from its babysitter
+// since the set entered its state, so its orchestrator has work again.
+func (r *run) handedBack(e *entity) (bool, string, error) {
+	items, err := r.itemsOf(e)
+	if err != nil {
+		return false, "", err
+	}
+	for _, it := range items {
+		hb, ok := eventBySeq(it, strconv.Itoa(lastHandback(it)))
+		if ok && !hb.At.Before(e.cur.Since) {
+			return true, it.id + "#" + seqRef(hb), nil
+		}
+	}
+	return false, "", nil
 }
 
 // listedState: the session is listed with a pid, in state.

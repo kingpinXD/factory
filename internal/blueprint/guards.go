@@ -17,7 +17,7 @@ var Guards = map[string]string{
 	"pr_recorded":          "a PR on factory/<work-id>, or the adopted PR, is recorded and the worktree is handed over",
 	"merge_ready":          "required checks green on the head SHA, no unresolved thread, no CHANGES_REQUESTED, merge_quiet passed since the program first saw the PR's current head SHA, may-merge is 0, and an approval or `Merge without approval: yes`",
 	"merge_failed":         "the merge call failed",
-	"scope_changed":        "a re-check result says updated after the worktree was handed over",
+	"scope_changed":        "a re-check result says updated after the worktree was handed over: the item is back in in_review, or still in rechecking after it left merging",
 	"cleaned_up":           "the item's worktrees and local branch are removed",
 	"pr_merged":            "GitHub shows the PR merged",
 	"pr_closed_unmerged":   "GitHub shows the PR closed without merging",
@@ -35,6 +35,7 @@ var Guards = map[string]string{
 	"nothing_startable": "no open item can start now",
 	"item_startable":    "an open item can start now",
 	"items_finished":    "every item is merged or cancelled",
+	"handed_back":       "an item of the set got its worktree back from its babysitter since the set entered its state",
 	// epic
 	"state_check_ended": "the newest state-check.v<n>.md has its end event, and the epic has no state to return to: the first check, not a re-check",
 	"epic_plan_ended":   "the newest epic.v<n>.yaml has its end event, is valid, and every issue has a result",

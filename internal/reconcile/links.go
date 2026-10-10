@@ -275,7 +275,7 @@ func Deployed(ctx context.Context, d Deps, prURL string) ([]string, error) {
 		if ep.epic == nil || !ep.open() || !r.waitsOnDeploy(ep, ref) {
 			continue
 		}
-		req := events.Event{Kind: events.KindRequest, Sender: "user", Recipient: recipientLinks, Request: requestDeployed,
+		req := events.Event{Kind: events.KindRequest, Sender: senderUser, Recipient: recipientLinks, Request: requestDeployed,
 			Text: ref.String(), Key: "deployed:" + strings.ToLower(ref.String())}
 		if _, err := events.Append(store.EventsPath(ep.entry.Dir), req); err != nil {
 			return epics, err

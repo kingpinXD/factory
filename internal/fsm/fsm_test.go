@@ -122,7 +122,7 @@ func TestWalkEveryTransition(t *testing.T) {
 					continue
 				}
 				_, err = Apply(m, Cur{State: from}, ev, stubs(false))
-				want := ErrRefused{From: from, To: tr.To, Trigger: tr.Trigger, Guard: tr.Guard}
+				want := ErrRefused{From: from, To: tr.To, Trigger: tr.Trigger, Guard: firstGuard(m, from, tr.To, tr.Trigger)}
 				var got ErrRefused
 				if !errors.As(err, &got) || got != want {
 					t.Errorf("%s: %s → %s with guard false: err = %v, want %v", mn, from, tr.To, err, want)
@@ -147,7 +147,7 @@ func walkReturn(t *testing.T, mn string, m blueprint.Machine, tr blueprint.Trans
 				t.Errorf("%s: %s → %s → previous = %q (prev %v), want %q", mn, from, tr.From, next.State, next.Prev, from)
 			}
 			_, err := Apply(m, cur, Event{To: blueprint.Previous, Trigger: tr.Trigger, At: t0}, stubs(false))
-			want := ErrRefused{From: tr.From, To: blueprint.Previous, Trigger: tr.Trigger, Guard: tr.Guard}
+			want := ErrRefused{From: tr.From, To: blueprint.Previous, Trigger: tr.Trigger, Guard: firstGuard(m, tr.From, blueprint.Previous, tr.Trigger)}
 			var got ErrRefused
 			if !errors.As(err, &got) || got != want {
 				t.Errorf("%s: %s → previous with guard false: err = %v, want %v", mn, tr.From, err, want)
@@ -157,6 +157,17 @@ func walkReturn(t *testing.T, mn string, m blueprint.Machine, tr blueprint.Trans
 	if entered == 0 {
 		t.Errorf("%s: nothing enters %s, so its previous move was never walked", mn, tr.From)
 	}
+}
+
+// firstGuard is the guard a refusal names when no guard holds: that of the
+// first move the machine lists from `from` to `to` on trigger.
+func firstGuard(m blueprint.Machine, from, to, trigger string) string {
+	for _, t := range m.Transitions {
+		if allows(m, t, from, Event{To: to, Trigger: trigger}) {
+			return t.Guard
+		}
+	}
+	return ""
 }
 
 // only registers a stub for every guard name; only the names given hold.

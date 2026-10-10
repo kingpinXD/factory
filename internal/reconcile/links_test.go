@@ -222,7 +222,7 @@ func TestAnAnswerToAQuestionGoesToTheWork(t *testing.T) {
 	w := newWorld(t)
 	w.registry()
 	w.planned("e1", oneItem("[]"))
-	w.moveTo("e1-w1", stateWaitingUser)
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, From: "implementing", To: stateWaitingUser, Prev: []string{"implementing"}, Trigger: "file", TriggerRef: "fixture"})
 	did, err := AnswerTo(context.Background(), w.deps(), "e1", "o/r#14", "use the v2 API")
 	if err != nil || did != "answered the question e1-w1 asked" {
 		t.Fatalf("answer = %q, %v", did, err)

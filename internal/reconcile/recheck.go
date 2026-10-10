@@ -247,11 +247,21 @@ func issueResult(p *epic.Plan, it *entity) string {
 	return i.Result
 }
 
-// scopeChanged: the item came back to in_review from a re-check that marked
-// its issue updated, and its worktree is with the babysitter.
+// scopeChanged: a re-check marked the item's issue updated while its
+// worktree is with the babysitter: the item came back to in_review from
+// it, or the re-check took it out of merging and has ended (the merge was
+// taken back on entering rechecking, so it must not go back to merging).
 func (r *run) scopeChanged(it *entity) (bool, string, error) {
 	t, _ := lastTransition(it.evs)
-	if t.From != workRechecking || !handedOver(it) {
+	if !handedOver(it) {
+		return false, "", nil
+	}
+	switch n := len(it.cur.Prev); {
+	case it.cur.State == workRechecking:
+		if out, _, ok, err := r.recheckOutcome(it); n == 0 || it.cur.Prev[n-1] != workMerging || !ok || out != epic.Work || err != nil {
+			return false, "", err
+		}
+	case t.From != workRechecking:
 		return false, "", nil
 	}
 	_, p, err := r.itemPlan(it)
@@ -528,7 +538,8 @@ func mergedCovers(p *epic.Plan, items []*entity, repo string, pr gh.MergedPR) ([
 // AnswerTo logs `factory answer <epic> <issue> "<choice>"`. The answer goes
 // to the work on that issue when it asked the user a question; otherwise
 // the issue's result must wait on the user and the choice be one of its
-// answers, and the epic re-checks that issue with it. It returns what it did.
+// answers, and the epic re-checks that issue with it, leaving needs_you
+// first. An ended epic refuses it. It returns what it did.
 func AnswerTo(ctx context.Context, d Deps, epicID, issue, choice string) (string, error) {
 	r, err := readRun(ctx, d)
 	if err != nil {
@@ -539,7 +550,8 @@ func AnswerTo(ctx context.Context, d Deps, epicID, issue, choice string) (string
 		return "", fmt.Errorf("%s is not an epic", epicID)
 	}
 	if !ep.open() {
-		return "", fmt.Errorf("%s is %s: it takes no answers", epicID, ep.cur.State)
+		_, err := r.ask(ep, Request(RequestAnswer, epicChecking, blueprint.TriggerUser, issue+" "+choice))
+		return "", err
 	}
 	p, _, err := r.appliedPlan(ep)
 	if err != nil {
@@ -555,9 +567,7 @@ func AnswerTo(ctx context.Context, d Deps, epicID, issue, choice string) (string
 	}
 	for _, it := range items {
 		if issueRef(it).Is(ref) && it.cur.State == stateWaitingUser {
-			req := Request(RequestAnswer, blueprint.Previous, blueprint.TriggerUser, choice)
-			req.Sender = "user"
-			if _, err := events.Append(store.EventsPath(it.entry.Dir), req); err != nil {
+			if _, err := r.ask(it, Request(RequestAnswer, blueprint.Previous, blueprint.TriggerUser, choice)); err != nil {
 				return "", err
 			}
 			return fmt.Sprintf("answered the question %s asked", it.id), nil
@@ -577,9 +587,14 @@ func AnswerTo(ctx context.Context, d Deps, epicID, issue, choice string) (string
 	if k < 0 {
 		return "", fmt.Errorf("%q is not an answer for %s: want one of %s", choice, ref, strings.Join(i.Answers, " | "))
 	}
-	req := events.Event{Kind: events.KindRequest, Sender: "user", Recipient: recipientRecheck, Request: signalAnswer,
-		Text: ref.String() + " " + i.Answers[k]}
-	if _, err := events.Append(store.EventsPath(ep.entry.Dir), req); err != nil {
+	text := ref.String() + " " + i.Answers[k]
+	if ep.cur.State == stateNeedsYou {
+		if _, err := r.ask(ep, Request(RequestAnswer, blueprint.Previous, blueprint.TriggerUser, text)); err != nil {
+			return "", err
+		}
+	}
+	req := events.Event{Kind: events.KindRequest, Sender: senderUser, Recipient: recipientRecheck, Request: signalAnswer, Text: text}
+	if _, err := store.AppendTo(d.Brain, ep.id, req); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s re-checks %s with your answer: %s", epicID, ref, i.Answers[k]), nil
@@ -633,6 +648,6 @@ func Replan(ctx context.Context, d Deps, epicID, note string) (events.Event, err
 	case strings.TrimSpace(note) == "":
 		return events.Event{}, fmt.Errorf("the note is empty: say what changed")
 	}
-	return events.Append(store.EventsPath(ep.entry.Dir), events.Event{Kind: events.KindRequest, Sender: "user", Recipient: recipientRecheck,
+	return events.Append(store.EventsPath(ep.entry.Dir), events.Event{Kind: events.KindRequest, Sender: senderUser, Recipient: recipientRecheck,
 		Request: signalReplan, Text: note})
 }

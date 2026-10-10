@@ -111,7 +111,7 @@ func TestValidateFixturePasses(t *testing.T) {
 
 func TestValidateContextWindowLimitsPass(t *testing.T) {
 	brain := testBrain(t, testAgents)
-	for _, w := range []int{100_000, 1_000_000} {
+	for _, w := range []int{200_000, 1_000_000} {
 		b := fixture(t)
 		b.Values.Context.Window = w
 		if got := b.Validate(brain, nil); len(got) != 0 {
@@ -393,17 +393,17 @@ func TestValidateRules(t *testing.T) {
 		{
 			name:   "context window missing",
 			breaks: func(b *Blueprint) { b.Values.Context.Window = 0 },
-			rule:   "context", msg: "values.context.window 0 is outside 100000..1000000, the range Claude Code's auto-compact window takes",
+			rule:   "context", msg: "values.context.window 0 is under 200000: a session's system prompt and tools take about 50k tokens, which leaves too little room",
 		},
 		{
 			name:   "context window too small",
-			breaks: func(b *Blueprint) { b.Values.Context.Window = 99_999 },
-			rule:   "context", msg: "values.context.window 99999 is outside 100000..1000000, the range Claude Code's auto-compact window takes",
+			breaks: func(b *Blueprint) { b.Values.Context.Window = 199_999 },
+			rule:   "context", msg: "values.context.window 199999 is under 200000: a session's system prompt and tools take about 50k tokens, which leaves too little room",
 		},
 		{
 			name:   "context window too large",
 			breaks: func(b *Blueprint) { b.Values.Context.Window = 1_000_001 },
-			rule:   "context", msg: "values.context.window 1000001 is outside 100000..1000000, the range Claude Code's auto-compact window takes",
+			rule:   "context", msg: "values.context.window 1000001 is over 1000000, the largest auto-compact window Claude Code takes",
 		},
 		{
 			name: "a live entity's state was removed",

@@ -51,7 +51,7 @@ func usageDir(brain string) string { return filepath.Join(store.Factory(brain), 
 // AccountStatus is the account's status.json.
 type AccountStatus struct {
 	State string    `json:"state"`
-	Since time.Time `json:"since"`
+	Since time.Time `json:"since,omitzero"`
 	// Usage is the newest usage figure younger than the stale window.
 	Usage *Figure `json:"usage,omitempty"`
 	// ResetsAt is the reset a pause waits for; Weekly is set when it is the
@@ -183,18 +183,29 @@ func (r *run) loadAccount() (*entity, error) {
 func (r *run) readUsage() error {
 	u := &usage{}
 	r.sup.usage = u
-	data, err := os.ReadFile(store.StatusPath(accountDir(r.d.Brain)))
-	if err == nil {
-		err = json.Unmarshal(data, &u.st)
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("account status: %w", err)
+	var err error
+	if u.st, err = readAccountStatus(r.d.Brain); err != nil {
+		return err
 	}
 	if u.fig, err = r.newestFigure(); err != nil {
 		return err
 	}
 	u.limit = r.limitSeen()
 	return nil
+}
+
+// readAccountStatus reads the account's status.json; the zero status when
+// no tick has stepped the account yet.
+func readAccountStatus(brain string) (AccountStatus, error) {
+	var st AccountStatus
+	data, err := os.ReadFile(store.StatusPath(accountDir(brain)))
+	if err == nil {
+		err = json.Unmarshal(data, &st)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return AccountStatus{}, fmt.Errorf("account status: %w", err)
+	}
+	return st, nil
 }
 
 // newestFigure returns the newest usage file younger than the stale window,

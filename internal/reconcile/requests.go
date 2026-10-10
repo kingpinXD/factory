@@ -53,10 +53,7 @@ func (r *run) applyRequest(e *entity, req events.Event) error {
 	e.req = nil
 	var refused fsm.ErrRefused
 	if errors.As(err, &refused) {
-		_, err := r.append(e, events.Event{
-			Kind: events.KindRefused, Sender: events.SenderProgram, Text: refused.Error(),
-			From: e.cur.State, To: req.To, Trigger: req.Trigger, TriggerRef: ref, Key: "refused:" + ref,
-		})
+		_, err := r.append(e, refusedEvent(e, req, refused))
 		r.say("%s: refused request %d: %s", e.id, req.Seq, refused.Error())
 		return err
 	}

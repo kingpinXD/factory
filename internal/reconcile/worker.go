@@ -58,7 +58,7 @@ type repoJob struct {
 	in      WorkInputs
 }
 
-func (j repoJob) key() string { return j.id + "#" + seqRef(j.req) }
+func (j repoJob) key() string { return eventRef(j.id, j.req) }
 
 // repoJobs returns every unanswered repo request, by item id.
 func repoJobs(brain string) ([]repoJob, error) {

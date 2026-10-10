@@ -3,7 +3,6 @@ package reconcile
 import (
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
@@ -46,11 +45,7 @@ func (r *run) applyRequests(e *entity) {
 // applyRequest makes the move req asks for, or logs one refused event with
 // the machine's reason.
 func (r *run) applyRequest(e *entity, req events.Event) error {
-	ref := strconv.Itoa(req.Seq)
-	e.req = &req
-	var ignored string
-	next, err := fsm.Apply(e.m, e.cur, fsm.Event{To: req.To, Trigger: req.Trigger, At: r.now}, r.guardFuncs(e, &ignored))
-	e.req = nil
+	next, err := r.tryRequest(e, req)
 	var refused fsm.ErrRefused
 	if errors.As(err, &refused) {
 		_, err := r.append(e, refusedEvent(e, req, refused))
@@ -60,7 +55,7 @@ func (r *run) applyRequest(e *entity, req events.Event) error {
 	if err != nil {
 		return err
 	}
-	moved, err := r.move(e, next, req.Trigger, ref)
+	moved, err := r.move(e, next, req.Trigger, seqRef(req))
 	if err != nil {
 		return err
 	}
@@ -68,6 +63,15 @@ func (r *run) applyRequest(e *entity, req events.Event) error {
 		return r.passAnswer(e, req)
 	}
 	return nil
+}
+
+// tryRequest asks e's machine for the move req asks for, with req in view
+// of the guards.
+func (r *run) tryRequest(e *entity, req events.Event) (fsm.Cur, error) {
+	e.req = &req
+	defer func() { e.req = nil }()
+	var ignored string
+	return fsm.Apply(e.m, e.cur, fsm.Event{To: req.To, Trigger: req.Trigger, At: r.now}, r.guardFuncs(e, &ignored))
 }
 
 // passAnswer puts the user's answer in the inbox of the session that asked:

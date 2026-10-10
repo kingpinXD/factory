@@ -25,7 +25,7 @@ func TestEveryShippedGuardIsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reg := registry()
+	reg := guards
 	for mn, m := range b.Machines {
 		for _, tr := range m.Transitions {
 			if tr.Guard != "" && reg[tr.Guard] == nil {
@@ -41,9 +41,6 @@ func TestEveryShippedGuardIsRegistered(t *testing.T) {
 	for name := range reg {
 		if _, ok := blueprint.Guards[name]; !ok {
 			t.Errorf("registered guard %s is not a blueprint guard", name)
-		}
-		if guards[name] != nil && pending[name] != "" {
-			t.Errorf("guard %s is both implemented and pending", name)
 		}
 	}
 }

@@ -320,7 +320,7 @@ func lastAction(e *entity, since time.Time) (events.Event, bool) {
 		if ev.At.Before(since) {
 			break
 		}
-		if ev.Kind == events.KindNudge || ev.Kind == events.KindRestart {
+		if isNudgeOrRestart(ev) {
 			return ev, true
 		}
 	}
@@ -382,13 +382,8 @@ func (r *run) resumePrompt(owner *entity, component string, news []delivery) str
 // log or its items', with no done after them: after a restart each is
 // checked against GitHub or Slack before it is redone.
 func (r *run) outboxSection(owner *entity) string {
-	logs := []*entity{owner}
-	if owner.set != nil {
-		items, _ := r.itemsOf(owner)
-		logs = append(logs, items...)
-	}
 	var b strings.Builder
-	for _, e := range logs {
+	for _, e := range r.logsOf(owner) {
 		for _, ev := range openIntents(e, owner.id) {
 			if b.Len() == 0 {
 				b.WriteString("\nOutside actions you logged an intent for and no done: check each on GitHub or Slack before you redo it:\n")
@@ -428,7 +423,7 @@ func (r *run) checkLease(set, sess *entity) {
 	set.st.Lease++
 	text := fmt.Sprintf("lease %d expired after %s with no heartbeat; lease %d granted", lease, r.elapsed(renewed).Round(time.Minute), set.st.Lease)
 	r.say("%s: %s", set.id, text)
-	r.logged(r.append(set, events.Event{At: r.now, Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: set.st.Lease, Text: text, Key: leaseKey(set.st.Lease)}))
+	r.logged(r.grantLease(set, text))
 }
 
 // leaseRenewed returns when the set's current lease was last renewed: a
@@ -490,7 +485,7 @@ func (r *run) checkModels(sess *entity, s claude.Session) {
 	for _, file := range slices.Sorted(maps.Keys(models)) {
 		for _, m := range models[file] {
 			denied, ok := blueprint.DeniedModel(m, r.b.Deny.Models)
-			key := "fable:" + s.SessionID + ":" + file
+			key := deniedModelPrefix + s.SessionID + ":" + file
 			if !ok || subject.has(key) || owner.has(key) {
 				continue
 			}
@@ -528,7 +523,7 @@ func (r *run) countOtherRestarts() {
 				if subject == nil {
 					subject = owner
 				}
-				r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: e.session.Name + " was dead", Key: "restart:dead:" + e.id + ":" + seqRef(t)}))
+				r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: e.session.Name + " was dead", Key: deadRestartPrefix + e.id + ":" + seqRef(t)}))
 			}
 		}
 	}
@@ -609,11 +604,6 @@ const restartsRef = "restarts:"
 // the last hour, since the owner last left blocked or needs_you: a set's
 // orchestrator (logged on its items) or an epic's planner.
 func (r *run) hourRestarts(owner *entity) []events.Event {
-	logs := []*entity{owner}
-	if owner.set != nil {
-		items, _ := r.itemsOf(owner)
-		logs = append(logs, items...)
-	}
 	since := r.now.Add(-time.Hour)
 	if left := lastLeft(owner, stateBlocked, stateNeedsYou); left > 0 {
 		if ev, ok := eventBySeq(owner, strconv.Itoa(left)); ok {
@@ -621,7 +611,7 @@ func (r *run) hourRestarts(owner *entity) []events.Event {
 		}
 	}
 	var out []events.Event
-	for _, e := range logs {
+	for _, e := range r.logsOf(owner) {
 		for _, ev := range e.evs {
 			if ev.Kind == events.KindRestart && ev.At.After(since) {
 				out = append(out, ev)
@@ -703,8 +693,14 @@ const (
 	plansRefusedRef   = "plans-refused:"
 )
 
-// refusedPlanPrefix starts the key of the error that refuses a plan version.
-const refusedPlanPrefix = "refused-plan:"
+// Key prefixes of the events supervision counts: the error that refuses a
+// plan version, the error of a session that ran a denied model, and the
+// restart of a session found dead.
+const (
+	refusedPlanPrefix = "refused-plan:"
+	deniedModelPrefix = "fable:"
+	deadRestartPrefix = "restart:dead:"
+)
 
 // deadLettered: an agent reported the same error the blueprint's number of
 // times since the user last retried the entity: it loops, so restarting it
@@ -740,7 +736,7 @@ func (r *run) plannerRunsUsedUp(e *entity) (string, bool) {
 // user last retried it.
 func (r *run) deniedModelUsed(e *entity) (string, bool) {
 	used := countedSince(e, lastLeft(e, stateNeedsYou), func(ev events.Event) bool {
-		return ev.Kind == events.KindError && strings.HasPrefix(ev.Key, "fable:")
+		return ev.Kind == events.KindError && strings.HasPrefix(ev.Key, deniedModelPrefix)
 	})
 	if len(used) == 0 {
 		return "", false
@@ -756,7 +752,7 @@ func (r *run) babysitterDying(it *entity) (string, bool) {
 	if it.work == nil || !slices.Contains(watchStates, it.cur.State) {
 		return "", false
 	}
-	prefix := "restart:dead:" + babysitterID(it.id, 1)
+	prefix := deadRestartPrefix + babysitterID(it.id, 1)
 	all := countedSince(it, lastLeft(it, stateNeedsYou), func(ev events.Event) bool {
 		return ev.Kind == events.KindRestart && strings.HasPrefix(ev.Key, prefix)
 	})

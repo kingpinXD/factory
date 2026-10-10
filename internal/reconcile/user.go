@@ -78,10 +78,7 @@ func ask(ctx context.Context, d Deps, id string, req events.Event) (events.Event
 
 func (r *run) ask(e *entity, req events.Event) (events.Event, error) {
 	req.Sender = senderUser
-	e.req = &req
-	var ignored string
-	_, err := fsm.Apply(e.m, e.cur, fsm.Event{To: req.To, Trigger: req.Trigger, At: r.now}, r.guardFuncs(e, &ignored))
-	e.req = nil
+	_, err := r.tryRequest(e, req)
 	var refused fsm.ErrRefused
 	isRefused := errors.As(err, &refused)
 	if err != nil && !isRefused {

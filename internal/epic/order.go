@@ -35,9 +35,7 @@ func (p *Plan) LinksTo(item string) []Link {
 
 // Dependents returns the items that wait on blocker from directly, in link
 // order.
-func (p *Plan) Dependents(from string) []string { return p.dependents(from) }
-
-func (p *Plan) dependents(from string) []string {
+func (p *Plan) Dependents(from string) []string {
 	var out []string
 	for _, l := range p.Links {
 		if l.From == from && !slices.Contains(out, l.To) {
@@ -86,7 +84,7 @@ func (p *Plan) chain(item string, onPath map[string]bool) int {
 	onPath[item] = true
 	defer delete(onPath, item)
 	longest := 0
-	for _, next := range p.dependents(item) {
+	for _, next := range p.Dependents(item) {
 		if !onPath[next] {
 			longest = max(longest, 1+p.chain(next, onPath))
 		}

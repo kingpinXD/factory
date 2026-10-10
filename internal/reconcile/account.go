@@ -172,12 +172,7 @@ func (r *run) loadAccount() (*entity, error) {
 		}
 	}
 	e.cur = fsm.Start(e.m, r.now)
-	logged, err := r.append(e, events.Event{
-		Kind: events.KindTransition, Sender: events.SenderProgram, At: r.now,
-		To: e.m.Start, Trigger: blueprint.TriggerTick, TriggerRef: "create", Key: events.Key(accountID, "", e.m.Start, "create", 0),
-	})
-	e.entered, e.enteredBy = logged.Seq, logged
-	return e, err
+	return e, r.logStart(e, blueprint.TriggerTick)
 }
 
 // readUsage reads the account's status, the newest usage figure, and any
@@ -200,11 +195,7 @@ func (r *run) readUsage() error {
 // no tick has stepped the account yet.
 func readAccountStatus(brain string) (AccountStatus, error) {
 	var st AccountStatus
-	data, err := os.ReadFile(store.StatusPath(accountDir(brain)))
-	if err == nil {
-		err = json.Unmarshal(data, &st)
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := store.ReadJSON(store.StatusPath(accountDir(brain)), &st); err != nil {
 		return AccountStatus{}, fmt.Errorf("account status: %w", err)
 	}
 	return st, nil
@@ -634,11 +625,7 @@ func (r *run) saveAccount(acct *entity) error {
 	if st.State != statePaused && st.State != stateResuming {
 		st.ResetsAt, st.Weekly = time.Time{}, false
 	}
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	return blueprint.WriteFile(store.StatusPath(accountDir(r.d.Brain)), append(data, '\n'))
+	return store.WriteJSON(store.StatusPath(accountDir(r.d.Brain)), st)
 }
 
 // The usage probe.
@@ -695,24 +682,12 @@ func (p Probe) Prompt(ctx context.Context) error {
 // writeSettings writes the factory settings without disableAllHooks to
 // the probe's folder.
 func (p Probe) writeSettings(brain string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(brain, "factory", "settings.json"))
+	settings, err := claude.FactorySettings(brain)
 	if err != nil {
 		return "", err
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return "", fmt.Errorf("factory/settings.json: %w", err)
 	}
 	delete(settings, "disableAllHooks")
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(p.dir(), 0o700); err != nil {
-		return "", err
-	}
-	path := filepath.Join(p.dir(), "settings.json")
-	return path, os.WriteFile(path, append(out, '\n'), 0o600)
+	return claude.WriteSettings(p.dir(), settings)
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

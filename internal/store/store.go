@@ -52,7 +52,7 @@ type Index map[string]Entry
 // ReadIndex reads brain's index.json. A missing index is empty.
 func ReadIndex(brain string) (Index, error) {
 	ix := Index{}
-	if err := readJSON(IndexPath(brain), &ix); err != nil {
+	if err := ReadJSON(IndexPath(brain), &ix); err != nil {
 		return nil, err
 	}
 	return ix, nil
@@ -71,7 +71,7 @@ func WriteIndex(brain string, ix Index) error {
 			}
 		}
 	}
-	return writeJSON(IndexPath(brain), ix)
+	return WriteJSON(IndexPath(brain), ix)
 }
 
 var idRule = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -151,12 +151,12 @@ type Status struct {
 // ReadStatus reads the status.json in dir. A missing file is the zero Status.
 func ReadStatus(dir string) (Status, error) {
 	var st Status
-	err := readJSON(StatusPath(dir), &st)
+	err := ReadJSON(StatusPath(dir), &st)
 	return st, err
 }
 
 // WriteStatus replaces the status.json in dir.
-func WriteStatus(dir string, st Status) error { return writeJSON(StatusPath(dir), st) }
+func WriteStatus(dir string, st Status) error { return WriteJSON(StatusPath(dir), st) }
 
 // Overall is the factory's own status.json.
 type Overall struct {
@@ -196,14 +196,14 @@ type Hold struct {
 // Overall.
 func ReadOverall(brain string) (Overall, error) {
 	var o Overall
-	err := readJSON(OverallPath(brain), &o)
+	err := ReadJSON(OverallPath(brain), &o)
 	return o, err
 }
 
 // WriteOverall replaces brain's overall status.json, with LastTick in UTC.
 func WriteOverall(brain string, o Overall) error {
 	o.LastTick = o.LastTick.UTC()
-	return writeJSON(OverallPath(brain), o)
+	return WriteJSON(OverallPath(brain), o)
 }
 
 // ReadInputs decodes the inputs.yaml in dir into v. Unknown keys are an error.
@@ -229,7 +229,9 @@ func WriteInputs(dir string, v any) error {
 	return blueprint.WriteFile(InputsPath(dir), data)
 }
 
-func readJSON(path string, v any) error {
+// ReadJSON decodes the JSON file at path into v; a missing file leaves v
+// as it is.
+func ReadJSON(path string, v any) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -243,7 +245,8 @@ func readJSON(path string, v any) error {
 	return nil
 }
 
-func writeJSON(path string, v any) error {
+// WriteJSON replaces the file at path with v as indented JSON.
+func WriteJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err

@@ -26,8 +26,6 @@ import (
 // dead-letters the item.
 const merger = "merger"
 
-const prOpen = "OPEN"
-
 // Check states, as gh.Checks reports them.
 var (
 	greenChecks = []string{"SUCCESS", "SKIPPED", "NEUTRAL"}

@@ -123,7 +123,7 @@ func TestAFailedNeedsYouDMIsSentOnALaterTick(t *testing.T) {
 			d := w.deps()
 			d.Notify = &failingDM{w: w, fail: 1}
 			w.tickWith(d)
-			if st := w.status(item).State; st != workNeedsYou || len(w.dms) != 0 {
+			if st := w.status(item).State; st != stateNeedsYou || len(w.dms) != 0 {
 				t.Fatalf("%s is %s with DMs %q, want needs_you and the DM failed", item, st, w.dms)
 			}
 			for range 2 {

@@ -86,6 +86,12 @@ func grantedLease(evs []events.Event) int {
 	return 0
 }
 
+// grantLease logs the program's heartbeat that grants the set its current
+// lease.
+func (r *run) grantLease(set *entity, text string) (events.Event, error) {
+	return r.append(set, events.Event{At: r.now, Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: set.st.Lease, Text: text, Key: leaseKey(set.st.Lease)})
+}
+
 // Lease returns the current lease of the set whose folder is dir.
 func Lease(dir string) (int, error) {
 	evs, err := events.Read(store.EventsPath(dir))
@@ -172,15 +178,7 @@ func (e *entity) newest(kind string, match func(events.Event) bool) (events.Even
 }
 
 // used reports whether a transition was triggered by ev.
-func (e *entity) used(ev events.Event) bool {
-	ref := seqRef(ev)
-	for _, t := range e.evs {
-		if t.Kind == events.KindTransition && t.TriggerRef == ref {
-			return true
-		}
-	}
-	return false
-}
+func (e *entity) used(ev events.Event) bool { return usedRef(e, seqRef(ev)) }
 
 // byKey returns the event logged under key.
 func (e *entity) byKey(key string) (events.Event, bool) {

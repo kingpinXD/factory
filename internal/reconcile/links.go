@@ -56,7 +56,7 @@ func (r *run) blockerItem(ep *entity, from string) *entity {
 
 func (r *run) itemRelease(ep, it *entity, when string) epic.Release {
 	switch {
-	case it.cur.State == stateMerged || it.cur.State == "done":
+	case it.cur.State == stateMerged || it.cur.State == workDone:
 		if when == epic.WhenDeployed && !deployed(ep, prRef(it)) {
 			return epic.Waiting
 		}
@@ -87,7 +87,7 @@ func (r *run) refRelease(ep *entity, ref epic.Ref, when string) (epic.Release, e
 		return epic.Ended, nil
 	}
 	switch {
-	case b.pr.State == "MERGED" && (when != epic.WhenDeployed || deployed(ep, ref)):
+	case b.pr.State == prMerged && (when != epic.WhenDeployed || deployed(ep, ref)):
 		return epic.Released, nil
 	case b.pr.State == prClosed:
 		return epic.Ended, nil

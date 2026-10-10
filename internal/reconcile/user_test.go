@@ -129,7 +129,7 @@ func TestRetryAndStopInAStateTheBlueprintRefuses(t *testing.T) {
 	ctx := context.Background()
 
 	// needs_you with its PR closed: retry_allowed does not hold.
-	w.moveTo("e1-w1", workNeedsYou)
+	w.moveTo("e1-w1", stateNeedsYou)
 	st := w.status("e1-w1")
 	st.PR, st.PRState = 31, prClosed
 	if err := store.WriteStatus(w.dir("e1-w1"), st); err != nil {
@@ -141,7 +141,7 @@ func TestRetryAndStopInAStateTheBlueprintRefuses(t *testing.T) {
 		t.Errorf("refusal %q lacks the blueprint's exits for needs_you", err)
 	}
 	w.tick(false)
-	if got := w.status("e1-w1").State; got != workNeedsYou {
+	if got := w.status("e1-w1").State; got != stateNeedsYou {
 		t.Errorf("e1-w1 is %s, want needs_you still", got)
 	}
 	if got := w.kinds("e1-w1", events.KindRefused); len(got) != 1 {
@@ -161,7 +161,7 @@ func TestARetryAllowedNowIsLeftForTheTick(t *testing.T) {
 	w := newWorld(t)
 	w.registry()
 	w.planned("e1", oneItem("[]"))
-	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, From: "queued", To: workNeedsYou, Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: "fixture"})
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, From: "queued", To: stateNeedsYou, Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: "fixture"})
 	if err := Retry(context.Background(), w.deps(), "e1-w1"); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestUserCommandsJudgeOnTheBlueprintTheTickRuns(t *testing.T) {
 	w.registry()
 	// A tick ran, so the last good copy is saved.
 	w.planned("e1", oneItem("[]"))
-	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, From: "queued", To: workNeedsYou, Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: "fixture"})
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, From: "queued", To: stateNeedsYou, Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: "fixture"})
 	// An edit that fails factory check: the retry names a guard no code has.
 	path := blueprint.Path(w.brain)
 	put(t, path, strings.Replace(readFile(t, path), "guard: retry_allowed}", "guard: retry_allowed_v2}", 1))

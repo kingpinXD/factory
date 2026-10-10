@@ -118,7 +118,7 @@ func (r *run) closePR(it *entity, k, why string) error {
 	ctx, cancel := r.call()
 	pr, err := r.d.GitHub.PR(ctx, repo, n)
 	cancel()
-	if err != nil || pr.State != "OPEN" {
+	if err != nil || pr.State != prOpen {
 		return err
 	}
 	if it.work.PR != 0 {

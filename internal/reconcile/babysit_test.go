@@ -300,12 +300,12 @@ func TestTheSameHeadRedAfterAPassWaitsForTheUser(t *testing.T) {
 			w.tick(false)
 			state, dms := w.status(item).State, w.dmsWith("checks on "+prURL+" stayed red after a babysitter pass, on 1111111")
 			if !tc.want {
-				if state == workNeedsYou || len(dms) != 0 {
+				if state == stateNeedsYou || len(dms) != 0 {
 					t.Errorf("state %s, DMs %q; want it left with the babysitter", state, dms)
 				}
 				return
 			}
-			if state != workNeedsYou || len(dms) != 1 {
+			if state != stateNeedsYou || len(dms) != 1 {
 				t.Errorf("state %s, DMs %q; want needs_you and one DM", state, w.dms)
 			}
 			if got := last(w.kinds(item, events.KindTransition)).TriggerRef; got != redAfterPassRef+head1 {

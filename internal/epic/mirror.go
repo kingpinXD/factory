@@ -2,14 +2,11 @@ package epic
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 	"slices"
 
-	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/store"
 )
 
 // LinksFile, in an epic's folder, lists the GitHub blocked-by links the
@@ -91,7 +88,7 @@ func MirrorLinks(ctx context.Context, g LinkClient, path string, want []IssueLin
 			}
 			w.BlockingID = b.ID
 			made = append(made, w)
-			if err := writeLinks(path, made); err != nil {
+			if err := store.WriteJSON(path, made); err != nil {
 				return err
 			}
 			i = len(made) - 1
@@ -112,7 +109,7 @@ func MirrorLinks(ctx context.Context, g LinkClient, path string, want []IssueLin
 			return fmt.Errorf("unlink %s blocked by %s: %w", m.Issue, m.Blocking, err)
 		}
 		made = slices.DeleteFunc(made, m.same)
-		if err := writeLinks(path, made); err != nil {
+		if err := store.WriteJSON(path, made); err != nil {
 			return err
 		}
 	}
@@ -136,24 +133,7 @@ func linked(ctx context.Context, g LinkClient, issue Ref, id int64) (bool, error
 }
 
 func readLinks(path string) ([]IssueLink, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var links []IssueLink
-	if err := json.Unmarshal(data, &links); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return links, nil
-}
-
-func writeLinks(path string, links []IssueLink) error {
-	data, err := json.MarshalIndent(links, "", "  ")
-	if err != nil {
-		return err
-	}
-	return blueprint.WriteFile(path, append(data, '\n'))
+	err := store.ReadJSON(path, &links)
+	return links, err
 }

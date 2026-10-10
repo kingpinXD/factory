@@ -90,9 +90,7 @@ func (r *run) cleanUp(it *entity, t events.Event) error {
 	if _, ok := lastRepoRequest(it, worktreeRequest); !ok {
 		return nil
 	}
-	asked := countedSince(it, t.Seq, func(ev events.Event) bool {
-		return ev.Kind == events.KindRequest && ev.Recipient == events.RecipientRepoWorker && ev.Request == cleanupRequest
-	})
+	asked := countedSince(it, t.Seq, func(ev events.Event) bool { return isRepoRequest(ev, cleanupRequest) })
 	n := len(asked)
 	if n == 0 {
 		return r.queueRepoWork(it, cleanupRequest, repoKey(cleanupRequest, t))
@@ -115,12 +113,15 @@ func (r *run) cleanUp(it *entity, t events.Event) error {
 // lastRepoRequest returns the item's newest request to the repo worker of kind.
 func lastRepoRequest(e *entity, kind string) (events.Event, bool) {
 	for i := len(e.evs) - 1; i >= 0; i-- {
-		ev := e.evs[i]
-		if ev.Kind == events.KindRequest && ev.Recipient == events.RecipientRepoWorker && ev.Request == kind {
-			return ev, true
+		if isRepoRequest(e.evs[i], kind) {
+			return e.evs[i], true
 		}
 	}
 	return events.Event{}, false
+}
+
+func isRepoRequest(ev events.Event, kind string) bool {
+	return ev.Kind == events.KindRequest && ev.Recipient == events.RecipientRepoWorker && ev.Request == kind
 }
 
 // repoResult returns the repo worker's answer to req: worktree_ready, done
@@ -208,15 +209,21 @@ func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (
 			return nil, err
 		}
 	}
-	logged, err := r.append(e, events.Event{
-		Kind: events.KindTransition, Sender: events.SenderProgram, At: r.now,
-		To: m.Start, Trigger: trigger, TriggerRef: "create", Key: events.Key(id, "", m.Start, "create", 0),
-	})
-	if err != nil {
+	if err := r.logStart(e, trigger); err != nil {
 		return nil, err
 	}
-	e.entered, e.enteredBy = logged.Seq, logged
 	r.ix[id], r.ents[id], r.indexed = entry, e, true
 	r.say("%s: created in %s", id, m.Start)
 	return e, nil
+}
+
+// logStart logs a new entity's first transition, into its machine's start
+// state.
+func (r *run) logStart(e *entity, trigger string) error {
+	logged, err := r.append(e, events.Event{
+		Kind: events.KindTransition, Sender: events.SenderProgram, At: r.now,
+		To: e.m.Start, Trigger: trigger, TriggerRef: "create", Key: events.Key(e.id, "", e.m.Start, "create", 0),
+	})
+	e.entered, e.enteredBy = logged.Seq, logged
+	return err
 }

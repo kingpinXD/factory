@@ -296,7 +296,7 @@ func (v *validator) cycles() {
 	visit = func(id string) {
 		mark[id] = open
 		path = append(path, id)
-		for _, next := range v.p.dependents(id) {
+		for _, next := range v.p.Dependents(id) {
 			switch mark[next] {
 			case open:
 				cycle := append(slices.Clone(path[slices.Index(path, next):]), next)

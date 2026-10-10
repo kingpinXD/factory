@@ -134,7 +134,7 @@ func TestACancelledCrossEpicBlockerAsksTheUser(t *testing.T) {
 	w.end("e2", "state-check.v2.md", stateCheck)
 	w.end("e2", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", `conflict, why: "its blocker e1-w1 was cancelled", answers: [drop, wait]`))
 	w.tick(false)
-	if got := w.status("e2-w1").State; got != workNeedsYou {
+	if got := w.status("e2-w1").State; got != stateNeedsYou {
 		t.Fatalf("e2-w1 is %s, want needs_you", got)
 	}
 	dms := w.dmsWith("e2 o/r#14 is conflict")
@@ -151,7 +151,7 @@ func TestACancelledCrossEpicBlockerAsksTheUser(t *testing.T) {
 		t.Fatalf("answer = %q, %v", did, err)
 	}
 	w.tick(false)
-	if got := w.status("e2"); got.State != epicChecking || w.status("e2-w1").State != workNeedsYou {
+	if got := w.status("e2"); got.State != epicChecking || w.status("e2-w1").State != stateNeedsYou {
 		t.Fatalf("e2 is %s and e2-w1 %s, want a re-check with the item still waiting", got.State, w.status("e2-w1").State)
 	}
 	if got := w.inbox("e2"); !strings.Contains(strings.Join(got, "\n"), "the user answered o/r#14: wait") {

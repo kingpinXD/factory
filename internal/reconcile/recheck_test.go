@@ -99,12 +99,12 @@ func TestAnEscalationRechecksItsIssueUnderItsRestartsRef(t *testing.T) {
 	w.moveTo("e1-s2", "running")
 	// The set ran out of things to start (a file move), and the item used up
 	// its restarts (the escalation): only the second is a signal.
-	w.append(w.dir("e1-s2"), events.Event{Kind: events.KindTransition, At: w.now, From: "running", To: workBlocked, Trigger: "file", TriggerRef: "7"})
+	w.append(w.dir("e1-s2"), events.Event{Kind: events.KindTransition, At: w.now, From: "running", To: stateBlocked, Trigger: "file", TriggerRef: "7"})
 	if _, err := Replan(context.Background(), w.deps(), "e1", "first"); err != nil {
 		t.Fatal(err)
 	}
 	ref := restartsRef + "e1-w1:6@2026-10-09T12:00:00Z"
-	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, At: w.now, From: "implementing", To: workBlocked, Trigger: "tick", TriggerRef: ref})
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, At: w.now, From: "implementing", To: stateBlocked, Trigger: "tick", TriggerRef: ref})
 	w.tick(false)
 	if got := last(w.kinds("e1", events.KindTransition)); got.To != epicChecking || got.TriggerRef != ref {
 		t.Fatalf("e1's move = %s on %q, want checking under the escalation's ref %q", got.To, got.TriggerRef, ref)
@@ -441,7 +441,7 @@ func (w *world) escalate(instructed time.Time) {
 		w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: instructed, Text: "an old instruction"})
 	}
 	ref := restartsRef + "e1-w1:6@2026-10-09T12:00:00Z"
-	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, At: w.now, From: "implementing", To: workBlocked,
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindTransition, At: w.now, From: "implementing", To: stateBlocked,
 		Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: ref})
 	w.tick(false)
 	if got := w.status("e1-w1").State; got != workRechecking {
@@ -479,7 +479,7 @@ func TestAnInstructionFromBeforeTheEscalationReleasesNothing(t *testing.T) {
 		w.now = w.now.Add(time.Minute)
 		w.tick(false)
 	}
-	if got := w.status("e1-w1").State; got != workBlocked {
+	if got := w.status("e1-w1").State; got != stateBlocked {
 		t.Errorf("e1-w1 is %s, want blocked until the planner instructs its set; moves %v", got, w.moves("e1-w1"))
 	}
 }
@@ -531,7 +531,7 @@ func TestARetryOnAnItemAwaitingAnAnswerIsRefused(t *testing.T) {
 	w.end("e2", "state-check.v2.md", stateCheck)
 	w.end("e2", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", `conflict, why: "its blocker e1-w1 was cancelled", answers: [drop, wait]`))
 	w.tick(false)
-	if got := w.status("e2-w1").State; got != workNeedsYou {
+	if got := w.status("e2-w1").State; got != stateNeedsYou {
 		t.Fatalf("e2-w1 is %s, want needs_you", got)
 	}
 	const hint = `o/r#14 is conflict: its blocker e1-w1 was cancelled; answer with factory answer e2 o/r#14 "<drop | wait>"`
@@ -543,7 +543,7 @@ func TestARetryOnAnItemAwaitingAnAnswerIsRefused(t *testing.T) {
 		w.now = w.now.Add(time.Minute)
 		w.tick(false)
 	}
-	if got := w.status("e2-w1").State; got != workNeedsYou {
+	if got := w.status("e2-w1").State; got != stateNeedsYou {
 		t.Errorf("e2-w1 is %s after a refused retry, want needs_you; moves %v", got, w.moves("e2-w1"))
 	}
 	rep, err := Status(context.Background(), w.deps())
@@ -591,7 +591,7 @@ func TestMayMergeHoldsThroughACheckingRestart(t *testing.T) {
 	w.end("e1", "state-check.v2.md", stateCheck)
 	w.end("e1", "epic.v2.yaml", withResult(oneItem("[]"), "o/r#14", `conflict, why: "a decision says no", answers: [drop, keep]`))
 	w.tick(false)
-	if got := w.status(item).State; got != workNeedsYou {
+	if got := w.status(item).State; got != stateNeedsYou {
 		t.Fatalf("%s is %s, want needs_you", item, got)
 	}
 	if _, err := Replan(context.Background(), w.deps(), "e1", "check again"); err != nil {

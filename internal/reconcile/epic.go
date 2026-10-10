@@ -31,10 +31,9 @@ const (
 	workInReview     = "in_review"
 	workMerging      = "merging"
 	workRechecking   = "rechecking"
-	workNeedsYou     = "needs_you"
+	workDone         = "done"
 	workCancelled    = "cancelled"
 	workClosed       = "closed"
-	workBlocked      = "blocked"
 )
 
 // The planner's steps, by their output files, and the UAT result's.
@@ -124,11 +123,17 @@ func (r *run) checkedPlan(ep *entity) (events.Event, bool, error) {
 	}
 	text := fmt.Sprintf("%s is refused: %s. Write a fixed new version and end it.", filepath.Base(end.File), strings.Join(problems, "; "))
 	r.say("%s: %s", ep.id, text)
-	if _, err := r.append(ep, events.Event{Kind: events.KindError, Sender: events.SenderProgram, Text: text, Key: refusedPlanKey(end)}); err != nil {
-		return end, false, err
+	return end, false, r.refuse(ep, refusedPlanKey(end), text)
+}
+
+// refuse logs text as an error under key, and tells the epic's planner in
+// its inbox.
+func (r *run) refuse(ep *entity, key, text string) error {
+	if _, err := r.append(ep, events.Event{Kind: events.KindError, Sender: events.SenderProgram, Text: text, Key: key}); err != nil {
+		return err
 	}
-	_, err = r.append(ep, events.Event{Kind: events.KindMessage, Sender: events.SenderProgram, Text: text, Key: "tell-" + refusedPlanKey(end)})
-	return end, false, err
+	_, err := r.append(ep, events.Event{Kind: events.KindMessage, Sender: events.SenderProgram, Text: text, Key: "tell-" + key})
+	return err
 }
 
 func checkedPlanKey(end events.Event) string { return "checked-plan:" + seqRef(end) }
@@ -352,11 +357,9 @@ func (r *run) uatPassed(e *entity) (bool, string, error) {
 			return false, "", err
 		}
 		if ok {
-			got, err := firstLineUnder(end.File, uatHeading)
-			if err != nil {
+			if passed, err = says(end.File, uatHeading, "pass"); err != nil {
 				return false, "", err
 			}
-			passed = strings.HasPrefix(strings.ToLower(strings.Trim(got, "*_` ")), "pass")
 		}
 	}
 	finished := func(id string) bool {
@@ -668,11 +671,7 @@ func (r *run) moveEpic(ep *entity) error {
 	err = r.act(fmt.Sprintf("move %s to %s", ep.id, to), func(context.Context) error { return moveDir(from, to) })
 	if errors.Is(err, os.ErrExist) {
 		text := fmt.Sprintf("features/%s exists already, so %s stays in %s: name another feature in the next epic.yaml", p.Feature, ep.id, from)
-		if _, err := r.append(ep, events.Event{Kind: events.KindError, Sender: events.SenderProgram, Text: text, Key: "refused-" + key}); err != nil {
-			return err
-		}
-		_, err = r.append(ep, events.Event{Kind: events.KindMessage, Sender: events.SenderProgram, Text: text, Key: "tell-refused-" + key})
-		return err
+		return r.refuse(ep, "refused-"+key, text)
 	}
 	if err != nil || r.dry {
 		return err

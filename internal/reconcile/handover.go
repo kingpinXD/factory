@@ -96,7 +96,7 @@ func (r *run) handoverDue(it *entity) string {
 			return "the orchestrator started " + s.id
 		}
 	}
-	if sess := r.ents[sessionID(it.work.Set, componentOrchestrator)]; sess != nil && sess.cur.State == "dead" {
+	if sess := r.ents[sessionID(it.work.Set, componentOrchestrator)]; sess != nil && sess.cur.State == sessionDead {
 		return "the orchestrator's session is dead"
 	}
 	return ""

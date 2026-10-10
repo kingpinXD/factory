@@ -190,7 +190,7 @@ func (r *run) covers(ep, it *entity) bool {
 // again; its outcome moves it on.
 func awaitsAnswer(it *entity) bool {
 	n := len(it.cur.Prev)
-	return it.cur.State == workNeedsYou && n > 0 && it.cur.Prev[n-1] == workRechecking
+	return it.cur.State == stateNeedsYou && n > 0 && it.cur.Prev[n-1] == workRechecking
 }
 
 // answerHint says, for an item that waits on the user's answer to a
@@ -304,7 +304,7 @@ func (r *run) reread(it *entity) error {
 	for _, t := range it.evs {
 		seq, ok := strings.CutPrefix(t.TriggerRef, "plan:")
 		key := fmt.Sprintf("reread:%s:%d", it.id, t.Seq)
-		if t.Kind != events.KindTransition || !ok || slices.Contains([]string{workNeedsYou, workCancelled, workRechecking}, t.To) || r.told(it, key) {
+		if t.Kind != events.KindTransition || !ok || slices.Contains([]string{stateNeedsYou, workCancelled, workRechecking}, t.To) || r.told(it, key) {
 			continue
 		}
 		end, ok := planEnd(ep, seq)
@@ -395,7 +395,7 @@ func (r *run) noticeSignals(ep *entity) error {
 // blockedPastRestarts reports an escalation: a move into blocked because
 // the entity used up its restarts. Its ref is the signal's key.
 func blockedPastRestarts(ev events.Event) bool {
-	return ev.Kind == events.KindTransition && ev.To == workBlocked && strings.HasPrefix(ev.TriggerRef, restartsRef)
+	return ev.Kind == events.KindTransition && ev.To == stateBlocked && strings.HasPrefix(ev.TriggerRef, restartsRef)
 }
 
 // escalated returns the item or set of the epic whose move into blocked
@@ -454,10 +454,10 @@ func (r *run) noticeEnded(ep *entity, p *epic.Plan, add addSignal) error {
 func (r *run) noticeOverlap(ep *entity, items []*entity, add addSignal) error {
 	for _, x := range items {
 		xEnd, xFiles, err := explored(x)
-		if err != nil || xFiles == nil || !x.open() {
-			if err != nil {
-				return err
-			}
+		if err != nil {
+			return err
+		}
+		if xFiles == nil || !x.open() {
 			continue
 		}
 		for _, id := range r.order() {

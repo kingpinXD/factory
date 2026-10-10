@@ -52,7 +52,7 @@ func (r *run) measure(sess *entity) {
 // noteCompaction logs the session's newest compaction once: "checkpoint"
 // when the program asked for it, "auto" when Claude Code did it by itself.
 func (r *run) noteCompaction(sess *entity, at time.Time) {
-	key := "compacted:" + at.UTC().Format(time.RFC3339Nano)
+	key := compactedKey(at)
 	if at.IsZero() || sess.has(key) {
 		return
 	}
@@ -105,7 +105,7 @@ func (r *run) checkpointReady(sess *entity) (bool, string, error) {
 	if !ok || cp.Kind != events.KindCheckpoint {
 		return false, "", nil
 	}
-	ref := owner.id + "#" + seqRef(cp)
+	ref := eventRef(owner.id, cp)
 	if usedRef(sess, ref) || r.stepOpen(owner) || !r.accountAllows(false) {
 		return false, "", nil
 	}
@@ -177,8 +177,11 @@ func (r *run) compactionRecorded(sess *entity) (bool, string, error) {
 	if !r.accountOK || !at.After(sess.cur.Since) || !r.turnEnded(sess) {
 		return false, "", nil
 	}
-	return true, "compacted:" + at.UTC().Format(time.RFC3339Nano), nil
+	return true, compactedKey(at), nil
 }
+
+// compactedKey names the compaction the transcript recorded at.
+func compactedKey(at time.Time) string { return "compacted:" + at.UTC().Format(time.RFC3339Nano) }
 
 // afterCompaction runs as the session leaves compacting for running: it
 // tells the session to read its checkpoint. When no compaction came in
@@ -263,7 +266,7 @@ func (r *run) postCompactions(sess *entity, s claude.Session) {
 			continue
 		}
 		prev, newest = newest, ev.At
-		ref := sess.id + "#" + seqRef(ev)
+		ref := eventRef(sess.id, ev)
 		if ev.Text == "auto" && !slices.Contains(sess.st.Delivered, ref) {
 			news = append(news, delivery{ref: ref, msg: ev})
 		}

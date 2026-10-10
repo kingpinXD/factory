@@ -100,7 +100,7 @@ type delivery struct {
 func (r *run) deliveries(owner *entity) []delivery {
 	var out []delivery
 	for _, m := range events.Inbox(owner.evs) {
-		out = append(out, delivery{ref: owner.id + "#" + seqRef(m), msg: m})
+		out = append(out, delivery{ref: eventRef(owner.id, m), msg: m})
 	}
 	if owner.work != nil {
 		return append(out, r.babysitTriggers(owner)...)
@@ -111,7 +111,7 @@ func (r *run) deliveries(owner *entity) []delivery {
 	items, _ := r.itemsOf(owner)
 	for _, it := range items {
 		if ready, ok := worktreeReady(it); ok && it.cur.State == stateStarting {
-			out = append(out, delivery{ref: it.id + "#" + seqRef(ready), item: it})
+			out = append(out, delivery{ref: eventRef(it.id, ready), item: it})
 		}
 	}
 	return out
@@ -128,7 +128,7 @@ func (r *run) undelivered(owner, sess *entity) []delivery {
 func (r *run) unacknowledged(owner, sess *entity) []delivery {
 	inbox := map[string]bool{}
 	for _, m := range events.Inbox(owner.evs) {
-		inbox[owner.id+"#"+seqRef(m)] = true
+		inbox[eventRef(owner.id, m)] = true
 	}
 	return slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return !inbox[d.ref] && slices.Contains(sess.st.Delivered, d.ref) })
 }
@@ -255,8 +255,7 @@ func (r *run) launch(owner *entity, sess *entity) error {
 		return err
 	}
 	if owner.set != nil {
-		text := fmt.Sprintf("lease %d granted to %s", owner.st.Lease, sess.session.Name)
-		if _, err := r.append(owner, events.Event{At: r.now, Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: owner.st.Lease, Text: text, Key: leaseKey(owner.st.Lease)}); err != nil {
+		if _, err := r.grantLease(owner, fmt.Sprintf("lease %d granted to %s", owner.st.Lease, sess.session.Name)); err != nil {
 			return err
 		}
 	}

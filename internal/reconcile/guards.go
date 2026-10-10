@@ -35,8 +35,8 @@ var guards = map[string]guard{
 	"cancel_requested":     requested(RequestStop),
 	"instruction_received": (*run).instructionReceived,
 	"pr_recorded":          (*run).prRecorded,
-	"pr_merged":            func(r *run, e *entity) (bool, string, error) { return prState(e, "MERGED") },
-	"pr_closed_unmerged":   func(r *run, e *entity) (bool, string, error) { return prState(e, "CLOSED") },
+	"pr_merged":            func(r *run, e *entity) (bool, string, error) { return prState(e, prMerged) },
+	"pr_closed_unmerged":   func(r *run, e *entity) (bool, string, error) { return prState(e, prClosed) },
 	"cleaned_up":           (*run).cleanedUp,
 	// set and epic
 	"lease_taken":       (*run).leaseTaken,
@@ -47,7 +47,7 @@ var guards = map[string]guard{
 	"handed_back":       (*run).handedBack,
 	// session
 	"listed_working":  func(r *run, e *entity) (bool, string, error) { return r.listedState(e, listedWorking) },
-	"turn_ended":      func(r *run, e *entity) (bool, string, error) { return r.listedState(e, "done") },
+	"turn_ended":      func(r *run, e *entity) (bool, string, error) { return r.listedState(e, listedTurnEnded) },
 	"no_pid":          (*run).noPID,
 	"factory_stopped": (*run).factoryStopped,
 	"work_finished":   (*run).workFinished,
@@ -83,29 +83,11 @@ var guards = map[string]guard{
 	"merge_failed": (*run).mergeFailed,
 }
 
-// pending are the guards later TODOs implement, each with what it needs.
-// Until then each never holds, so its move never happens.
-var pending = map[string]string{}
-
-// registry returns every guard by name: the implemented ones, and for each
-// pending one a guard that never holds.
-func registry() map[string]guard {
-	all := make(map[string]guard, len(guards)+len(pending))
-	for name, g := range guards {
-		all[name] = g
-	}
-	for name := range pending {
-		all[name] = func(*run, *entity) (bool, string, error) { return false, "", nil }
-	}
-	return all
-}
-
-// guardFuncs adapts the registry to fsm for entity e. The guard that holds
+// guardFuncs adapts the guards to fsm for entity e. The guard that holds
 // leaves its ref in *ref.
 func (r *run) guardFuncs(e *entity, ref *string) map[string]fsm.GuardFunc {
-	reg := registry()
-	gs := make(map[string]fsm.GuardFunc, len(reg))
-	for name, g := range reg {
+	gs := make(map[string]fsm.GuardFunc, len(guards))
+	for name, g := range guards {
 		gs[name] = func(fsm.Cur, fsm.Event) (bool, error) {
 			ok, why, err := g(r, e)
 			if ok {
@@ -119,6 +101,9 @@ func (r *run) guardFuncs(e *entity, ref *string) map[string]fsm.GuardFunc {
 
 func seqRef(ev events.Event) string { return strconv.Itoa(ev.Seq) }
 
+// eventRef names event ev of entity id: <id>#<seq>.
+func eventRef(id string, ev events.Event) string { return id + "#" + seqRef(ev) }
+
 // States the tick acts on by name: entering them does something.
 const (
 	stateStarting    = "starting" // work: make the worktree
@@ -130,6 +115,8 @@ const (
 // What a session listing, a PR and a verify output say.
 const (
 	listedWorking  = "working"
+	prOpen         = "OPEN"
+	prMerged       = "MERGED"
 	prClosed       = "CLOSED"
 	verdictHeading = "## Verdict"
 )
@@ -154,7 +141,7 @@ const (
 
 // finishedWork are the work states in which an item counts as merged or
 // cancelled.
-var finishedWork = []string{"merged", "done", "cancelled"}
+var finishedWork = []string{stateMerged, workDone, workCancelled}
 
 // steps maps each active work state to the step whose end moves it on.
 var steps = map[string]string{
@@ -320,11 +307,18 @@ func (r *run) verdict(e *entity, want string) (bool, string, error) {
 	if !ok || err != nil {
 		return false, "", err
 	}
-	got, err := firstLineUnder(end.File, verdictHeading)
+	ok, err = says(end.File, verdictHeading, want)
+	return ok, seqRef(end), err
+}
+
+// says reports whether the first line under heading in the file starts with
+// want, emphasis aside.
+func says(path, heading, want string) (bool, error) {
+	got, err := firstLineUnder(path, heading)
 	if err != nil {
-		return false, "", err
+		return false, err
 	}
-	return strings.HasPrefix(strings.ToLower(strings.Trim(got, "*_` ")), want), seqRef(end), nil
+	return strings.HasPrefix(strings.ToLower(strings.Trim(got, "*_` ")), want), nil
 }
 
 // firstLineUnder returns the first non-blank line after heading in the file.
@@ -395,7 +389,7 @@ func (r *run) instructionReceived(e *entity) (bool, string, error) {
 	for i := len(set.evs) - 1; i >= 0; i-- {
 		ev := set.evs[i]
 		if ev.Kind == events.KindInstruction && !ev.At.Before(since) {
-			return true, set.id + "#" + seqRef(ev), nil
+			return true, eventRef(set.id, ev), nil
 		}
 	}
 	return false, "", nil
@@ -450,12 +444,11 @@ func prState(e *entity, state string) (bool, string, error) {
 	if e.pr == nil || e.pr.State != state {
 		return false, "", nil
 	}
-	if state == "MERGED" {
+	if state == prMerged {
 		return true, "merged:" + e.pr.HeadRefOid, nil
 	}
 	ref := fmt.Sprintf("closed:%d", e.pr.Number)
-	moved := slices.ContainsFunc(e.evs, func(ev events.Event) bool { return ev.Kind == events.KindTransition && ev.TriggerRef == ref })
-	return !moved, ref, nil
+	return !usedRef(e, ref), ref, nil
 }
 
 // cleanedUp: the item never had a worktree, or the repo worker finished the
@@ -535,7 +528,7 @@ func (r *run) handedBack(e *entity) (bool, string, error) {
 	for _, it := range items {
 		hb, ok := eventBySeq(it, strconv.Itoa(lastHandback(it)))
 		if ok && !hb.At.Before(e.cur.Since) {
-			return true, it.id + "#" + seqRef(hb), nil
+			return true, eventRef(it.id, hb), nil
 		}
 	}
 	return false, "", nil

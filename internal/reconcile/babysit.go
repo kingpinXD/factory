@@ -156,7 +156,7 @@ func (r *run) babysitTriggers(it *entity) []delivery {
 	}
 	var out []delivery
 	for _, ev := range it.evs {
-		ref := it.id + "#" + seqRef(ev)
+		ref := eventRef(it.id, ev)
 		if ev.Kind == events.KindRequest && ev.Recipient == recipientBabysitter && !slices.Contains(told, ref) {
 			out = append(out, delivery{ref: ref, msg: ev})
 		}
@@ -239,7 +239,7 @@ func (r *run) babysitterPromptFor(it *entity, ds []delivery) string {
 	}
 	ready, _ := worktreeReady(it)
 	return babysitterPrompt(babysitterWake{
-		WorkID: it.id, PRURL: it.st.PRURL, Repo: it.work.Repo, Issue: fmt.Sprintf("%s#%d", it.work.Repo, it.work.Issue),
+		WorkID: it.id, PRURL: it.st.PRURL, Repo: it.work.Repo, Issue: issueRef(it).String(),
 		Branch: branch, Base: it.work.Base, Worktree: ready.Text, ItemDir: it.entry.Dir,
 		Reasons: reasons, DMed: dmedLogins(it),
 	}) + messagesSection(it.id, msgs)

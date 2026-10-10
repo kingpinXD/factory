@@ -521,7 +521,7 @@ func TestADyingBabysitterWaitsForTheUser(t *testing.T) {
 	if got := w.called("claude --bg --resume"); len(got) != 2 {
 		t.Errorf("resumes = %d, want 2, the babysitter's restarts an hour", len(got))
 	}
-	if st := w.status(item).State; st != workNeedsYou {
+	if st := w.status(item).State; st != stateNeedsYou {
 		t.Errorf("%s is %s, want needs_you", item, st)
 	}
 	if got := w.dmsWith("its babysitter died and was resumed 2 times"); len(got) != 1 || len(w.dms) != 1 {
@@ -765,7 +765,7 @@ func TestABabysitterDyingOnceAnHourStillWaitsForTheUser(t *testing.T) {
 	}
 	died(5)
 	w.tick(false)
-	if st := w.status(item).State; st != workNeedsYou || len(w.dmsWith("its babysitter died and was resumed 6 times")) != 1 {
+	if st := w.status(item).State; st != stateNeedsYou || len(w.dmsWith("its babysitter died and was resumed 6 times")) != 1 {
 		t.Errorf("%s is %s with DMs %q, want needs_you after 6, the limit a work item has", item, st, w.dms)
 	}
 }

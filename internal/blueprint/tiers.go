@@ -86,6 +86,26 @@ func parseTiers(data []byte) (Tiers, error) {
 	return tiers, nil
 }
 
+// Model returns tier's Claude model. It refuses an empty tier, a tier the
+// table lacks, a tier with no Claude model and a denied model.
+func (t Tiers) Model(tier string, deny []string) (string, error) {
+	if tier == "" {
+		return "", errors.New("the tier is empty")
+	}
+	row, ok := t[tier]
+	if !ok {
+		return "", fmt.Errorf("tier %q is not in the Model tiers table of AGENTS.md", tier)
+	}
+	model := row[ProductClaude]
+	if model == "" {
+		return "", fmt.Errorf("tier %q has no Claude model in AGENTS.md", tier)
+	}
+	if denied, ok := DeniedModel(model, deny); ok {
+		return "", fmt.Errorf("tier %q resolves to %q, which is denied (%s)", tier, model, denied)
+	}
+	return model, nil
+}
+
 func tableCells(line string) []string {
 	parts := strings.Split(strings.Trim(line, "|"), "|")
 	for i, p := range parts {

@@ -13,7 +13,8 @@ var (
 	healthKinds  = []string{HealthEvents, HealthWaits, HealthGitHub}
 	triggerKinds = []string{TriggerTick, TriggerGitHub, TriggerFile, TriggerUser}
 	runsAsKinds  = []string{RunsAsCode, RunsAsSession, RunsAsHelper, RunsAsInteractive}
-	effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+	// EffortLevels are the efforts a component or an override may name.
+	EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
 	// outputExts are the files CheckOutput can read headings from.
 	outputExts = []string{".md", ".yaml"}
 )
@@ -35,15 +36,20 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 	}
 	v.components(brain, b)
 	v.live(b, live)
-	if w := b.Values.Context.Window; w < minContextWindow || w > maxContextWindow {
-		v.add("context", "values.context.window %d is outside %d..%d, the range Claude Code's auto-compact window takes", w, minContextWindow, maxContextWindow)
+	switch w := b.Values.Context.Window; {
+	case w < minContextWindow:
+		v.add("context", "values.context.window %d is under %d: a session's system prompt and tools take about 50k tokens, which leaves too little room", w, minContextWindow)
+	case w > maxContextWindow:
+		v.add("context", "values.context.window %d is over %d, the largest auto-compact window Claude Code takes", w, maxContextWindow)
 	}
 	return v.problems
 }
 
-// The auto-compact window range `claude --help` gives for --autocompact.
+// The context window's limits: the smallest that leaves room past a
+// session's system prompt and tools (48-56k tokens, measured on Haiku), and
+// the largest auto-compact window `claude --help` gives for --autocompact.
 const (
-	minContextWindow = 100_000
+	minContextWindow = 200_000
 	maxContextWindow = 1_000_000
 )
 
@@ -234,7 +240,7 @@ func (v *validator) components(brain string, b *Blueprint) {
 		if !slices.Contains(runsAsKinds, c.RunsAs) {
 			v.add("component", "component %q runs_as %q; want code, session, helper or interactive", cn, c.RunsAs)
 		}
-		if c.Effort != "" && !slices.Contains(effortLevels, c.Effort) {
+		if c.Effort != "" && !slices.Contains(EffortLevels, c.Effort) {
 			v.add("component", "component %q has effort %q; want low, medium, high, xhigh or max", cn, c.Effort)
 		}
 		if c.Health != "" && !slices.Contains(healthKinds, c.Health) {
@@ -279,7 +285,7 @@ func (v *validator) components(brain string, b *Blueprint) {
 			v.add("tier", "component %q: tier %q has no Claude model in AGENTS.md", cn, c.Tier)
 			continue
 		}
-		if denied, ok := deniedModel(model, b.Deny.Models); ok {
+		if denied, ok := DeniedModel(model, b.Deny.Models); ok {
 			v.add("denied_model", "component %q: tier %q resolves to %q, which is denied (%s)", cn, c.Tier, model, denied)
 		}
 	}
@@ -317,9 +323,9 @@ func (v *validator) frontMatter(brain, cn string, c Component) {
 	}
 }
 
-// deniedModel reports the deny entry a model id matches. Fable is refused
+// DeniedModel reports the deny entry a model id matches. Fable is refused
 // even if the deny list drops it: it can bill to usage credits.
-func deniedModel(model string, deny []string) (string, bool) {
+func DeniedModel(model string, deny []string) (string, bool) {
 	for _, d := range append([]string{"fable"}, deny...) {
 		if d != "" && strings.Contains(strings.ToLower(model), strings.ToLower(d)) {
 			return d, true

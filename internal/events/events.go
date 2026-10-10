@@ -55,6 +55,10 @@ var MessageKinds = []string{KindInstruction, KindMessage, KindCheckpointDue}
 // RecipientUser addresses a message to the user instead of the entity.
 const RecipientUser = "user"
 
+// RecipientRepoWorker addresses a request to `factory repo-worker` instead
+// of the tick.
+const RecipientRepoWorker = "repo-worker"
+
 // Event is one line of an events.jsonl.
 type Event struct {
 	Seq  int       `json:"seq"`
@@ -62,7 +66,8 @@ type Event struct {
 	Kind string    `json:"kind"`
 	// Sender is the id of whoever wrote the event.
 	Sender string `json:"sender,omitempty"`
-	// Recipient is empty for the log's own entity, or RecipientUser.
+	// Recipient is empty for the log's own entity, RecipientUser or
+	// RecipientRepoWorker.
 	Recipient string `json:"recipient,omitempty"`
 	Text      string `json:"text,omitempty"`
 	File      string `json:"file,omitempty"`
@@ -84,6 +89,10 @@ type Event struct {
 	// Key makes an event once-only: an append whose key is already logged
 	// is skipped.
 	Key string `json:"key,omitempty"`
+
+	// Request names what a request event asks for: the user command that
+	// wrote it (answer, retry, stop, …) or the repo work (worktree, cleanup).
+	Request string `json:"request,omitempty"`
 }
 
 // Key is a transition's once-only key. triggerRef names the occurrence

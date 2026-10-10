@@ -152,6 +152,37 @@ func TestEventRefusals(t *testing.T) {
 	}
 }
 
+// An end names its own entity's output: a file in another entity's folder,
+// or outside the brain, is refused; one in a sub-folder of its own is not.
+func TestEventEndNamesAFileInItsOwnFolder(t *testing.T) {
+	brain, dirs := eventsBrain(t)
+	outside := filepath.Join(t.TempDir(), "explore.md")
+	other := filepath.Join(dirs["eb-w1"], "explore.md")
+	nested := filepath.Join(dirs["ea"], "sets", "ea-s1", "ea-w1", "explore.md")
+	for _, f := range []string{outside, other, nested} {
+		writeFile(t, f, "## Files\na.go\n")
+	}
+	for _, f := range []string{outside, other} {
+		code, _, stderr := cli(t, "event", "ea-w1", "end", "--file", f)
+		if want := "factory event: " + f + " is not in ea-w1's folder " + dirs["ea-w1"] + "\n"; code != 1 || stderr != want {
+			t.Errorf("end --file %s = %d, %q; want 1 and %q", f, code, stderr, want)
+		}
+	}
+	if evs := logOf(t, dirs["ea-w1"]); len(evs) != 0 {
+		t.Errorf("refused ends were logged: %+v", evs)
+	}
+	if code, _, stderr := cli(t, "event", "ea", "end", "--file", nested); code != 0 {
+		t.Errorf("an epic's end of a file in its own sub-folder = %d, %q", code, stderr)
+	}
+	link := filepath.Join(brain, "old-ea")
+	if err := os.Symlink(dirs["ea"], link); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := cli(t, "event", "ea-w1", "end", "--file", filepath.Join(link, "sets", "ea-s1", "ea-w1", "explore.md")); code != 0 {
+		t.Errorf("an end through a link to its own folder = %d, %q", code, stderr)
+	}
+}
+
 func TestEventEndRecordsTheFileAndItsHash(t *testing.T) {
 	_, dirs := eventsBrain(t)
 	t.Chdir(dirs["ea-w1"])

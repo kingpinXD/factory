@@ -52,7 +52,7 @@ type Index map[string]Entry
 // ReadIndex reads brain's index.json. A missing index is empty.
 func ReadIndex(brain string) (Index, error) {
 	ix := Index{}
-	if err := readJSON(IndexPath(brain), &ix); err != nil {
+	if err := ReadJSON(IndexPath(brain), &ix); err != nil {
 		return nil, err
 	}
 	return ix, nil
@@ -71,7 +71,7 @@ func WriteIndex(brain string, ix Index) error {
 			}
 		}
 	}
-	return writeJSON(IndexPath(brain), ix)
+	return WriteJSON(IndexPath(brain), ix)
 }
 
 var idRule = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -102,6 +102,13 @@ type Status struct {
 	// Prev is the stack of states `to: previous` moves return to,
 	// innermost last.
 	Prev []string `json:"prev,omitempty"`
+	// Attempt, Since, Held and HeldSince are the rest of the entity's
+	// fsm.Cur. Held and HeldSince are kept only here: the time a clock was
+	// held back is in no event.
+	Attempt   int           `json:"attempt,omitempty"`
+	Since     time.Time     `json:"since,omitzero"`
+	Held      time.Duration `json:"held,omitempty"`
+	HeldSince time.Time     `json:"held_since,omitzero"`
 	// End is set when State is an end state of the entity's machine.
 	End bool `json:"end,omitempty"`
 	// Lease is a set's current lease number.
@@ -109,36 +116,94 @@ type Status struct {
 	// Repo (owner/repo) and Issue are a work item's.
 	Repo  string `json:"repo,omitempty"`
 	Issue int    `json:"issue,omitempty"`
+	// PR is a work item's recorded pull request, as GitHub last showed it:
+	// its number, URL, state (OPEN, CLOSED, MERGED) and head commit.
+	PR      int    `json:"pr,omitempty"`
+	PRURL   string `json:"pr_url,omitempty"`
+	PRState string `json:"pr_state,omitempty"`
+	HeadSHA string `json:"head_sha,omitempty"`
+	// HeadSeenAt is when the tick first saw HeadSHA: the merge quiet time
+	// runs from it, since a commit's date is not when it was pushed.
+	HeadSeenAt time.Time `json:"head_seen_at,omitzero"`
+	// Unanswered counts the PR's unresolved review threads whose last
+	// comment is not the user's, as the last full reconcile saw them.
+	Unanswered int `json:"unanswered,omitempty"`
+	// MergeHold says what kept an in_review PR from merging at the last
+	// full reconcile; empty when nothing did or the item is not in review.
+	MergeHold string `json:"merge_hold,omitempty"`
+	// ShortID is the short id `claude agents` last listed a session under,
+	// which `claude attach` and `claude logs` take as well as its name.
+	ShortID string `json:"short_id,omitempty"`
+	// NoPIDSince is when a session was first listed with no pid, since it
+	// last had one.
+	NoPIDSince time.Time `json:"no_pid_since,omitzero"`
+	// Delivered names, as <entity id>#<seq>, each event a session has been
+	// told about by a post or a prompt, so none is delivered twice.
+	Delivered []string `json:"delivered,omitempty"`
+	// Context is a live session's context use, in percent of the window,
+	// as the tick last measured it at ContextAt; zero ContextAt is unknown.
+	Context   int       `json:"context,omitempty"`
+	ContextAt time.Time `json:"context_at,omitzero"`
+	// Rechecks counts an epic's re-checks.
+	Rechecks int `json:"rechecks,omitempty"`
 }
 
 // ReadStatus reads the status.json in dir. A missing file is the zero Status.
 func ReadStatus(dir string) (Status, error) {
 	var st Status
-	err := readJSON(StatusPath(dir), &st)
+	err := ReadJSON(StatusPath(dir), &st)
 	return st, err
 }
 
 // WriteStatus replaces the status.json in dir.
-func WriteStatus(dir string, st Status) error { return writeJSON(StatusPath(dir), st) }
+func WriteStatus(dir string, st Status) error { return WriteJSON(StatusPath(dir), st) }
 
 // Overall is the factory's own status.json.
 type Overall struct {
-	// LastTick is when the last tick finished, in UTC.
-	LastTick time.Time `json:"last_tick"`
+	// LastTick is when the last tick finished, in UTC; zero, and left out,
+	// once `factory launchd remove` stopped the ticks.
+	LastTick time.Time `json:"last_tick,omitzero"`
+	// Tick is the number of the last tick that finished. A tick that dies
+	// before finishing runs again under the same number, so its transition
+	// keys repeat and are not logged twice.
+	Tick int `json:"tick,omitempty"`
+	// Problems are the blueprint's problems when the tick runs on the last
+	// good copy.
+	Problems []string `json:"problems,omitempty"`
+	// Errors are what went wrong in the last tick that it went on past.
+	Errors []string `json:"errors,omitempty"`
+	// Holds are the recent times the account held work back, oldest first;
+	// the last has no To while it lasts. Clocks of held-back work skip them.
+	Holds []Hold `json:"holds,omitempty"`
+	// UnknownListings counts the ticks in a row whose session listing
+	// failed or came back empty while a session was expected.
+	UnknownListings int `json:"unknown_listings,omitempty"`
+	// PausedRepos are the repo@base branches whose checks were red: no new
+	// item starts in them.
+	PausedRepos []string `json:"paused_repos,omitempty"`
+	// AutoContinue is set while the user settings turn on
+	// autoContinueAtUsageLimit, which would run past a limit on credits.
+	AutoContinue bool `json:"auto_continue_at_usage_limit,omitempty"`
+}
+
+// Hold is one time the account held work back.
+type Hold struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to,omitzero"`
 }
 
 // ReadOverall reads brain's overall status.json. A missing file is the zero
 // Overall.
 func ReadOverall(brain string) (Overall, error) {
 	var o Overall
-	err := readJSON(OverallPath(brain), &o)
+	err := ReadJSON(OverallPath(brain), &o)
 	return o, err
 }
 
 // WriteOverall replaces brain's overall status.json, with LastTick in UTC.
 func WriteOverall(brain string, o Overall) error {
 	o.LastTick = o.LastTick.UTC()
-	return writeJSON(OverallPath(brain), o)
+	return WriteJSON(OverallPath(brain), o)
 }
 
 // ReadInputs decodes the inputs.yaml in dir into v. Unknown keys are an error.
@@ -164,7 +229,9 @@ func WriteInputs(dir string, v any) error {
 	return blueprint.WriteFile(InputsPath(dir), data)
 }
 
-func readJSON(path string, v any) error {
+// ReadJSON decodes the JSON file at path into v; a missing file leaves v
+// as it is.
+func ReadJSON(path string, v any) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -178,7 +245,8 @@ func readJSON(path string, v any) error {
 	return nil
 }
 
-func writeJSON(path string, v any) error {
+// WriteJSON replaces the file at path with v as indented JSON.
+func WriteJSON(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err

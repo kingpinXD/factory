@@ -1,0 +1,20 @@
+{
+  "at": "2026-10-09T12:00:00Z",
+  "tick": 0,
+  "account": {
+    "state": ""
+  },
+  "sessions": {
+    "running": 0,
+    "by_repo": {}
+  },
+  "waiting_on_user": [],
+  "in_review": [],
+  "dead_letters": [],
+  "paused_repos": [],
+  "epics": [],
+  "agents": [],
+  "open_prs": [],
+  "errors": [],
+  "problems": []
+}

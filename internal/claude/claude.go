@@ -222,13 +222,9 @@ func (c Client) Start(ctx context.Context, s Spec) error {
 // process environment from Claude Code's background service, not from the
 // command that starts it, so the env block is the only way to set them.
 func (c Client) writeSettings(dir string, s Spec) (string, error) {
-	data, err := os.ReadFile(filepath.Join(c.Brain, "factory", "settings.json"))
+	settings, err := FactorySettings(c.Brain)
 	if err != nil {
 		return "", err
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return "", fmt.Errorf("factory/settings.json: %w", err)
 	}
 	env, _ := settings["env"].(map[string]any)
 	if env == nil {
@@ -248,6 +244,26 @@ func (c Client) writeSettings(dir string, s Spec) (string, error) {
 		env["GH_TOKEN"] = s.GHToken
 	}
 	settings["env"] = env
+	return WriteSettings(dir, settings)
+}
+
+// FactorySettings reads brain's factory/settings.json, the base of every
+// factory session's settings.
+func FactorySettings(brain string) (map[string]any, error) {
+	data, err := os.ReadFile(filepath.Join(brain, "factory", "settings.json"))
+	if err != nil {
+		return nil, err
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, fmt.Errorf("factory/settings.json: %w", err)
+	}
+	return settings, nil
+}
+
+// WriteSettings writes settings to <dir>/settings.json, readable only by
+// the user since it may hold GH_TOKEN, and returns its path.
+func WriteSettings(dir string, settings map[string]any) (string, error) {
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return "", err

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,7 +13,9 @@ import (
 	"strings"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -25,8 +26,9 @@ var agentKinds = []string{
 	events.KindIssueStale, events.KindInstruction, events.KindMessage, events.KindCheckpoint,
 }
 
-// contextLine opens every inbox and heartbeat reply.
-const contextLine = "context: ?"
+// contextLine opens every inbox and heartbeat reply: the context use of the
+// session working for id.
+func contextLine(id string) string { return reconcile.ContextLine(blueprint.Brain(), id) }
 
 // sender is the id of the factory session running the command, or "user".
 func sender() string {
@@ -93,12 +95,34 @@ func logEvent(id string, ev events.Event, file, to string) (events.Event, error)
 		if ev.SHA256, err = events.HashFile(ev.File); err != nil {
 			return events.Event{}, err
 		}
+		if ev.Kind == events.KindEnd {
+			if err := checkOwnFile(id, ev.File); err != nil {
+				return events.Event{}, err
+			}
+		}
 	}
+	return store.AppendTo(blueprint.Brain(), id, ev)
+}
+
+// checkOwnFile refuses an end event's file outside the folder of the entity
+// whose step it ends: a step's output is that entity's own file.
+func checkOwnFile(id, file string) error {
 	entry, err := lookup(id)
 	if err != nil {
-		return events.Event{}, err
+		return err
 	}
-	return events.Append(store.EventsPath(entry.Dir), ev)
+	dir, err := filepath.EvalSymlinks(entry.Dir)
+	if err != nil {
+		return err
+	}
+	real, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return err
+	}
+	if rel, err := filepath.Rel(dir, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is not in %s's folder %s", file, id, entry.Dir)
+	}
+	return nil
 }
 
 func checkEvent(kind, file, text, to string) error {
@@ -145,7 +169,7 @@ func runInbox(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	path := store.EventsPath(entry.Dir)
-	fmt.Fprintln(stdout, contextLine)
+	fmt.Fprintln(stdout, contextLine(args[0]))
 	if *ack != 0 {
 		if err := events.Ack(path, *ack, sender()); err != nil {
 			fmt.Fprintf(stderr, "factory inbox: %v\n", err)
@@ -167,7 +191,9 @@ func runInbox(args []string, stdout, stderr io.Writer) int {
 
 // runHeartbeat renews a set's lease: factory heartbeat <set-id> <lease>.
 func runHeartbeat(args []string, stdout, stderr io.Writer) int {
-	fmt.Fprintln(stdout, contextLine)
+	if len(args) > 0 {
+		fmt.Fprintln(stdout, contextLine(args[0]))
+	}
 	dir, lease, code := checkLease("heartbeat", args, stderr)
 	if code != 0 {
 		return code
@@ -203,16 +229,16 @@ func checkLease(cmd string, args []string, stderr io.Writer) (string, int, int) 
 	if err == nil && entry.Kind != blueprint.MachineSet {
 		err = fmt.Errorf("%s is a %s, not a set", args[0], entry.Kind)
 	}
-	var st store.Status
+	current := 0
 	if err == nil {
-		st, err = store.ReadStatus(entry.Dir)
+		current, err = reconcile.Lease(entry.Dir)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "factory %s: %v\n", cmd, err)
 		return "", 0, 1
 	}
-	if st.Lease != lease {
-		fmt.Fprintf(stderr, "factory %s: lease %d is not the current lease of %s (current: %d)\n", cmd, lease, args[0], st.Lease)
+	if current != lease {
+		fmt.Fprintf(stderr, "factory %s: lease %d is not the current lease of %s (current: %d)\n", cmd, lease, args[0], current)
 		return "", 0, 1
 	}
 	return entry.Dir, lease, 0
@@ -248,7 +274,7 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 	}
 	printed := 0
 	for _, it := range items {
-		if len(files) > 0 && it.filesErr == nil && !overlaps(it.files, files) {
+		if len(files) > 0 && it.filesErr == nil && !epic.Overlap(it.files, files) {
 			continue
 		}
 		listed := strings.Join(it.files, " ")
@@ -316,7 +342,7 @@ func inFlight(ix store.Index, repo string) ([]item, error) {
 		it := item{id: id, epic: e.Epic, state: st.State, issue: st.Issue}
 		end, err := events.Output(store.EventsPath(e.Dir), "explore")
 		if err == nil {
-			it.files, err = listedFiles(end.File)
+			it.files, err = epic.ExploreFiles(end.File)
 		}
 		if errors.Is(err, events.ErrNotEnded) {
 			err = errors.New("not explored yet")
@@ -325,49 +351,4 @@ func inFlight(ix store.Index, repo string) ([]item, error) {
 		items = append(items, it)
 	}
 	return items, nil
-}
-
-// listedFiles returns the paths in the "## Files" section of an explore
-// output, one per line, list markers and backticks removed.
-func listedFiles(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var files []string
-	in := false
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if strings.HasPrefix(line, "## ") {
-			in = line == "## Files"
-			continue
-		}
-		if !in || line == "" {
-			continue
-		}
-		line = strings.TrimLeft(line, "-* ")
-		if parts := strings.Split(line, "`"); len(parts) >= 3 {
-			line = parts[1]
-		}
-		if fields := strings.Fields(line); len(fields) > 0 {
-			files = append(files, strings.TrimPrefix(fields[0], "./"))
-		}
-	}
-	return files, sc.Err()
-}
-
-// overlaps reports whether a path in a is in b, or one is a folder holding
-// the other.
-func overlaps(a, b []string) bool {
-	for _, x := range a {
-		for _, y := range b {
-			x, y := strings.TrimSuffix(x, "/"), strings.TrimSuffix(strings.TrimPrefix(y, "./"), "/")
-			if x == y || strings.HasPrefix(x, y+"/") || strings.HasPrefix(y, x+"/") {
-				return true
-			}
-		}
-	}
-	return false
 }

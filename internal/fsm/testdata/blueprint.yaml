@@ -184,7 +184,9 @@ machines:
         health: waits
       starting:
         entry: the item is startable; the program makes its worktree and starts or nudges its orchestrator
-        exits: exploring when the explorer's start event is logged
+        exits: exploring when the explorer's start event is logged; restarted after 1h (the worktree is asked for again)
+        timeout: 1h
+        on_timeout: starting
         health: events
       exploring:
         entry: the explorer's start event is logged
@@ -224,7 +226,7 @@ machines:
         health: github
       in_review:
         entry: the PR is recorded and the babysitter owns the worktree
-        exits: merging when the merge check passes; implementing when the scope changed
+        exits: implementing when a re-check marked its issue updated; otherwise merging when the merge check passes
         health: github
       merging:
         entry: the merge check passed and the merge was sent
@@ -243,7 +245,7 @@ machines:
         end: true
       rechecking:
         entry: the epic started a re-check that covers the item; merges are held
-        exits: back to the state it left on ready or updated; cancelled on done, obsolete or duplicate
+        exits: back to the state it left on ready or updated, or to in_review if it left merging (the merge was taken back on entry; it goes out again only after a new merge check); cancelled on done, obsolete or duplicate; needs_you when the result waits on the user or someone else
         health: waits
       waiting_user:
         entry: the session asked the user a question (DM sent)
@@ -255,7 +257,7 @@ machines:
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
-        exits: back to the state it left on factory retry, unless its PR is closed; cancelled on factory stop
+        exits: back to the state it left on factory retry, or to in_review if it left merging, unless its PR is closed; cancelled on factory stop; after a re-check, as the next re-check's result says (factory answer; a retry is refused)
         health: waits
       closed:
         entry: GitHub shows the PR closed without merging
@@ -276,8 +278,8 @@ machines:
       - {from: verifying, to: pr_open, trigger: file, guard: verify_passed}
       - {from: verifying, to: implementing, trigger: file, guard: verify_failed}
       - {from: pr_open, to: in_review, trigger: github, guard: pr_recorded}
-      - {from: in_review, to: merging, trigger: tick, guard: merge_ready}
       - {from: in_review, to: implementing, trigger: file, guard: scope_changed}
+      - {from: in_review, to: merging, trigger: tick, guard: merge_ready}
       - {from: merging, to: in_review, trigger: github, guard: merge_failed}
       - {from: merged, to: done, trigger: tick, guard: cleaned_up}
       - {from: closed, to: needs_you, trigger: tick}
@@ -297,6 +299,9 @@ machines:
       - {from: blocked, to: previous, trigger: file, guard: instruction_received}
       - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
       - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
+      - {from: rechecking, to: needs_you, trigger: file, guard: recheck_needs_user}
+      - {from: needs_you, to: previous, trigger: file, guard: recheck_kept}
+      - {from: needs_you, to: cancelled, trigger: file, guard: recheck_dropped}
       - {from: needs_you, to: previous, trigger: user, guard: retry_allowed}
       - {to: merged, trigger: github, guard: pr_merged, always_allowed: true}
       - {to: closed, trigger: github, guard: pr_closed_unmerged, always_allowed: true}
@@ -310,7 +315,7 @@ machines:
     states:
       queued:
         entry: the newest ended epic.yaml defines the set
-        exits: claimed once an orchestrator holds its lease
+        exits: claimed once an orchestrator holds its lease; done when every item is merged or cancelled
         health: waits
       claimed:
         entry: an orchestrator holds the set's lease
@@ -322,7 +327,7 @@ machines:
         health: events
       blocked:
         entry: nothing in the set can start (the orchestrator ended its turn), or it used up its restarts (one planner run)
-        exits: running when an item can start (the tick nudges the orchestrator) or the planner sends an instruction; done when every item is merged or cancelled
+        exits: running when an item can start (the tick nudges the orchestrator), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -338,11 +343,13 @@ machines:
         end: true
     transitions:
       - {from: queued, to: claimed, trigger: tick, guard: lease_taken}
+      - {from: queued, to: done, trigger: tick, guard: items_finished}
       - {from: claimed, to: running, trigger: tick, guard: session_started}
       - {from: running, to: blocked, trigger: file, guard: nothing_startable}
       - {from: running, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: blocked, to: running, trigger: tick, guard: item_startable}
       - {from: blocked, to: running, trigger: file, guard: instruction_received}
+      - {from: blocked, to: running, trigger: file, guard: handed_back}
       - {from: running, to: done, trigger: tick, guard: items_finished}
       - {from: blocked, to: done, trigger: tick, guard: items_finished}
       - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
@@ -387,7 +394,7 @@ machines:
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
-        exits: back to the state it left on factory retry; checking on factory answer; cancelled on factory stop
+        exits: back to the state it left on factory retry, or on factory answer, which then re-checks its issue; cancelled on factory stop
         health: waits
       done:
         entry: every item is merged or cancelled and UAT passed or is none
@@ -410,6 +417,7 @@ machines:
       - {from: merging, to: uat, trigger: tick, guard: items_finished}
       - {from: uat, to: done, trigger: file, guard: uat_passed}
       - {from: needs_you, to: previous, trigger: user, guard: retry_requested}
+      - {from: needs_you, to: previous, trigger: user, guard: answered}
       - {to: checking, trigger: file, guard: recheck_signal, always_allowed: true}
       - {to: needs_you, trigger: tick, guard: needs_user, always_allowed: true}
       - {to: cancelled, trigger: user, guard: cancel_requested, always_allowed: true}
@@ -479,20 +487,22 @@ machines:
         exits: near_limit at near_limit; paused at pause or a limit message; stale when the figure is older than stale_after
         health: waits
       near_limit:
-        entry: a fresh figure at or above near_limit in either window; no new work starts
+        entry: a fresh figure at or above near_limit in either window; no new work starts. After a pause, the probe's fresh figure under pause; the recorded sessions resume one per tick, longest chain first
         exits: ok when both windows are under near_limit; paused; stale
         health: waits
       paused:
         entry: a figure at or above pause, or a factory session showed a limit message; every factory session is stopped and recorded; a weekly pause DMs once
-        exits: resuming resume_after_reset past the reset, once the probe's fresh figure is under near_limit
+        exits: resuming resume_after_reset past the reset, once the probe's fresh figure is under near_limit; near_limit when that figure is under pause but at or above near_limit
         health: waits
       resuming:
         entry: the reset passed and the probe's figure is under near_limit; one recorded session resumes per tick, longest chain first
         exits: ok when every recorded session is resumed; paused at pause again
         health: waits
       stale:
-        entry: the newest figure is older than stale_after; no new work starts
-        exits: ok or near_limit on a fresh figure; paused
+        entry: the newest figure is older than stale_after; no new work starts; while factory sessions run, one DM
+        exits: ok or near_limit on a fresh figure; paused at pause, or after 30m (every factory session is stopped as for a pause)
+        timeout: 30m
+        on_timeout: paused
         health: waits
     transitions:
       - {from: ok, to: near_limit, trigger: tick, guard: usage_near_limit}
@@ -502,5 +512,6 @@ machines:
       - {from: stale, to: ok, trigger: tick, guard: usage_under_limit}
       - {from: stale, to: near_limit, trigger: tick, guard: usage_near_limit}
       - {from: paused, to: resuming, trigger: tick, guard: reset_passed}
+      - {from: paused, to: near_limit, trigger: tick, guard: reset_passed_near_limit}
       - {from: resuming, to: ok, trigger: tick, guard: all_resumed}
       - {to: paused, trigger: tick, guard: usage_pause, always_allowed: true}

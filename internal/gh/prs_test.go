@@ -25,7 +25,8 @@ func TestPRParsesTheRecordedPRs(t *testing.T) {
 		p.BaseRefName != "main" || p.BaseRefOid != "b143cb314d1f21f3d1d08908523b603924f7a89b" ||
 		p.Mergeable != "UNKNOWN" || p.MergeStateStatus != "UNKNOWN" || p.ReviewDecision != "" || len(p.Reviews) != 0 ||
 		p.AutoMergeRequest != nil || !p.MergedAt.Equal(time.Date(2026, 10, 9, 20, 45, 28, 0, time.UTC)) ||
-		p.IsCrossRepository || p.HeadRepositoryOwner.Login != "kingpinXD" {
+		p.IsCrossRepository || p.HeadRepositoryOwner.Login != "kingpinXD" ||
+		p.Author.Login != "kingpinXD" || !p.CreatedAt.Equal(time.Date(2026, 10, 9, 19, 46, 5, 0, time.UTC)) {
 		t.Errorf("pr = %+v", p)
 	}
 	if len(p.Files) != 7 || p.Files[0].Path != ".github/workflows/ci.yml" {
@@ -37,8 +38,8 @@ func TestPRParsesTheRecordedPRs(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Review{
-		{Author: User{"skosito"}, State: "APPROVED", SubmittedAt: time.Date(2026, 10, 6, 15, 8, 51, 0, time.UTC)},
-		{Author: User{"julianrubino"}, State: "APPROVED", SubmittedAt: time.Date(2026, 10, 6, 18, 36, 41, 0, time.UTC)},
+		{Author: User{"skosito"}, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: time.Date(2026, 10, 6, 15, 8, 51, 0, time.UTC)},
+		{Author: User{"julianrubino"}, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: time.Date(2026, 10, 6, 18, 36, 41, 0, time.UTC)},
 	}
 	if !reflect.DeepEqual(p.Reviews, want) || p.ReviewDecision != "APPROVED" {
 		t.Errorf("reviews = %+v, decision %q", p.Reviews, p.ReviewDecision)

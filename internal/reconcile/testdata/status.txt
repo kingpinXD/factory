@@ -1,0 +1,23 @@
+last tick: #42, 1m0s ago
+account: near_limit for 30m0s, 5-hour 82%, 7-day 61% (read 2m0s ago)
+sessions: 2 running (o/r 2)
+waiting on you:
+  e1-w2  needs_you for 2h0m0s: the same error 3 times (dead-lettered): go test ./... fails: no such file
+  e2-w1  waiting_user for 1h0m0s: which API? — answers: v1 | v2
+in review:
+  o/r  1, oldest e1-w1 for 3h0m0s
+dead-letters:
+  e1-w2  go test ./... fails: no such file
+paused repos:
+  o/r@main
+epics:
+  e1  planned for 3h0m0s, re-checks 0
+  e2  checking for 2h0m0s, re-checks 1
+agents:
+  factory:e1-s1:orchestrator  id 00000002  running, context 54%, 2 unread, oldest 20m0s
+  factory:e1-w1:babysitter  id ?  running, context ?, 0 unread
+  factory:e2-s1:orchestrator  id ?  stopped, context ?, 0 unread
+open PRs:
+  e1-w1  https://github.com/o/r/pull/41  in_review, 2 unanswered, not merged yet: a reviewer requested changes
+errors in the last tick:
+  e9: claude agents: exit status 1

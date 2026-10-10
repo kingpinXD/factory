@@ -1,0 +1,112 @@
+{
+  "at": "2026-10-09T15:00:00Z",
+  "last_tick": "2026-10-09T14:59:00Z",
+  "tick": 42,
+  "account": {
+    "state": "near_limit",
+    "since": "2026-10-09T14:30:00Z",
+    "usage": {
+      "session_id": "sid-1",
+      "written_at": "2026-10-09T14:58:00Z",
+      "five_hour": {
+        "used_percentage": 82,
+        "resets_at": 1791561600
+      },
+      "seven_day": {
+        "used_percentage": 61,
+        "resets_at": 1791817200
+      }
+    }
+  },
+  "sessions": {
+    "running": 2,
+    "by_repo": {
+      "o/r": 2
+    }
+  },
+  "waiting_on_user": [
+    {
+      "id": "e1-w2",
+      "state": "needs_you",
+      "since": "2026-10-09T13:00:00Z",
+      "why": "the same error 3 times (dead-lettered): go test ./... fails: no such file"
+    },
+    {
+      "id": "e2-w1",
+      "state": "waiting_user",
+      "since": "2026-10-09T14:00:00Z",
+      "why": "which API? — answers: v1 | v2"
+    }
+  ],
+  "in_review": [
+    {
+      "repo": "o/r",
+      "count": 1,
+      "oldest": "e1-w1",
+      "oldest_since": "2026-10-09T12:00:00Z"
+    }
+  ],
+  "dead_letters": [
+    {
+      "id": "e1-w2",
+      "error": "go test ./... fails: no such file"
+    }
+  ],
+  "paused_repos": [
+    "o/r@main"
+  ],
+  "epics": [
+    {
+      "id": "e1",
+      "state": "planned",
+      "since": "2026-10-09T12:00:00Z",
+      "rechecks": 0
+    },
+    {
+      "id": "e2",
+      "state": "checking",
+      "since": "2026-10-09T13:00:00Z",
+      "rechecks": 1
+    }
+  ],
+  "agents": [
+    {
+      "name": "factory:e1-s1:orchestrator",
+      "id": "00000002",
+      "task": "e1-s1",
+      "state": "running",
+      "context": 54,
+      "unread": 2,
+      "oldest_unread": "2026-10-09T14:40:00Z"
+    },
+    {
+      "name": "factory:e1-w1:babysitter",
+      "id": "",
+      "task": "e1-w1",
+      "state": "running",
+      "context": null,
+      "unread": 0
+    },
+    {
+      "name": "factory:e2-s1:orchestrator",
+      "id": "",
+      "task": "e2-s1",
+      "state": "stopped",
+      "context": null,
+      "unread": 0
+    }
+  ],
+  "open_prs": [
+    {
+      "id": "e1-w1",
+      "url": "https://github.com/o/r/pull/41",
+      "state": "in_review",
+      "unanswered": 2,
+      "merge_hold": "a reviewer requested changes"
+    }
+  ],
+  "errors": [
+    "e9: claude agents: exit status 1"
+  ],
+  "problems": []
+}

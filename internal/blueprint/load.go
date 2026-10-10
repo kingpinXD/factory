@@ -97,9 +97,7 @@ func Current(ctx context.Context, brain string, live []EntityState, n notify.Not
 		return b, nil, clearDM(brain)
 	}
 
-	goodData, goodErr := os.ReadFile(GoodPath(brain))
-	good, goodProblems := check(goodData, goodErr, brain, live)
-	usable := good != nil && len(goodProblems) == 0
+	good, usable := lastGood(brain, live)
 	text := fmt.Sprintf("factory: blueprint.yaml fails factory check (%d problems, first: %s). ", len(problems), problems[0])
 	if usable {
 		text += "The tick runs on the last good copy."
@@ -110,9 +108,30 @@ func Current(ctx context.Context, brain string, live []EntityState, n notify.Not
 		problems = append(problems, Problem{Rule: "dm", Message: err.Error()})
 	}
 	if !usable {
-		return nil, problems, errors.New("blueprint.yaml fails its check and there is no usable last good copy")
+		return nil, problems, errNoGood
 	}
 	return good, problems, nil
+}
+
+var errNoGood = errors.New("blueprint.yaml fails its check and there is no usable last good copy")
+
+// lastGood returns the last good copy when it still passes its check.
+func lastGood(brain string, live []EntityState) (*Blueprint, bool) {
+	data, err := os.ReadFile(GoodPath(brain))
+	good, problems := check(data, err, brain, live)
+	return good, good != nil && len(problems) == 0
+}
+
+// Running returns the blueprint the tick runs on, picked as Current picks
+// it, for a command that only reads: it saves no good copy and sends no DM.
+func Running(brain string, live []EntityState) (*Blueprint, error) {
+	if b, problems := Check(brain, live); len(problems) == 0 {
+		return b, nil
+	}
+	if good, ok := lastGood(brain, live); ok {
+		return good, nil
+	}
+	return nil, errNoGood
 }
 
 func saveGood(brain string, data []byte) error {

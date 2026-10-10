@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Written by factory launchd install; factory launchd remove deletes it. -->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.tanmay.factory-tick</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/me/.local/bin/factory</string>
+		<string>tick</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>FACTORY_BRAIN</key>
+		<string>/Users/me/.agents</string>
+		<key>PATH</key>
+		<string>/Users/me/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StartInterval</key>
+	<integer>60</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/me/.factory/logs/tick.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/me/.factory/logs/tick.log</string>
+</dict>
+</plist>

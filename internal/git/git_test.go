@@ -365,6 +365,26 @@ func TestBadIDsTouchNothing(t *testing.T) {
 	}
 }
 
+// A registry file with no Path gives an empty clone path: git -C "" would
+// run in the current folder.
+func TestAClonePathThatIsNotAbsoluteTouchesNothing(t *testing.T) {
+	for _, clone := range []string{"", "src/r"} {
+		f := &proc.Fake{}
+		c := Client{Runner: f}
+		_, werr := c.Worktree(context.Background(), clone, "main", "e1-w1")
+		_, cerr := c.Cleanup(context.Background(), clone, "e1-w1", 0, "")
+		lerr := c.Clone(context.Background(), "o/r", clone)
+		for _, err := range []error{werr, cerr, lerr} {
+			if want := fmt.Sprintf("clone path %q is not absolute", clone); err == nil || err.Error() != want {
+				t.Errorf("err = %v, want %q", err, want)
+			}
+		}
+		if len(f.Calls()) != 0 {
+			t.Errorf("ran git with clone path %q: %v", clone, f.Calls())
+		}
+	}
+}
+
 func TestCleanupAfterMergeDoesNotFetchAHeadItHas(t *testing.T) {
 	clone, origin := userClone(t)
 	path, err := execClient().Worktree(context.Background(), clone, "main", "w1")

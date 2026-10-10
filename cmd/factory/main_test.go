@@ -56,23 +56,14 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestRunKnownCommandIsNotImplemented(t *testing.T) {
+func TestEveryCommandHasAHandler(t *testing.T) {
 	for _, cmd := range plannedCommands {
-		if _, ok := handlers[cmd]; ok {
-			continue
+		if _, ok := handlers[cmd]; !ok {
+			t.Errorf("%s has no handler", cmd)
 		}
-		t.Run(cmd, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if code := run([]string{cmd, "extra"}, &stdout, &stderr); code != 1 {
-				t.Fatalf("exit code = %d, want 1", code)
-			}
-			if want := "not implemented yet: " + cmd; !strings.Contains(stderr.String(), want) {
-				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
-			}
-			if stdout.Len() != 0 {
-				t.Errorf("stdout = %q, want empty", stdout.String())
-			}
-		})
+	}
+	if len(handlers) != len(plannedCommands) {
+		t.Errorf("%d handlers for %d commands", len(handlers), len(plannedCommands))
 	}
 }
 

@@ -80,17 +80,30 @@ type transcript struct {
 // usage-limit message; they carry no token counts.
 const synthetic = "<synthetic>"
 
-// readTranscript reads the session's transcript, which Claude Code keeps at
+// ErrNoTranscript means Claude Code has not written the session's transcript
+// yet, as just after it starts.
+var ErrNoTranscript = errors.New("no transcript")
+
+// transcriptPath returns the session's transcript, which Claude Code keeps at
 // <Home>/.claude/projects/<its folder, encoded>/<sessionID>.jsonl.
-func (c Client) readTranscript(ctx context.Context, sessionID string) (transcript, error) {
+func (c Client) transcriptPath(sessionID string) (string, error) {
 	paths, err := filepath.Glob(filepath.Join(c.Home, ".claude", "projects", "*", sessionID+".jsonl"))
+	if err != nil {
+		return "", err
+	}
+	if len(paths) == 0 {
+		return "", fmt.Errorf("%w for session %s", ErrNoTranscript, sessionID)
+	}
+	return paths[0], nil
+}
+
+// readTranscript reads what the session's transcript says about it now.
+func (c Client) readTranscript(ctx context.Context, sessionID string) (transcript, error) {
+	path, err := c.transcriptPath(sessionID)
 	if err != nil {
 		return transcript{}, err
 	}
-	if len(paths) == 0 {
-		return transcript{}, fmt.Errorf("no transcript for session %s", sessionID)
-	}
-	f, err := os.Open(paths[0])
+	f, err := os.Open(path)
 	if err != nil {
 		return transcript{}, err
 	}
@@ -117,7 +130,7 @@ func (c Client) readTranscript(ctx context.Context, sessionID string) (transcrip
 		}
 		var l transcriptLine
 		if err := json.Unmarshal(raw, &l); err != nil {
-			return transcript{}, fmt.Errorf("%s line %d: %w", paths[0], n, err)
+			return transcript{}, fmt.Errorf("%s line %d: %w", path, n, err)
 		}
 		t.add(l)
 	}

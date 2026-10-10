@@ -156,6 +156,7 @@ func TestTokenIn(t *testing.T) {
 func TestAnEmptyGHTokenIsReadFromTheSecretsAndNeverPrinted(t *testing.T) {
 	for _, line := range []string{`export GH_TOKEN="ghp_secret123"`, "GH_TOKEN=ghp_secret123"} {
 		brain := testBrain(t)
+		fakeDeps(t)
 		if err := os.MkdirAll(filepath.Join(brain, "connectors"), 0o755); err != nil {
 			t.Fatal(err)
 		}

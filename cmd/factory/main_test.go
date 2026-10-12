@@ -101,7 +101,7 @@ func TestRunCheck(t *testing.T) {
 	if code := run([]string{"check"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit code = %d, want 0; stdout %q, stderr %q", code, stdout.String(), stderr.String())
 	}
-	if want := "ok: " + filepath.Join(brain, "factory", "blueprint.yaml") + "\n"; stdout.String() != want {
+	if want := "ok: " + filepath.Join(brain, "factory", "blueprint.yaml") + " (5 machines, 26 states, 26 transitions)\n"; stdout.String() != want {
 		t.Errorf("stdout = %q, want %q", stdout.String(), want)
 	}
 }

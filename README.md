@@ -79,6 +79,9 @@ factory lease-ok <set-id> <lease>
 
 # Does the repo work the tick queued.
 factory repo-worker
+
+# Prints the module version and the git commit the binary was built from; a missing part prints unknown. factory --version does the same.
+factory version
 ```
 
 ## `factory status --json`

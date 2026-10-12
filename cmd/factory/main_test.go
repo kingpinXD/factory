@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -13,6 +14,7 @@ var plannedCommands = []string{
 	"add", "tick", "status", "answer", "retry", "stop", "replan", "check",
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
+	"version",
 }
 
 func TestRunHelpListsEveryCommand(t *testing.T) {
@@ -64,6 +66,74 @@ func TestEveryCommandHasAHandler(t *testing.T) {
 	}
 	if len(handlers) != len(plannedCommands) {
 		t.Errorf("%d handlers for %d commands", len(handlers), len(plannedCommands))
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	t.Setenv("FACTORY_BRAIN", t.TempDir())
+	old := readBuildInfo
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{
+			Main:     debug.Module{Version: "v1.2.3"},
+			Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}},
+		}, true
+	}
+	t.Cleanup(func() { readBuildInfo = old })
+	for _, name := range []string{"version", "--version"} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{name}, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit code = %d, want 0", code)
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want empty", stderr.String())
+			}
+			if got, want := stdout.String(), "factory v1.2.3 abc123\n"; got != want {
+				t.Errorf("stdout = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestRunVersionRejectsArguments(t *testing.T) {
+	t.Setenv("FACTORY_BRAIN", t.TempDir())
+	for _, name := range []string{"version", "--version"} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{name, "extra"}, &stdout, &stderr); code != 2 {
+				t.Fatalf("exit code = %d, want 2", code)
+			}
+			if !strings.Contains(stderr.String(), "usage: factory version") {
+				t.Errorf("stderr = %q, want the usage line", stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+}
+
+func TestVersionLine(t *testing.T) {
+	vcsTime := debug.BuildSetting{Key: "vcs.time", Value: "2026-10-12T00:00:00Z"}
+	cases := []struct {
+		name string
+		info *debug.BuildInfo
+		ok   bool
+		want string
+	}{
+		{"full", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}, Settings: []debug.BuildSetting{vcsTime, {Key: "vcs.revision", Value: "abc123"}}}, true, "factory v1.2.3 abc123"},
+		{"no revision", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}, Settings: []debug.BuildSetting{vcsTime}}, true, "factory v1.2.3 unknown"},
+		{"empty revision", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}, Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: ""}}}, true, "factory v1.2.3 unknown"},
+		{"devel version", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}}}, true, "factory unknown abc123"},
+		{"empty version", &debug.BuildInfo{Main: debug.Module{Version: ""}, Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}}}, true, "factory unknown abc123"},
+		{"no build info", nil, false, "factory unknown unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := versionLine(c.info, c.ok); got != c.want {
+				t.Errorf("versionLine = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 

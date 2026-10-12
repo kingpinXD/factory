@@ -100,6 +100,10 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
       "seven_day": {"used_percentage": 61, "resets_at": 1791817200}
     },
     "resets_at": "…", "weekly": true,    // the reset a pause waits for; left out when none
+    "held": 10800000000000,              // time in this state while the factory was idle, not counted toward its timeout
+                                         // nanoseconds; only holds that ended; left out at 0
+    "held_since": "…",                   // when the current hold began, or `since` if it began in an earlier state
+                                         // left out when none
     "probed_at": "…", "errors": ["…"]    // left out when none
   },
   "sessions": {"running": 2, "by_repo": {"o/r": 2}},   // sessions not stopped, dead or finished; a planner's are in no repo

@@ -53,7 +53,8 @@ factory heartbeat <set-id> <lease>
 factory inbox <id> [--ack <seq>] [--read-only]
 
 # Lists a repo's in-flight items. --files keeps those touching the paths or whose files are unknown.
-factory query items --repo <owner/repo> [--files <path>...]
+# --state keeps those in one of the given states (repeat it for more); an unknown state is an error.
+factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...
 
 # Exits 0 when the factory's plans let a PR merge, 1 when not yet or unknown, and prints why.
 factory may-merge <pr-url>

@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -440,6 +442,135 @@ func TestQueryItems(t *testing.T) {
 	}
 	if evs := logOf(t, dirs["eb-w4"]); evs[len(evs)-1].Kind != "error" {
 		t.Errorf("the edit after end was not logged as an error: %+v", evs[len(evs)-1])
+	}
+}
+
+func TestQueryItemsState(t *testing.T) {
+	brain, dirs := eventsBrain(t)
+	matchTick(t, brain)
+	shipped := writeShipped(t, brain)
+	bp := blueprint.Path(brain)
+	explore := filepath.Join(dirs["eb-w4"], "explore.md")
+	writeFile(t, explore, "## Files\ndocs/readme.md\n")
+	if code, _, stderr := cli(t, "event", "eb-w4", "end", "--file", explore); code != 0 {
+		t.Fatal(stderr)
+	}
+
+	eaW1 := "id: ea-w1\nepic: ea\nstate: implementing\nissue: 10\nfiles: ? (not explored yet)\n"
+	ebW1 := "id: eb-w1\nepic: eb\nstate: queued\nissue: 20\nfiles: ? (not explored yet)\n"
+	ebW4 := "id: eb-w4\nepic: eb\nstate: implementing\nissue: 40\nfiles: docs/readme.md\n"
+	query := func(extra ...string) (int, string, string) {
+		return cli(t, append([]string{"query", "items", "--repo", "o/r"}, extra...)...)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--state", "implementing"}, eaW1 + "\n" + ebW4},
+		{[]string{"--state", "queued"}, ebW1},
+		{[]string{"--state", "queued", "--state", "implementing"}, eaW1 + "\n" + ebW1 + "\n" + ebW4},
+		{[]string{"--state", "implementing", "--files", "a.go"}, eaW1},
+		{[]string{"--files", "docs/readme.md", "--state", "queued"}, ebW1},
+		{[]string{"--state", "in_review"}, "no matching in-flight items in o/r\n"},
+	} {
+		if code, stdout, stderr := query(c.args...); code != 0 || stdout != c.want || stderr != "" {
+			t.Errorf("query %v = %d, %q, %q; want %q", c.args, code, stdout, stderr, c.want)
+		}
+	}
+
+	usage := "usage: factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...\n"
+	valid := "blocked, exploring, implementing, in_review, merging, needs_you, plan_review, planning, pr_open, queued, rechecking, starting, verifying, waiting_user"
+	for _, c := range []struct {
+		args []string
+		bad  string
+	}{
+		{[]string{"--state", "merged"}, "merged"},
+		{[]string{"--state", "nope"}, "nope"},
+		{[]string{"--state", "Implementing"}, "Implementing"},
+		{[]string{"--state", "queued", "--state", "nope"}, "nope"},
+	} {
+		want := "factory query: unknown state \"" + c.bad + "\" (valid: " + valid + ")\n" + usage
+		if code, stdout, stderr := query(c.args...); code != 2 || stdout != "" || stderr != want {
+			t.Errorf("query %v = %d, %q, %q; want 2 and %q", c.args, code, stdout, stderr, want)
+		}
+	}
+	if code, stdout, stderr := query("--state"); code != 2 || stdout != "" || stderr != "factory query: --state needs a state\n"+usage {
+		t.Errorf("query --state with no value = %d, %q, %q", code, stdout, stderr)
+	}
+
+	// The tick runs on the last good copy while the file on disk fails its
+	// check: here it renames queued, where eb-w1 still sits.
+	renamed := strings.Replace(string(shipped), "start: queued", "start: ready", 1)
+	renamed = strings.Replace(renamed, "      queued:\n", "      ready:\n", 1)
+	renamed = strings.Replace(renamed, "{from: queued, to: starting", "{from: ready, to: starting", 1)
+	writeFile(t, bp, renamed)
+	writeFile(t, blueprint.GoodPath(brain), string(shipped))
+	if code, stdout, stderr := query("--state", "queued"); code != 0 || stdout != ebW1 || stderr != "" {
+		t.Errorf("query --state queued on the last good copy = %d, %q, %q; want %q", code, stdout, stderr, ebW1)
+	}
+	if code, _, stderr := query("--state", "ready"); code != 2 || !strings.HasPrefix(stderr, "factory query: unknown state \"ready\" (valid: "+valid+")\n") {
+		t.Errorf("query --state ready on the last good copy = %d, %q; want the unknown state", code, stderr)
+	}
+
+	if err := os.Remove(blueprint.GoodPath(brain)); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout, stderr := query("--state", "queued"); code != 1 || stdout != "" || !strings.HasPrefix(stderr, "factory query: ") || !strings.Contains(stderr, "blueprint.yaml") {
+		t.Errorf("query --state with no usable blueprint = %d, %q, %q; want 1 and a blueprint error", code, stdout, stderr)
+	}
+
+	// The tick leaves out an item it cannot load, so the renamed file passes
+	// its check even though eb-w1's status.json still says queued.
+	writeFile(t, store.InputsPath(dirs["eb-w1"]), "id: eb-w1\nnope: 1\n")
+	if code, stdout, stderr := query("--state", "ready"); code != 0 || stdout != "no matching in-flight items in o/r\n" || stderr != "" {
+		t.Errorf("query --state ready with eb-w1 unloadable = %d, %q, %q; want the renamed file used", code, stdout, stderr)
+	}
+	if code, _, stderr := query("--state", "queued"); code != 2 || !strings.HasPrefix(stderr, "factory query: unknown state \"queued\"") {
+		t.Errorf("query --state queued with eb-w1 unloadable = %d, %q; want the unknown state", code, stderr)
+	}
+	if err := os.Remove(bp); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := query("--state", "queued")
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "factory query: ") || !strings.Contains(stderr, "blueprint.yaml") {
+		t.Errorf("query --state without a blueprint = %d, %q, %q; want 1 and a blueprint error", code, stdout, stderr)
+	}
+	if code, stdout, stderr := query(); code != 0 || stdout != eaW1+"\n"+ebW1+"\n"+ebW4 {
+		t.Errorf("query without --state or a blueprint = %d, %q, %q", code, stdout, stderr)
+	}
+}
+
+// matchTick gives each entity of brain the inputs.yaml and transition the
+// tick reads, so the tick sees each one in its status.json state.
+func matchTick(t *testing.T, brain string) {
+	t.Helper()
+	ix, err := store.ReadIndex(brain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, e := range ix {
+		st, err := store.ReadStatus(e.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var in any
+		switch e.Kind {
+		case blueprint.MachineEpic:
+			in = &reconcile.EpicInputs{ID: id, Input: "x", Kind: "text"}
+		case blueprint.MachineSet:
+			in = &reconcile.SetInputs{ID: id, Epic: e.Epic}
+		case blueprint.MachineWork:
+			in = &reconcile.WorkInputs{ID: id, Epic: e.Epic, Repo: st.Repo, Base: "main", Issue: st.Issue}
+		}
+		if err := store.WriteInputs(e.Dir, in); err != nil {
+			t.Fatal(err)
+		}
+		if st.State == "" {
+			continue
+		}
+		if _, err := events.Append(store.EventsPath(e.Dir), events.Event{Kind: events.KindTransition, To: st.State, Trigger: "tick", TriggerRef: "fixture"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

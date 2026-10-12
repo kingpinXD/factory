@@ -172,8 +172,8 @@ func TestAccountGoesStaleOnAnOldFigure(t *testing.T) {
 	w.tickAccount()
 	w.at(20 * time.Minute)
 	w.tickAccount()
-	if st := w.accountStatus(); st.State != "stale" || st.Usage != nil {
-		t.Errorf("account = %+v, want stale with no figure", st)
+	if st := w.accountStatus(); st.State != "stale" || st.Usage == nil || !st.Usage.WrittenAt.Equal(t0) {
+		t.Errorf("account = %+v, want stale, keeping the old figure to show its age", st)
 	}
 	if got := w.called("claude stop"); len(got) != 0 {
 		t.Errorf("stopped sessions on a stale figure: %q", got)
@@ -542,6 +542,8 @@ func TestNothingStartsOnceAnotherTicksAccountStepPaused(t *testing.T) {
 func TestAStaleFigureWithNoSessionRunningDMsNobody(t *testing.T) {
 	w := newWorld(t)
 	w.realAccount()
+	// Open work with no session: an epic waiting on the user.
+	w.epic("e1", stateNeedsYou)
 	w.usage("u1", t0, 50, 40, t0.Add(time.Hour), t0.Add(72*time.Hour))
 	for m := range 20 {
 		w.at(time.Duration(m) * time.Minute)
@@ -549,5 +551,132 @@ func TestAStaleFigureWithNoSessionRunningDMsNobody(t *testing.T) {
 	}
 	if st := w.accountStatus(); st.State != "stale" || len(w.dms) != 0 {
 		t.Errorf("account %s, DMs %q; want stale and no DM with no factory session running", st.State, w.dms)
+	}
+}
+
+// failProbe makes the usage probe fail to start, so no fresh figure comes.
+func (w *world) failProbe(fail bool) {
+	orig := w.fake.Respond
+	w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+		if fail && c.Name == "tmux" {
+			return nil, &proc.Error{Cmd: "tmux", Err: errors.New("exit status 1")}
+		}
+		return orig(c)
+	}
+}
+
+// With no factory entity open and no factory session live, nothing prompts
+// the probe and the figure ages. The account stays as it is instead of going
+// stale, then paused, then back every 45 minutes; its status keeps the last
+// figure, so factory status shows its age. Once an entity opens, the probe is
+// prompted and its figure decides.
+func TestAnIdleFactoryKeepsItsAccountState(t *testing.T) {
+	w := newWorld(t)
+	w.realAccount()
+	w.listSession("someone-else", 4103, "working")
+	w.usage("u1", t0, 30, 40, t0.Add(5*time.Hour), t0.Add(72*time.Hour))
+	for m := range 180 {
+		w.at(time.Duration(m) * time.Minute)
+		w.tickAccount()
+	}
+	if got := w.accountMoves(); !reflect.DeepEqual(got, []string{"→ok"}) {
+		t.Fatalf("account moves = %v, want none while the factory is idle", got)
+	}
+	if got := w.called("tmux"); len(got) != 0 {
+		t.Errorf("drove the probe while idle: %q", got)
+	}
+	if st := w.accountStatus(); st.Usage == nil || !st.Usage.WrittenAt.Equal(t0) {
+		t.Errorf("account usage = %+v, want the last figure, written at t0", st.Usage)
+	}
+
+	w.epic("e1", "checking")
+	w.at(180 * time.Minute)
+	w.tickAccount()
+	if got := w.accountMoves(); !reflect.DeepEqual(got, []string{"→ok", "ok→stale"}) {
+		t.Fatalf("account moves = %v, want stale once an epic opens", got)
+	}
+	if got := w.called("claude --bg"); len(got) != 0 {
+		t.Fatalf("started %q on a stale figure", got)
+	}
+	w.at(181 * time.Minute)
+	w.tickAccount()
+	if got := w.called("tmux"); !hasText(got, "tmux new-session") || !hasText(got, "tmux send-keys -t factory-probe ok Enter") {
+		t.Fatalf("tmux calls = %q, want the probe started, then prompted", got)
+	}
+	w.usage("probe", w.now, 30, 40, t0.Add(5*time.Hour), t0.Add(72*time.Hour))
+	w.at(182 * time.Minute)
+	w.tickAccount()
+	if got := w.accountMoves(); last(got) != "stale→ok" || len(w.called("claude --bg")) != 1 {
+		t.Errorf("account moves = %v, starts %q; want ok and the planner started", got, w.called("claude --bg"))
+	}
+}
+
+// Idle, a figure at the pause point stops nothing, since nothing runs: the
+// account only goes near its limit, which holds back any new work. A live
+// factory session is work, even with every entity ended.
+func TestWhatCountsAsIdleForTheAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		live  bool
+		used  float64
+		moves []string
+	}{
+		{"idle at the pause point", false, 90, []string{"→ok", "ok→near_limit"}},
+		{"a live factory session, figure aging", true, 30, []string{"→ok", "ok→stale"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.realAccount()
+			if tc.live {
+				w.listSession("factory:e0-s1:orchestrator", 4104, "done")
+			}
+			w.usage("u1", t0, tc.used, 40, t0.Add(5*time.Hour), t0.Add(72*time.Hour))
+			for m := range 20 {
+				w.at(time.Duration(m) * time.Minute)
+				w.tickAccount()
+			}
+			if got := w.accountMoves(); !reflect.DeepEqual(got, tc.moves) {
+				t.Errorf("account moves = %v, want %v", got, tc.moves)
+			}
+		})
+	}
+}
+
+// A stale account whose work all ends stays stale while the factory is idle:
+// its 30-minute timeout does not run, so it never pauses for nothing. When
+// work opens again, the clock goes on from where it stopped.
+func TestAStaleAccountDoesNotPauseWhileTheFactoryIsIdle(t *testing.T) {
+	w := newWorld(t)
+	w.realAccount()
+	w.failProbe(true)
+	w.epic("e1", stateNeedsYou)
+	w.usage("u1", t0, 30, 40, t0.Add(5*time.Hour), t0.Add(72*time.Hour))
+	for m := range 26 {
+		w.at(time.Duration(m) * time.Minute)
+		w.tickAccount()
+	}
+	w.append(w.dir("e1"), events.Event{Kind: events.KindTransition, At: w.now, From: stateNeedsYou, To: "cancelled", Trigger: "user", TriggerRef: "fixture"})
+	for m := 26; m < 180; m++ {
+		w.at(time.Duration(m) * time.Minute)
+		w.tickAccount()
+	}
+	if got := w.accountMoves(); !reflect.DeepEqual(got, []string{"→ok", "ok→stale"}) {
+		t.Fatalf("account moves = %v, want stale and no pause while idle", got)
+	}
+
+	// Stale from t0+15m until the first idle tick at t0+26m: 19 of its 30
+	// minutes are left.
+	w.epic("e2", stateNeedsYou)
+	for m := 180; m < 199; m++ {
+		w.at(time.Duration(m) * time.Minute)
+		w.tickAccount()
+	}
+	if got := w.accountMoves(); last(got) != "ok→stale" {
+		t.Fatalf("account moves = %v, want still stale 18 minutes into the open work", got)
+	}
+	w.at(199 * time.Minute)
+	w.tickAccount()
+	if got := w.accountMoves(); last(got) != "stale→paused" {
+		t.Errorf("account moves = %v, want paused once 30 minutes of open work passed stale", got)
 	}
 }

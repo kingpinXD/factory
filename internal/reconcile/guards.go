@@ -46,8 +46,8 @@ var guards = map[string]guard{
 	"nothing_startable": (*run).nothingStartable,
 	"handed_back":       (*run).handedBack,
 	// session
-	"listed_working":  func(r *run, e *entity) (bool, string, error) { return r.listedState(e, listedWorking) },
-	"turn_ended":      func(r *run, e *entity) (bool, string, error) { return r.listedState(e, listedTurnEnded) },
+	"listed_working":  (*run).listedWorking,
+	"turn_ended":      (*run).sessionTurnEnded,
 	"no_pid":          (*run).noPID,
 	"factory_stopped": (*run).factoryStopped,
 	"work_finished":   (*run).workFinished,
@@ -301,7 +301,8 @@ func (r *run) outputComponent(step string) (blueprint.Component, bool) {
 }
 
 // verdict: the verify step ended and the first line under its ## Verdict
-// starts with want.
+// starts with want: "pass" also takes "pass with notes", the verdict of the
+// checks-only verify after three failed ones.
 func (r *run) verdict(e *entity, want string) (bool, string, error) {
 	end, ok, err := r.ended(e, verifyStep)
 	if !ok || err != nil {
@@ -534,10 +535,27 @@ func (r *run) handedBack(e *entity) (bool, string, error) {
 	return false, "", nil
 }
 
-// listedState: the session is listed with a pid, in state.
-func (r *run) listedState(e *entity, state string) (bool, string, error) {
+// listedWorking: the session is listed with a pid, working, and its
+// transcript does not show its turn ended.
+func (r *run) listedWorking(e *entity) (bool, string, error) {
 	s, ok := r.findSession(e.session.Name)
-	return ok && s.Live() && s.State == state, "", nil
+	return ok && s.Live() && s.State == listedWorking && e.turnEndedAt.IsZero(), "", nil
+}
+
+// transcriptRef starts the ref of a turn_ended move that only the session's
+// transcript showed.
+const transcriptRef = "transcript:"
+
+// sessionTurnEnded: the session's turn ended; the ref names the transcript
+// record when the listing still says working.
+func (r *run) sessionTurnEnded(e *entity) (bool, string, error) {
+	if !r.turnEnded(e) {
+		return false, "", nil
+	}
+	if !e.turnEndedAt.IsZero() {
+		return true, transcriptRef + e.turnEndedAt.UTC().Format(time.RFC3339Nano), nil
+	}
+	return true, "", nil
 }
 
 // noPID: the session has been listed with no pid, or not at all, for

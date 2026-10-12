@@ -252,6 +252,9 @@ links: []
 	if got := w.called("git -C " + filepath.Join(w.home, "src", "r") + " cat-file"); len(got) != 0 {
 		t.Errorf("cleanup checked a merged SHA: %v", got)
 	}
+	if got := w.called("git -C " + filepath.Join(w.home, "src", "r") + " ls-remote"); len(got) != 0 {
+		t.Errorf("cleanup of cancelled work looked at the branch on origin: %v", got)
+	}
 	if done := last(w.log("e1-w1")); done.Kind != events.KindDone || done.Key != repoResultKey(last(reqs)) {
 		t.Errorf("worker answer = %+v", done)
 	}

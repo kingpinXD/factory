@@ -137,7 +137,9 @@ func (j repoJob) worktree(ctx context.Context, g git.Client) (string, error) {
 }
 
 // cleanup removes the item's worktree and local branch, keeping either one
-// that holds work its merged head does not contain.
+// that holds work its merged head does not contain. Once its PR merged, it
+// also deletes the factory branch on origin, unless the item adopted the PR:
+// that branch is the user's.
 func (j repoJob) cleanup(ctx context.Context, g git.Client) (string, error) {
 	st, err := store.ReadStatus(j.dir)
 	if err != nil {
@@ -151,8 +153,23 @@ func (j repoJob) cleanup(ctx context.Context, g git.Client) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if j.prMerged() && j.in.PR == 0 {
+		remoteKept, err := g.DeleteMergedBranch(ctx, j.in.Clone, j.id, st.HeadSHA)
+		if err != nil {
+			return "", err
+		}
+		if remoteKept {
+			kept = append(kept, "origin/"+git.Branch(j.id))
+		}
+	}
 	if len(kept) > 0 {
 		return "cleanup: kept " + strings.Join(kept, ", ") + ": not in the merged head " + st.HeadSHA, nil
 	}
 	return cleanupRequest, nil
+}
+
+// prMerged reports whether the item's PR merged: the tick logged its move to
+// merged before it asked for this cleanup.
+func (j repoJob) prMerged() bool {
+	return slices.ContainsFunc(j.evs, func(ev events.Event) bool { return ev.Kind == events.KindTransition && ev.To == stateMerged })
 }

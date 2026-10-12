@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
@@ -36,6 +37,9 @@ type entity struct {
 	// reads are the PR's threads, checks and comments, read once a tick
 	// when the merge check or the babysitter needs them.
 	reads *prReads
+	// turnEndedAt is, for a live session not listed as done, when its
+	// transcript shows its turn ended; zero when it does not.
+	turnEndedAt time.Time
 
 	work    *WorkInputs
 	set     *SetInputs

@@ -355,7 +355,7 @@ func (r *run) advance(e *entity) {
 		}
 		seen[e.cur.State] = true
 	}
-	next, fired := fsm.Timeout(e.m, e.cur, r.now, !r.accountOK)
+	next, fired := fsm.Timeout(e.m, e.cur, r.now, r.held(e))
 	if !fired {
 		e.cur = next
 		return
@@ -363,6 +363,15 @@ func (r *run) advance(e *entity) {
 	if _, err := r.move(e, next, blueprint.TriggerTick, fmt.Sprintf("timeout:%d", r.n)); err != nil {
 		r.fail("%s: %v", e.id, err)
 	}
+}
+
+// held reports whether e's clock is held back this tick: work's while the
+// account holds work back, the account's own while the factory is idle.
+func (r *run) held(e *entity) bool {
+	if e.entry.Kind == blueprint.MachineAccount {
+		return r.sup.usage.idle
+	}
+	return !r.accountOK
 }
 
 // step tries each move out of the entity's state, in blueprint order, and

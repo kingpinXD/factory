@@ -54,7 +54,8 @@ func usageDir(brain string) string { return filepath.Join(store.Factory(brain), 
 type AccountStatus struct {
 	State string    `json:"state"`
 	Since time.Time `json:"since,omitzero"`
-	// Usage is the newest usage figure younger than the stale window.
+	// Usage is the newest usage figure read. Once it is older than the stale
+	// window the account goes by none, but it is kept to show its age.
 	Usage *Figure `json:"usage,omitempty"`
 	// ResetsAt is the reset a pause waits for; Weekly is set when it is the
 	// 7-day limit's.
@@ -62,6 +63,10 @@ type AccountStatus struct {
 	Weekly   bool      `json:"weekly,omitempty"`
 	// ProbedAt is when the usage probe was last prompted.
 	ProbedAt time.Time `json:"probed_at,omitzero"`
+	// Held and HeldSince keep how long the state's clock was held while the
+	// factory was idle, as an entity's status.json does.
+	Held      time.Duration `json:"held,omitempty"`
+	HeldSince time.Time     `json:"held_since,omitzero"`
 	// Errors are what went wrong in the last step that it went on past.
 	Errors []string `json:"errors,omitempty"`
 }
@@ -101,6 +106,9 @@ type usage struct {
 	fig *Figure
 	// limit is a factory session showing a usage-limit message.
 	limit *limitSeen
+	// idle is set when no factory entity is open and no factory session is
+	// live: nothing prompts the probe then, so an ageing figure means nothing.
+	idle bool
 }
 
 type limitSeen struct {
@@ -128,11 +136,11 @@ func (a PlanAccount) Step(ctx context.Context, now time.Time, dryRun bool) (bool
 	if r.tiers, err = blueprint.ReadTiers(d.Brain); err != nil {
 		r.fail("usage probe: %v", err)
 	}
-	acct, err := r.loadAccount()
-	if err != nil {
+	if err := r.readUsage(); err != nil {
 		return false, err
 	}
-	if err := r.readUsage(); err != nil {
+	acct, err := r.loadAccount()
+	if err != nil {
 		return false, err
 	}
 	before := acct.cur.State
@@ -154,7 +162,9 @@ func goodBlueprint(brain string) (*blueprint.Blueprint, error) {
 	return b, nil
 }
 
-// loadAccount reads the account's log; a new account starts in ok.
+// loadAccount reads the account's log, and the hold on its state's clock
+// from its status while it is about the same state entry; a new account
+// starts in ok.
 func (r *run) loadAccount() (*entity, error) {
 	dir := accountDir(r.d.Brain)
 	evs, err := events.Read(store.EventsPath(dir))
@@ -164,6 +174,9 @@ func (r *run) loadAccount() (*entity, error) {
 	e := &entity{id: accountID, entry: store.Entry{Kind: blueprint.MachineAccount, Dir: dir}, m: r.b.Machines[blueprint.MachineAccount], evs: evs}
 	if t, ok := lastTransition(evs); ok {
 		e.cur, e.entered, e.enteredBy = fsm.Cur{State: t.To, Since: t.At}, t.Seq, t
+		if st := r.sup.usage.st; st.State == t.To && st.Since.Equal(t.At) {
+			e.cur.Held, e.cur.HeldSince = st.Held, st.HeldSince
+		}
 		return e, nil
 	}
 	if !r.dry {
@@ -175,8 +188,8 @@ func (r *run) loadAccount() (*entity, error) {
 	return e, r.logStart(e, blueprint.TriggerTick)
 }
 
-// readUsage reads the account's status, the newest usage figure, and any
-// limit message a factory session shows.
+// readUsage reads the account's status, the newest usage figure, any limit
+// message a factory session shows, and whether the factory is idle.
 func (r *run) readUsage() error {
 	u := &usage{}
 	r.sup.usage = u
@@ -188,7 +201,22 @@ func (r *run) readUsage() error {
 		return err
 	}
 	u.limit = r.limitSeen()
+	u.idle = r.idle()
 	return nil
+}
+
+// idle reports whether the factory has nothing to do: no entity is open and
+// Claude Code lists no live factory session. An unknown listing is not idle.
+func (r *run) idle() bool {
+	live, known := r.factorySessionLive()
+	return known && !live && !r.workExists()
+}
+
+// factorySessionLive reports whether Claude Code lists a live factory
+// session, and whether the listing is known.
+func (r *run) factorySessionLive() (live, known bool) {
+	sessions, known := r.listing()
+	return known && slices.ContainsFunc(sessions, func(s claude.Session) bool { return factorySession(s) && s.Live() }), known
 }
 
 // readAccountStatus reads the account's status.json; the zero status when
@@ -280,18 +308,23 @@ func (r *run) usageUnderLimit(*entity) (bool, string, error) {
 	return true, figureRef(f), nil
 }
 
-// usageStale: no figure is younger than the stale window.
+// usageStale: no figure is younger than the stale window, while the factory
+// is not idle.
 func (r *run) usageStale(*entity) (bool, string, error) {
-	if r.sup.usage.fig != nil {
+	if r.sup.usage.fig != nil || r.sup.usage.idle {
 		return false, "", nil
 	}
 	return true, "stale:" + r.now.Format(time.RFC3339), nil
 }
 
 // usagePause: a figure at or above the pause point, or a factory session
-// showing a limit message.
+// showing a limit message, while the factory is not idle. Idle, the near
+// limit already holds back any new work.
 func (r *run) usagePause(*entity) (bool, string, error) {
 	u := r.sup.usage
+	if u.idle {
+		return false, "", nil
+	}
 	if f := u.fig; f != nil && f.highest(r.now) >= float64(r.b.Values.Usage.Pause) {
 		return true, figureRef(f), nil
 	}
@@ -376,8 +409,7 @@ func (r *run) actOnAccount(acct *entity, before string, p Probe) {
 // that the usage figure is unknown: nothing new starts, and the sessions
 // are stopped as for a pause once the account stays stale for its timeout.
 func (r *run) dmStale(acct *entity) {
-	sessions, known := r.listing()
-	if !known || !slices.ContainsFunc(sessions, func(s claude.Session) bool { return factorySession(s) && s.Live() }) {
+	if live, _ := r.factorySessionLive(); !live {
 		return
 	}
 	v := r.b.Values.Usage
@@ -621,7 +653,11 @@ func (r *run) saveAccount(acct *entity) error {
 		return nil
 	}
 	st := r.sup.usage.st
-	st.State, st.Since, st.Usage, st.Errors = acct.cur.State, acct.cur.Since, r.sup.usage.fig, r.errs
+	st.State, st.Since, st.Errors = acct.cur.State, acct.cur.Since, r.errs
+	st.Held, st.HeldSince = acct.cur.Held, acct.cur.HeldSince
+	if fig := r.sup.usage.fig; fig != nil {
+		st.Usage = fig
+	}
 	if st.State != statePaused && st.State != stateResuming {
 		st.ResetsAt, st.Weekly = time.Time{}, false
 	}

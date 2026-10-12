@@ -46,6 +46,46 @@ func (c Client) LimitHit(ctx context.Context, sessionID string, now time.Time) (
 	return resetsAt, strings.HasPrefix(info.RateLimitType, "seven_day"), true, nil
 }
 
+// TurnEndedAt returns when the session's turn ended, if its transcript's
+// newest record says so: a turn_duration record with no helper still running
+// in the background, whose result would start the next turn. It is zero when
+// any record came after it. Records without a time of their own, which
+// Claude Code rewrites at any moment, do not count.
+func (c Client) TurnEndedAt(ctx context.Context, sessionID string) (time.Time, error) {
+	path, err := c.transcriptPath(sessionID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, err
+	}
+	// A line without its newline is still being written.
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		return time.Time{}, nil
+	}
+	for rest := bytes.TrimSuffix(data, []byte("\n")); len(rest) > 0; {
+		if err := ctx.Err(); err != nil {
+			return time.Time{}, err
+		}
+		i := bytes.LastIndexByte(rest, '\n')
+		raw := rest[i+1:]
+		rest = rest[:max(i, 0)]
+		var l transcriptLine
+		if err := json.Unmarshal(raw, &l); err != nil {
+			return time.Time{}, fmt.Errorf("%s: %w", path, err)
+		}
+		if l.Timestamp.IsZero() {
+			continue
+		}
+		if l.Type == "system" && l.Subtype == "turn_duration" && l.PendingBackgroundAgentCount == 0 {
+			return l.Timestamp, nil
+		}
+		return time.Time{}, nil
+	}
+	return time.Time{}, nil
+}
+
 // transcriptLine holds the fields of a transcript line this package reads.
 type transcriptLine struct {
 	Type           string    `json:"type"`
@@ -66,6 +106,9 @@ type transcriptLine struct {
 			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+	// PendingBackgroundAgentCount is, on a turn_duration record, how many
+	// helpers still run in the background as the turn ends.
+	PendingBackgroundAgentCount int `json:"pendingBackgroundAgentCount"`
 }
 
 // transcript is what a session's transcript says about it now.

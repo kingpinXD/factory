@@ -130,6 +130,10 @@ func TestCallsWaitForTheCloneLock(t *testing.T) {
 	}{
 		{"worktree", func(ctx context.Context, c Client) error { _, err := c.Worktree(ctx, clone, "main", "w1"); return err }},
 		{"cleanup", func(ctx context.Context, c Client) error { _, err := c.Cleanup(ctx, clone, "w1", 7, ""); return err }},
+		{"delete merged branch", func(ctx context.Context, c Client) error {
+			_, err := c.DeleteMergedBranch(ctx, clone, "w1", "abc")
+			return err
+		}},
 		{"clone", func(ctx context.Context, c Client) error { return c.Clone(ctx, "kingpinXD/factory", clone) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -355,7 +359,8 @@ func TestBadIDsTouchNothing(t *testing.T) {
 	c := Client{Runner: f}
 	_, werr := c.Worktree(context.Background(), clone, "main", "x/../foundation")
 	_, cerr := c.Cleanup(context.Background(), clone, "x/../foundation", 0, "")
-	for _, err := range []error{werr, cerr} {
+	_, derr := c.DeleteMergedBranch(context.Background(), clone, "x/../foundation", "abc")
+	for _, err := range []error{werr, cerr, derr} {
 		if err == nil || !strings.Contains(err.Error(), `id "x/../foundation"`) {
 			t.Errorf("err = %v, want the id refused", err)
 		}
@@ -373,8 +378,9 @@ func TestAClonePathThatIsNotAbsoluteTouchesNothing(t *testing.T) {
 		c := Client{Runner: f}
 		_, werr := c.Worktree(context.Background(), clone, "main", "e1-w1")
 		_, cerr := c.Cleanup(context.Background(), clone, "e1-w1", 0, "")
+		_, derr := c.DeleteMergedBranch(context.Background(), clone, "e1-w1", "abc")
 		lerr := c.Clone(context.Background(), "o/r", clone)
-		for _, err := range []error{werr, cerr, lerr} {
+		for _, err := range []error{werr, cerr, derr, lerr} {
 			if want := fmt.Sprintf("clone path %q is not absolute", clone); err == nil || err.Error() != want {
 				t.Errorf("err = %v, want %q", err, want)
 			}
@@ -485,6 +491,83 @@ func TestCleanupOfCancelledWorkRemovesEverything(t *testing.T) {
 	}
 	if after := stateOf(t, clone); after != before {
 		t.Errorf("user clone changed: %+v, was %+v", after, before)
+	}
+}
+
+// remoteTip returns branch's commit on origin, "" when origin has no such
+// branch.
+func remoteTip(t *testing.T, origin, branch string) string {
+	t.Helper()
+	return run(t, "--git-dir", origin, "for-each-ref", "--format=%(objectname)", "refs/heads/"+branch)
+}
+
+func TestDeleteMergedBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// push pushes the item's branch as the work went, and returns the
+		// merged head.
+		push func(t *testing.T, path string) string
+		kept bool
+		tip  func(merged, late string) string
+	}{
+		{
+			name: "merged as pushed",
+			push: func(t *testing.T, path string) string {
+				merged := commit(t, path, "feature.txt", "work\n")
+				run(t, "-C", path, "push", "-q", "origin", "factory/w1")
+				return merged
+			},
+			tip: func(string, string) string { return "" },
+		},
+		{
+			name: "already gone",
+			push: func(t *testing.T, path string) string { return commit(t, path, "feature.txt", "work\n") },
+			tip:  func(string, string) string { return "" },
+		},
+		{
+			name: "pushed to after the merge",
+			push: func(t *testing.T, path string) string {
+				merged := commit(t, path, "feature.txt", "work\n")
+				commit(t, path, "late.txt", "late\n")
+				run(t, "-C", path, "push", "-q", "origin", "factory/w1")
+				return merged
+			},
+			kept: true,
+			tip:  func(_, late string) string { return late },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clone, origin := userClone(t)
+			path, err := execClient().Worktree(context.Background(), clone, "main", "w1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			merged := tc.push(t, path)
+			late := run(t, "-C", path, "rev-parse", "HEAD")
+			// The user's own pre-push hook never runs for the deletion.
+			hook := filepath.Join(clone, ".git", "hooks", "pre-push")
+			write(t, hook, "#!/bin/sh\nexit 1\n")
+			if err := os.Chmod(hook, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			before := stateOf(t, clone)
+
+			for range 2 {
+				kept, err := execClient().DeleteMergedBranch(context.Background(), clone, "w1", merged)
+				if err != nil || kept != tc.kept {
+					t.Fatalf("DeleteMergedBranch = kept %v, err %v; want kept %v", kept, err, tc.kept)
+				}
+			}
+			if got, want := remoteTip(t, origin, "factory/w1"), tc.tip(merged, late); got != want {
+				t.Errorf("origin's factory/w1 = %q, want %q", got, want)
+			}
+			if run(t, "-C", clone, "branch", "--list", "factory/w1") == "" {
+				t.Error("the local branch was deleted")
+			}
+			if after := stateOf(t, clone); after != before {
+				t.Errorf("user clone changed: %+v, was %+v", after, before)
+			}
+		})
 	}
 }
 

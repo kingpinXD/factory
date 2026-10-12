@@ -125,6 +125,41 @@ func (c Client) Cleanup(ctx context.Context, clone, workID string, pr int, merge
 	return c.remove(ctx, clone, WorktreePath(clone, workID), Branch(workID), mergedHeadSHA)
 }
 
+// DeleteMergedBranch deletes a work item's branch on origin once its PR
+// merged, while the branch still points at the merged head. A branch already
+// gone counts as deleted; one pushed to since the merge is kept, and kept is
+// set. The user's pre-push hook does not run for the deletion.
+func (c Client) DeleteMergedBranch(ctx context.Context, clone, workID, mergedHeadSHA string) (kept bool, err error) {
+	if err := checkWork(clone, workID); err != nil {
+		return false, err
+	}
+	unlock, err := lock(ctx, clone)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	branch := Branch(workID)
+	ref := "refs/heads/" + branch
+	out, err := c.git(ctx, "-C", clone, "ls-remote", "origin", ref)
+	if err != nil {
+		return false, err
+	}
+	var tip string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if sha, name, _ := strings.Cut(line, "\t"); name == ref {
+			tip = sha
+		}
+	}
+	switch tip {
+	case "":
+		return false, nil
+	case mergedHeadSHA:
+		_, err = c.git(ctx, "-C", clone, "push", "--no-verify", "origin", "--delete", branch)
+		return false, err
+	}
+	return true, nil
+}
+
 // checkWork refuses a work item's clone path or id that could make git run
 // somewhere else than next to the user's clone.
 func checkWork(clone, workID string) error {

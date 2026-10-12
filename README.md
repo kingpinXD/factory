@@ -84,7 +84,7 @@ factory repo-worker
 ## `factory status --json`
 
 One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory status` without
-`--json` prints the same report as text, with ages counted to `at`.
+`--json` prints the same report as text, with ages counted to `at` and at most 10 items per section.
 
 ```jsonc
 {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,30 @@ func TestStatusOfAnEmptyFactory(t *testing.T) {
 	var text bytes.Buffer
 	rep.WriteText(&text)
 	golden(t, "status-empty.txt", text.Bytes())
+}
+
+func TestStatusTextShortensLongSections(t *testing.T) {
+	var rep Report
+	want := "last tick: none (the factory is not running)\naccount: not read yet\nsessions: 0 running\nagents (12):\n"
+	for i := 1; i <= 12; i++ {
+		rep.Agents = append(rep.Agents, Agent{Name: fmt.Sprintf("a%02d", i), State: "running"})
+		if i <= 10 {
+			want += fmt.Sprintf("  a%02d  id ?  running, context ?, 0 unread\n", i)
+		}
+	}
+	want += "  … and 2 more\nerrors in the last tick (10):\n"
+	for i := 1; i <= 10; i++ {
+		rep.Errors = append(rep.Errors, fmt.Sprintf("e%02d", i))
+		want += fmt.Sprintf("  e%02d\n", i)
+	}
+	rep.Problems = []string{"p1"}
+	want += "blueprint problems, running on the last good copy (1):\n  p1\n"
+
+	var text bytes.Buffer
+	rep.WriteText(&text)
+	if got := text.String(); got != want {
+		t.Errorf("status text:\ngot:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 func TestTheTickRecordsEachSessionsShortID(t *testing.T) {

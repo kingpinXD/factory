@@ -110,7 +110,7 @@ func TestStatusJSONAndText(t *testing.T) {
 		t.Errorf("status --json = %s, %v", stdout, err)
 	}
 	code, stdout, _ = cli(t, "status")
-	if code != 0 || !strings.Contains(stdout, "paused repos:\n  o/r@main\n") {
+	if code != 0 || !strings.Contains(stdout, "paused repos (1):\n  o/r@main\n") {
 		t.Errorf("status = %d %q", code, stdout)
 	}
 }

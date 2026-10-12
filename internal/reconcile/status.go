@@ -258,7 +258,7 @@ func (rep Report) WriteText(w io.Writer) {
 		return line
 	})
 	section(w, "errors in the last tick", rep.Errors, func(x string) string { return x })
-	section(w, "blueprint problems (running on the last good copy)", rep.Problems, func(x string) string { return x })
+	section(w, "blueprint problems, running on the last good copy", rep.Problems, func(x string) string { return x })
 }
 
 func (rep Report) accountLine(age func(time.Time) time.Duration) string {
@@ -287,14 +287,20 @@ func byRepo(m map[string]int) string {
 	return " (" + strings.Join(parts, ", ") + ")"
 }
 
-// section prints a heading and one indented line per item; nothing when
-// there are none.
+// sectionLimit is the most items a status section prints.
+const sectionLimit = 10
+
+// section prints a heading with the item count and one indented line for
+// each of the first sectionLimit items; nothing when there are none.
 func section[T any](w io.Writer, heading string, items []T, line func(T) string) {
 	if len(items) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "%s:\n", heading)
-	for _, x := range items {
+	fmt.Fprintf(w, "%s (%d):\n", heading, len(items))
+	for _, x := range items[:min(len(items), sectionLimit)] {
 		fmt.Fprintf(w, "  %s\n", line(x))
+	}
+	if len(items) > sectionLimit {
+		fmt.Fprintf(w, "  … and %d more\n", len(items)-sectionLimit)
 	}
 }

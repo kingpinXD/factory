@@ -264,8 +264,14 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "factory query: %v\n%s\n", err, queryUsage)
 		return 2
 	}
+	brain := blueprint.Brain()
+	ix, err := store.ReadIndex(brain)
+	if err != nil {
+		fmt.Fprintf(stderr, "factory query: %v\n", err)
+		return 1
+	}
 	if len(states) > 0 {
-		b, err := blueprint.Load(blueprint.Path(blueprint.Brain()))
+		b, err := runningBlueprint(brain, ix)
 		if err != nil {
 			fmt.Fprintf(stderr, "factory query: %v\n", err)
 			return 1
@@ -274,11 +280,6 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "factory query: %v\n%s\n", err, queryUsage)
 			return 2
 		}
-	}
-	ix, err := store.ReadIndex(blueprint.Brain())
-	if err != nil {
-		fmt.Fprintf(stderr, "factory query: %v\n", err)
-		return 1
 	}
 	items, err := inFlight(ix, repo)
 	if err != nil {
@@ -342,6 +343,22 @@ func parseQuery(args []string) (repo string, files, states []string, err error) 
 		return "", nil, nil, errors.New("--repo is required")
 	}
 	return repo, files, states, nil
+}
+
+// runningBlueprint returns the blueprint the tick runs on, judged against the
+// state every entity in ix is in, as the tick judges it.
+func runningBlueprint(brain string, ix store.Index) (*blueprint.Blueprint, error) {
+	var live []blueprint.EntityState
+	for _, id := range slices.Sorted(maps.Keys(ix)) {
+		st, err := store.ReadStatus(ix[id].Dir)
+		if err != nil {
+			return nil, err
+		}
+		if st.State != "" {
+			live = append(live, blueprint.EntityState{Machine: ix[id].Kind, ID: id, State: st.State, Prev: st.Prev})
+		}
+	}
+	return blueprint.Running(brain, live)
 }
 
 // checkStates returns an error for the first of states that is not an

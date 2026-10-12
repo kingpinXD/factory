@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -445,12 +446,8 @@ func TestQueryItems(t *testing.T) {
 
 func TestQueryItemsState(t *testing.T) {
 	brain, dirs := eventsBrain(t)
-	shipped, err := os.ReadFile("../../internal/fsm/testdata/blueprint.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	bp := filepath.Join(brain, "factory", "blueprint.yaml")
-	writeFile(t, bp, string(shipped))
+	shipped := writeShipped(t, brain)
+	bp := blueprint.Path(brain)
 	explore := filepath.Join(dirs["eb-w4"], "explore.md")
 	writeFile(t, explore, "## Files\ndocs/readme.md\n")
 	if code, _, stderr := cli(t, "event", "eb-w4", "end", "--file", explore); code != 0 {
@@ -499,6 +496,26 @@ func TestQueryItemsState(t *testing.T) {
 		t.Errorf("query --state with no value = %d, %q, %q", code, stdout, stderr)
 	}
 
+	// The tick runs on the last good copy while the file on disk fails its
+	// check: here it renames queued, where eb-w1 still sits.
+	renamed := strings.Replace(string(shipped), "start: queued", "start: ready", 1)
+	renamed = strings.Replace(renamed, "      queued:\n", "      ready:\n", 1)
+	renamed = strings.Replace(renamed, "{from: queued, to: starting", "{from: ready, to: starting", 1)
+	writeFile(t, bp, renamed)
+	writeFile(t, blueprint.GoodPath(brain), string(shipped))
+	if code, stdout, stderr := query("--state", "queued"); code != 0 || stdout != ebW1 || stderr != "" {
+		t.Errorf("query --state queued on the last good copy = %d, %q, %q; want %q", code, stdout, stderr, ebW1)
+	}
+	if code, _, stderr := query("--state", "ready"); code != 2 || !strings.HasPrefix(stderr, "factory query: unknown state \"ready\" (valid: "+valid+")\n") {
+		t.Errorf("query --state ready on the last good copy = %d, %q; want the unknown state", code, stderr)
+	}
+
+	if err := os.Remove(blueprint.GoodPath(brain)); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout, stderr := query("--state", "queued"); code != 1 || stdout != "" || !strings.HasPrefix(stderr, "factory query: ") || !strings.Contains(stderr, "blueprint.yaml") {
+		t.Errorf("query --state with no usable blueprint = %d, %q, %q; want 1 and a blueprint error", code, stdout, stderr)
+	}
 	if err := os.Remove(bp); err != nil {
 		t.Fatal(err)
 	}

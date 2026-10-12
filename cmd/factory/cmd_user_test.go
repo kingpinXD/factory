@@ -37,6 +37,27 @@ func TestUserCommandsUsage(t *testing.T) {
 func workBrain(t *testing.T) string {
 	t.Helper()
 	brain := testBrain(t)
+	writeShipped(t, brain)
+	dir := filepath.Join(brain, "factory", "work", "e1", "e1-w1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteInputs(dir, &reconcile.WorkInputs{ID: "e1-w1", Epic: "e1", Repo: "o/r", Base: "main", Issue: 12}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := events.Append(store.EventsPath(dir), events.Event{Kind: events.KindTransition, To: "implementing", Trigger: "tick", TriggerRef: "fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteIndex(brain, store.Index{"e1-w1": {Kind: "work", Dir: dir, Epic: "e1"}}); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// writeShipped writes the shipped blueprint into brain, with what it needs to
+// pass factory check, and returns the blueprint's text.
+func writeShipped(t *testing.T, brain string) []byte {
+	t.Helper()
 	shipped, err := os.ReadFile("../../internal/fsm/testdata/blueprint.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -54,24 +75,16 @@ func workBrain(t *testing.T) string {
 			body = fmt.Sprintf("---\nname: %s\ndescription: The %s.\ntools: %s\n---\n%s", name, name, strings.Join(c.Tools, ", "), body)
 		}
 		if c.Instructions != "" {
-			writeFile(t, filepath.Join(brain, "factory", c.Instructions), body)
+			path := filepath.Join(brain, "factory", c.Instructions)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, path, body)
 		}
 	}
+	writeFile(t, filepath.Join(brain, "factory", "components", "_rules.md"), "# Factory rules\n")
 	writeFile(t, filepath.Join(brain, "AGENTS.md"), "## Model tiers\n\n| Tier | Claude |\n| --- | --- |\n| ultra low | haiku |\n| low | sonnet |\n| medium | opus |\n")
-	dir := filepath.Join(brain, "factory", "work", "e1", "e1-w1")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.WriteInputs(dir, &reconcile.WorkInputs{ID: "e1-w1", Epic: "e1", Repo: "o/r", Base: "main", Issue: 12}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := events.Append(store.EventsPath(dir), events.Event{Kind: events.KindTransition, To: "implementing", Trigger: "tick", TriggerRef: "fixture"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.WriteIndex(brain, store.Index{"e1-w1": {Kind: "work", Dir: dir, Epic: "e1"}}); err != nil {
-		t.Fatal(err)
-	}
-	return dir
+	return shipped
 }
 
 func TestStopAndRetryExitCodes(t *testing.T) {

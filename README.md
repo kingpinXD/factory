@@ -19,7 +19,7 @@ the line under it shows its arguments.
 # Adds an epic from an issue, an epic, a plan file or a line of text.
 factory add <issue-url | epic-url | plan-file | "text"> [--set step=tier]... [--effort step=level]...
 
-# Runs one tick: one pass of the pipeline. The launchd jobs run it every minute.
+# Runs one tick: one pass of the pipeline. A launchd job runs it every minute.
 factory tick [--dry-run]
 
 # Prints the factory's load and what waits on the user. The JSON is described below.
@@ -28,16 +28,16 @@ factory status [--json]
 # Gives the user's answer to a question or a result that waits on them.
 factory answer <epic-id> <issue> "<choice>"
 
-# Asks the next tick to return <id>, which waits on the user, to the state it left.
+# Asks the next tick to return <id>, which is in needs_you, to the state it left. A question takes factory answer instead.
 factory retry <id>
 
-# Asks the next tick to cancel <id> and the work under it.
+# Asks the next tick to cancel <id> and the work under it: their PRs close and their worktrees and branches are removed. An adopted PR stays open and keeps its work.
 factory stop <id> --reason "<why>"
 
-# Asks an epic's planner to re-check every issue, with a note.
+# Asks the next tick to re-check every issue of an epic, with the note for its planner.
 factory replan <epic-id> "<note>"
 
-# Checks the blueprint and prints each problem; --output checks one step's output file instead.
+# Checks the blueprint and prints each problem; --output instead checks one step's output file for its required headings.
 factory check [--output <component> <file>]
 
 # Prints the blueprint as JSON.
@@ -46,7 +46,7 @@ factory blueprint --json
 # Logs one event. A message sent --to another id reaches that id's inbox.
 factory event <id> <kind> [--file <path>] [--text "<one line>"] [--to user|<id>]
 
-# Renews a set's lease.
+# Renews a set's lease, if <lease> is still its current one.
 factory heartbeat <set-id> <lease>
 
 # Prints the unacknowledged messages for <id>, or acknowledges one.
@@ -58,7 +58,7 @@ factory query items --repo <owner/repo> [--files <path>...]
 # Exits 0 when the factory's plans let a PR merge, 1 when not yet or unknown, and prints why.
 factory may-merge <pr-url>
 
-# Records that a merged PR is deployed, for the work that waits on that.
+# Records that a merged PR is deployed, in each open epic whose plan waits on that.
 factory deployed <pr-url>
 
 # Makes one GitHub issue write. Run by a factory session, it is logged in that session's events.

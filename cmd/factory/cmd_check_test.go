@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kingpinXD/factory/internal/blueprint"
 )
 
 func TestRunCheckOutput(t *testing.T) {
@@ -75,5 +77,24 @@ func TestRunCheckUsage(t *testing.T) {
 		if !strings.Contains(stderr.String(), "usage: factory check [--output <component> <file>]") {
 			t.Errorf("%q: stderr = %q, want the usage", args, stderr.String())
 		}
+	}
+}
+
+func TestBlueprintCounts(t *testing.T) {
+	b := &blueprint.Blueprint{Machines: map[string]blueprint.Machine{
+		"a": {
+			States:      map[string]blueprint.State{"x": {}, "y": {}},
+			Transitions: []blueprint.Transition{{}, {}, {}},
+		},
+		"b": {
+			States:      map[string]blueprint.State{"z": {}},
+			Transitions: []blueprint.Transition{{}},
+		},
+	}}
+	if m, s, tr := blueprintCounts(b); m != 2 || s != 3 || tr != 4 {
+		t.Errorf("blueprintCounts = (%d, %d, %d), want (2, 3, 4)", m, s, tr)
+	}
+	if m, s, tr := blueprintCounts(&blueprint.Blueprint{}); m != 0 || s != 0 || tr != 0 {
+		t.Errorf("blueprintCounts of an empty blueprint = (%d, %d, %d), want (0, 0, 0)", m, s, tr)
 	}
 }

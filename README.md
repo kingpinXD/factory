@@ -37,7 +37,7 @@ factory stop <id> --reason "<why>"
 # Asks the next tick to re-check every issue of an epic, with the note for its planner.
 factory replan <epic-id> "<note>"
 
-# Checks the blueprint and prints each problem; --output instead checks one step's output file for its required headings.
+# Checks the blueprint and prints each problem, or its machine, state and transition counts when it passes; --output instead checks one step's output file for its required headings.
 factory check [--output <component> <file>]
 
 # Prints the blueprint as JSON.

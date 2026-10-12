@@ -7,21 +7,34 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 )
 
-// runCheck validates the brain's blueprint and prints each problem. With
-// --output it checks one step's output file for its component's headings.
+// runCheck validates the brain's blueprint and prints each problem, or its
+// machine, state and transition counts when it passes. With --output it checks
+// one step's output file for its component's headings.
 func runCheck(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) == 0:
-		if _, ok := checkedBlueprint(stdout, stderr); !ok {
+		b, ok := checkedBlueprint(stdout, stderr)
+		if !ok {
 			return 1
 		}
-		fmt.Fprintf(stdout, "ok: %s\n", blueprint.Path(blueprint.Brain()))
+		m, s, t := blueprintCounts(b)
+		fmt.Fprintf(stdout, "ok: %s (%d machines, %d states, %d transitions)\n", blueprint.Path(blueprint.Brain()), m, s, t)
 		return 0
 	case len(args) == 3 && args[0] == "--output":
 		return checkOutput(args[1], args[2], stdout, stderr)
 	}
 	fmt.Fprintln(stderr, "usage: factory check [--output <component> <file>]")
 	return 2
+}
+
+// blueprintCounts counts the blueprint's machines, and their states and
+// transitions summed over every machine. Each written transition counts once.
+func blueprintCounts(b *blueprint.Blueprint) (machines, states, transitions int) {
+	for _, m := range b.Machines {
+		states += len(m.States)
+		transitions += len(m.Transitions)
+	}
+	return len(b.Machines), states, transitions
 }
 
 // checkedBlueprint loads and validates the brain's blueprint, printing each

@@ -52,7 +52,8 @@ factory heartbeat <set-id> <lease>
 # Prints the unacknowledged messages for <id>, or acknowledges one.
 factory inbox <id> [--ack <seq>] [--read-only]
 
-# Lists a repo's in-flight items. --files keeps those touching the paths or whose files are unknown.
+# Lists a repo's in-flight items: one block per item (id, epic, state, issue, files), then a final
+# "<n> items" line ("0 items" when none match). --files keeps those touching the paths or whose files are unknown.
 # --state keeps those in one of the given states (repeat it for more); an unknown state is an error.
 factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...
 

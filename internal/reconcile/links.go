@@ -212,6 +212,17 @@ func readRun(ctx context.Context, d Deps) (*run, error) {
 	return r, nil
 }
 
+// RunningBlueprint returns the blueprint the tick runs on, for a command that
+// only reads. It judges the brain's blueprint on the entities the tick loads,
+// in the state their last transition left them, and prints nothing.
+func RunningBlueprint(ctx context.Context, brain string) (*blueprint.Blueprint, error) {
+	r, err := readRun(ctx, Deps{Brain: brain, Now: time.Now})
+	if err != nil {
+		return nil, err
+	}
+	return r.b, nil
+}
+
 // MayMerge answers `factory may-merge <pr-url>`: ok (exit 0) for a PR that
 // is not the factory's, or whose blockers are released; not ok (exit 1) for
 // a factory branch or adopted PR with no work item recorded, or one that

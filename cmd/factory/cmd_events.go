@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -271,7 +272,7 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if len(states) > 0 {
-		b, err := runningBlueprint(brain, ix)
+		b, err := reconcile.RunningBlueprint(context.Background(), brain)
 		if err != nil {
 			fmt.Fprintf(stderr, "factory query: %v\n", err)
 			return 1
@@ -343,22 +344,6 @@ func parseQuery(args []string) (repo string, files, states []string, err error) 
 		return "", nil, nil, errors.New("--repo is required")
 	}
 	return repo, files, states, nil
-}
-
-// runningBlueprint returns the blueprint the tick runs on, judged against the
-// state every entity in ix is in, as the tick judges it.
-func runningBlueprint(brain string, ix store.Index) (*blueprint.Blueprint, error) {
-	var live []blueprint.EntityState
-	for _, id := range slices.Sorted(maps.Keys(ix)) {
-		st, err := store.ReadStatus(ix[id].Dir)
-		if err != nil {
-			return nil, err
-		}
-		if st.State != "" {
-			live = append(live, blueprint.EntityState{Machine: ix[id].Kind, ID: id, State: st.State, Prev: st.Prev})
-		}
-	}
-	return blueprint.Running(brain, live)
 }
 
 // checkStates returns an error for the first of states that is not an

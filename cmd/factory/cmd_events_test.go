@@ -443,6 +443,74 @@ func TestQueryItems(t *testing.T) {
 	}
 }
 
+func TestQueryItemsState(t *testing.T) {
+	brain, dirs := eventsBrain(t)
+	shipped, err := os.ReadFile("../../internal/fsm/testdata/blueprint.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bp := filepath.Join(brain, "factory", "blueprint.yaml")
+	writeFile(t, bp, string(shipped))
+	explore := filepath.Join(dirs["eb-w4"], "explore.md")
+	writeFile(t, explore, "## Files\ndocs/readme.md\n")
+	if code, _, stderr := cli(t, "event", "eb-w4", "end", "--file", explore); code != 0 {
+		t.Fatal(stderr)
+	}
+
+	eaW1 := "id: ea-w1\nepic: ea\nstate: implementing\nissue: 10\nfiles: ? (not explored yet)\n"
+	ebW1 := "id: eb-w1\nepic: eb\nstate: queued\nissue: 20\nfiles: ? (not explored yet)\n"
+	ebW4 := "id: eb-w4\nepic: eb\nstate: implementing\nissue: 40\nfiles: docs/readme.md\n"
+	query := func(extra ...string) (int, string, string) {
+		return cli(t, append([]string{"query", "items", "--repo", "o/r"}, extra...)...)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--state", "implementing"}, eaW1 + "\n" + ebW4},
+		{[]string{"--state", "queued"}, ebW1},
+		{[]string{"--state", "queued", "--state", "implementing"}, eaW1 + "\n" + ebW1 + "\n" + ebW4},
+		{[]string{"--state", "implementing", "--files", "a.go"}, eaW1},
+		{[]string{"--files", "docs/readme.md", "--state", "queued"}, ebW1},
+		{[]string{"--state", "in_review"}, "no matching in-flight items in o/r\n"},
+	} {
+		if code, stdout, stderr := query(c.args...); code != 0 || stdout != c.want || stderr != "" {
+			t.Errorf("query %v = %d, %q, %q; want %q", c.args, code, stdout, stderr, c.want)
+		}
+	}
+
+	usage := "usage: factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...\n"
+	valid := "blocked, exploring, implementing, in_review, merging, needs_you, plan_review, planning, pr_open, queued, rechecking, starting, verifying, waiting_user"
+	for _, c := range []struct {
+		args []string
+		bad  string
+	}{
+		{[]string{"--state", "merged"}, "merged"},
+		{[]string{"--state", "nope"}, "nope"},
+		{[]string{"--state", "Implementing"}, "Implementing"},
+		{[]string{"--state", "queued", "--state", "nope"}, "nope"},
+	} {
+		want := "factory query: unknown state \"" + c.bad + "\" (valid: " + valid + ")\n" + usage
+		if code, stdout, stderr := query(c.args...); code != 2 || stdout != "" || stderr != want {
+			t.Errorf("query %v = %d, %q, %q; want 2 and %q", c.args, code, stdout, stderr, want)
+		}
+	}
+	if code, stdout, stderr := query("--state"); code != 2 || stdout != "" || stderr != "factory query: --state needs a state\n"+usage {
+		t.Errorf("query --state with no value = %d, %q, %q", code, stdout, stderr)
+	}
+
+	if err := os.Remove(bp); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := query("--state", "queued")
+	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "factory query: ") || !strings.Contains(stderr, "blueprint.yaml") {
+		t.Errorf("query --state without a blueprint = %d, %q, %q; want 1 and a blueprint error", code, stdout, stderr)
+	}
+	if code, stdout, stderr := query(); code != 0 || stdout != eaW1+"\n"+ebW1+"\n"+ebW4 {
+		t.Errorf("query without --state or a blueprint = %d, %q, %q", code, stdout, stderr)
+	}
+}
+
 func TestQueryUsage(t *testing.T) {
 	eventsBrain(t)
 	for _, args := range [][]string{

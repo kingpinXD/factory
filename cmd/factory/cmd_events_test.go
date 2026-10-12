@@ -1,3 +1,4 @@
+// Tests for the event, inbox, heartbeat and query commands.
 package main
 
 import (

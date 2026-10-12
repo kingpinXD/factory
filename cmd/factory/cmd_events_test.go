@@ -1,3 +1,4 @@
+// Tests for the event, inbox, heartbeat and query commands.
 package main
 
 import (
@@ -414,11 +415,11 @@ func TestQueryItems(t *testing.T) {
 		files []string
 		want  string
 	}{
-		{nil, eaW1 + "\n" + ebW1 + "\n" + ebW4},
-		{[]string{"a.go"}, eaW1 + "\n" + ebW1},
-		{[]string{"zzz.go", "internal/x/y.go"}, eaW1 + "\n" + ebW1},
-		{[]string{"old.go"}, ebW1},
-		{[]string{"./docs/readme.md"}, ebW1 + "\n" + ebW4},
+		{nil, eaW1 + "\n" + ebW1 + "\n" + ebW4 + "\n3 items\n"},
+		{[]string{"a.go"}, eaW1 + "\n" + ebW1 + "\n2 items\n"},
+		{[]string{"zzz.go", "internal/x/y.go"}, eaW1 + "\n" + ebW1 + "\n2 items\n"},
+		{[]string{"old.go"}, ebW1 + "\n1 items\n"},
+		{[]string{"./docs/readme.md"}, ebW1 + "\n" + ebW4 + "\n2 items\n"},
 	}
 	for _, c := range cases {
 		args := []string{"query", "items", "--repo", "o/r"}
@@ -430,13 +431,13 @@ func TestQueryItems(t *testing.T) {
 			t.Errorf("query --files %v = %d, %q, %q; want %q", c.files, code, stdout, stderr, c.want)
 		}
 	}
-	if _, stdout, _ := cli(t, "query", "items", "--repo", "o/none"); stdout != "no matching in-flight items in o/none\n" {
+	if _, stdout, _ := cli(t, "query", "items", "--repo", "o/none"); stdout != "0 items\n" {
 		t.Errorf("query for another repo = %q", stdout)
 	}
 
 	writeFile(t, v2, "## Files\ndocs/readme.md\nmore.go\n")
 	_, stdout, _ := cli(t, "query", "items", "--repo", "o/r", "--files", "more.go")
-	want := ebW1 + "\nid: eb-w4\nepic: eb\nstate: implementing\nissue: 40\nfiles: ? (" + v2 + " changed after its end event seq 2)\n"
+	want := ebW1 + "\nid: eb-w4\nepic: eb\nstate: implementing\nissue: 40\nfiles: ? (" + v2 + " changed after its end event seq 2)\n\n2 items\n"
 	if stdout != want {
 		t.Errorf("after an edit of eb-w4's explore = %q, want %q", stdout, want)
 	}
@@ -466,12 +467,12 @@ func TestQueryItemsState(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--state", "implementing"}, eaW1 + "\n" + ebW4},
-		{[]string{"--state", "queued"}, ebW1},
-		{[]string{"--state", "queued", "--state", "implementing"}, eaW1 + "\n" + ebW1 + "\n" + ebW4},
-		{[]string{"--state", "implementing", "--files", "a.go"}, eaW1},
-		{[]string{"--files", "docs/readme.md", "--state", "queued"}, ebW1},
-		{[]string{"--state", "in_review"}, "no matching in-flight items in o/r\n"},
+		{[]string{"--state", "implementing"}, eaW1 + "\n" + ebW4 + "\n2 items\n"},
+		{[]string{"--state", "queued"}, ebW1 + "\n1 items\n"},
+		{[]string{"--state", "queued", "--state", "implementing"}, eaW1 + "\n" + ebW1 + "\n" + ebW4 + "\n3 items\n"},
+		{[]string{"--state", "implementing", "--files", "a.go"}, eaW1 + "\n1 items\n"},
+		{[]string{"--files", "docs/readme.md", "--state", "queued"}, ebW1 + "\n1 items\n"},
+		{[]string{"--state", "in_review"}, "0 items\n"},
 	} {
 		if code, stdout, stderr := query(c.args...); code != 0 || stdout != c.want || stderr != "" {
 			t.Errorf("query %v = %d, %q, %q; want %q", c.args, code, stdout, stderr, c.want)
@@ -505,8 +506,8 @@ func TestQueryItemsState(t *testing.T) {
 	renamed = strings.Replace(renamed, "{from: queued, to: starting", "{from: ready, to: starting", 1)
 	writeFile(t, bp, renamed)
 	writeFile(t, blueprint.GoodPath(brain), string(shipped))
-	if code, stdout, stderr := query("--state", "queued"); code != 0 || stdout != ebW1 || stderr != "" {
-		t.Errorf("query --state queued on the last good copy = %d, %q, %q; want %q", code, stdout, stderr, ebW1)
+	if code, stdout, stderr := query("--state", "queued"); code != 0 || stdout != ebW1+"\n1 items\n" || stderr != "" {
+		t.Errorf("query --state queued on the last good copy = %d, %q, %q; want %q", code, stdout, stderr, ebW1+"\n1 items\n")
 	}
 	if code, _, stderr := query("--state", "ready"); code != 2 || !strings.HasPrefix(stderr, "factory query: unknown state \"ready\" (valid: "+valid+")\n") {
 		t.Errorf("query --state ready on the last good copy = %d, %q; want the unknown state", code, stderr)
@@ -522,7 +523,7 @@ func TestQueryItemsState(t *testing.T) {
 	// The tick leaves out an item it cannot load, so the renamed file passes
 	// its check even though eb-w1's status.json still says queued.
 	writeFile(t, store.InputsPath(dirs["eb-w1"]), "id: eb-w1\nnope: 1\n")
-	if code, stdout, stderr := query("--state", "ready"); code != 0 || stdout != "no matching in-flight items in o/r\n" || stderr != "" {
+	if code, stdout, stderr := query("--state", "ready"); code != 0 || stdout != "0 items\n" || stderr != "" {
 		t.Errorf("query --state ready with eb-w1 unloadable = %d, %q, %q; want the renamed file used", code, stdout, stderr)
 	}
 	if code, _, stderr := query("--state", "queued"); code != 2 || !strings.HasPrefix(stderr, "factory query: unknown state \"queued\"") {
@@ -535,7 +536,7 @@ func TestQueryItemsState(t *testing.T) {
 	if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "factory query: ") || !strings.Contains(stderr, "blueprint.yaml") {
 		t.Errorf("query --state without a blueprint = %d, %q, %q; want 1 and a blueprint error", code, stdout, stderr)
 	}
-	if code, stdout, stderr := query(); code != 0 || stdout != eaW1+"\n"+ebW1+"\n"+ebW4 {
+	if code, stdout, stderr := query(); code != 0 || stdout != eaW1+"\n"+ebW1+"\n"+ebW4+"\n3 items\n" {
 		t.Errorf("query without --state or a blueprint = %d, %q, %q", code, stdout, stderr)
 	}
 }
@@ -584,8 +585,8 @@ func TestQueryUsage(t *testing.T) {
 		{"query", "items", "--repo", "o/r", "--files"},
 		{"query", "items", "--repo", "o/r", "--nope"},
 	} {
-		if code, _, stderr := cli(t, args...); code != 2 || !strings.Contains(stderr, "usage: factory query items") {
-			t.Errorf("%v = %d, %q; want the usage", args, code, stderr)
+		if code, stdout, stderr := cli(t, args...); code != 2 || stdout != "" || !strings.Contains(stderr, "usage: factory query items") {
+			t.Errorf("%v = %d, %q, %q; want the usage and no stdout", args, code, stdout, stderr)
 		}
 	}
 }

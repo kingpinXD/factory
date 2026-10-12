@@ -19,7 +19,7 @@ the line under it shows its arguments.
 # Adds an epic from an issue, an epic, a plan file or a line of text.
 factory add <issue-url | epic-url | plan-file | "text"> [--set step=tier]... [--effort step=level]...
 
-# Runs one tick: one pass of the pipeline. A launchd job runs it every minute.
+# Runs one tick: one pass of the pipeline. After factory launchd install, a launchd job runs it every minute.
 factory tick [--dry-run]
 
 # Prints the factory's load and what waits on the user. The JSON is described below.
@@ -28,10 +28,10 @@ factory status [--json]
 # Gives the user's answer to a question or a result that waits on them.
 factory answer <epic-id> <issue> "<choice>"
 
-# Asks the next tick to return <id>, which is in needs_you, to the state it left. A question takes factory answer instead.
+# Asks the next tick to return <id>, which is in needs_you, to the state it left (in_review if it left merging). Refused when its PR is closed, or when it waits on your answer to a re-check: that takes factory answer.
 factory retry <id>
 
-# Asks the next tick to cancel <id> and the work under it: their PRs close and their worktrees and branches are removed. An adopted PR stays open and keeps its work.
+# Asks the next tick to cancel <id> and the work under it: their PRs close and their worktrees and local branches are removed. An adopted PR stays open and keeps its work.
 factory stop <id> --reason "<why>"
 
 # Asks the next tick to re-check every issue of an epic, with the note for its planner.
@@ -58,7 +58,7 @@ factory query items --repo <owner/repo> [--files <path>...]
 # Exits 0 when the factory's plans let a PR merge, 1 when not yet or unknown, and prints why.
 factory may-merge <pr-url>
 
-# Records that a merged PR is deployed, in each open epic whose plan waits on that.
+# Records that a PR is deployed, in each open epic whose plan waits on that. It does not check that the PR merged.
 factory deployed <pr-url>
 
 # Makes one GitHub issue write. Run by a factory session, it is logged in that session's events.

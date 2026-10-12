@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -56,9 +57,15 @@ func planID(e *entity) string { return strings.TrimPrefix(e.id, e.entry.Epic+"-"
 // end event the newest applying move named (planning → planned, or a
 // re-check's end), and that end event. It is nil before the first plan.
 func (r *run) appliedPlan(ep *entity) (*epic.Plan, events.Event, error) {
+	return appliedBefore(ep, math.MaxInt)
+}
+
+// appliedBefore returns the plan the epic acted on just before seq, and its
+// end event, as appliedPlan does.
+func appliedBefore(ep *entity, seq int) (*epic.Plan, events.Event, error) {
 	for i := len(ep.evs) - 1; i >= 0; i-- {
 		t := ep.evs[i]
-		if t.Kind != events.KindTransition {
+		if t.Kind != events.KindTransition || t.Seq >= seq {
 			continue
 		}
 		if end, ok := planEnd(ep, t.TriggerRef); ok {
@@ -734,7 +741,7 @@ func (r *run) epicBusy(ep *entity) bool {
 			continue
 		}
 		s, ok := claude.FindByName(sessions, sess.session.Name)
-		if ok && s.Live() && (sess.session.Component != componentPlanner || s.State == listedWorking) {
+		if ok && s.Live() && (sess.session.Component != componentPlanner || s.State == listedWorking && !turnEndedInListing(s)) {
 			return true
 		}
 	}

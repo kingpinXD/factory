@@ -145,11 +145,17 @@ func (w Writer) Update(ctx context.Context, repo string, n int, content string) 
 		i, err := w.GitHub.Issue(ctx, repo, n)
 		return "", err == nil && strings.Contains(i.Body, content), err
 	}
-	_, err := w.once(ctx, fmt.Sprintf("issue-update:%s#%d:%s", repo, n, short(content)), appended, func(ctx context.Context) (string, error) {
+	_, err := w.once(ctx, updateKey(repo, n)+short(content), appended, func(ctx context.Context) (string, error) {
 		return "", w.appendSection(ctx, repo, n, content)
 	})
 	return err
 }
+
+func updateKey(repo string, n int) string { return fmt.Sprintf("issue-update:%s#%d:", repo, n) }
+
+// UpdatedKey is the key prefix of the done event Update logs once it has
+// updated issue n of repo.
+func UpdatedKey(repo string, n int) string { return events.KindDone + ":" + updateKey(repo, n) }
 
 // rereads bounds how often Update reads again when the body keeps changing
 // between its reads.

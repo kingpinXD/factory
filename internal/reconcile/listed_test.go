@@ -185,3 +185,28 @@ func TestAFinishedSessionItsTranscriptEndedIsStopped(t *testing.T) {
 		t.Errorf("stops = %q, want the finished session stopped", got)
 	}
 }
+
+// A session woken by a post goes back to working in `claude agents`, and
+// stays working after its turn, with its status idle: its turn ended as
+// when it is listed done.
+func TestAnIdleSessionHasEndedItsTurn(t *testing.T) {
+	for _, tc := range []struct{ from, state, status, want string }{
+		{"running", "done", "idle", "turn_ended"},
+		{"running", "working", "idle", "turn_ended"},
+		{"starting", "working", "idle", "turn_ended"},
+		{"turn_ended", "working", "idle", "turn_ended"},
+		{"turn_ended", "working", "busy", "running"},
+		{"running", "working", "busy", "running"},
+	} {
+		t.Run(tc.from+" listed "+tc.state+" ("+tc.status+")", func(t *testing.T) {
+			w := newWorld(t)
+			w.working("implementing")
+			w.setStatus(w.orchestrator("e1-s1", tc.from, 4312, tc.state).Name, tc.status)
+			w.at(time.Minute)
+			w.tick(false)
+			if got := w.status("e1-s1-orchestrator").State; got != tc.want {
+				t.Errorf("session is %s, want %s; moves %v", got, tc.want, w.moves("e1-s1-orchestrator"))
+			}
+		})
+	}
+}

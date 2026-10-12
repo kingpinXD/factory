@@ -10,6 +10,77 @@ make test       # go test -race ./...
 make install    # builds ~/.local/bin/factory
 ```
 
+## Commands
+
+Every command, in the order `factory --help` lists them. A comment says what the command does;
+the line under it shows its arguments.
+
+```sh
+# Adds an epic from an issue, an epic, a plan file or a line of text.
+factory add <issue-url | epic-url | plan-file | "text"> [--set step=tier]... [--effort step=level]...
+
+# Runs one tick: one pass of the pipeline. The launchd jobs run it every minute.
+factory tick [--dry-run]
+
+# Prints the factory's load and what waits on the user. The JSON is described below.
+factory status [--json]
+
+# Gives the user's answer to a question or a result that waits on them.
+factory answer <epic-id> <issue> "<choice>"
+
+# Returns <id>, which waits on the user, to the state it left.
+factory retry <id>
+
+# Cancels <id> and the work under it.
+factory stop <id> --reason "<why>"
+
+# Asks an epic's planner to re-check every issue, with a note.
+factory replan <epic-id> "<note>"
+
+# Checks the blueprint and prints each problem; --output checks one step's output file instead.
+factory check [--output <component> <file>]
+
+# Prints the blueprint as JSON.
+factory blueprint --json
+
+# Logs one event. A message sent --to another id reaches that id's inbox.
+factory event <id> <kind> [--file <path>] [--text "<one line>"] [--to user|<id>]
+
+# Renews a set's lease.
+factory heartbeat <set-id> <lease>
+
+# Prints the unacknowledged messages for <id>, or acknowledges one.
+factory inbox <id> [--ack <seq>] [--read-only]
+
+# Lists a repo's in-flight items. --files keeps those touching the paths or whose files are unknown.
+factory query items --repo <owner/repo> [--files <path>...]
+
+# Exits 0 when the factory's plans let a PR merge, 1 when not yet or unknown, and prints why.
+factory may-merge <pr-url>
+
+# Records that a merged PR is deployed, for the work that waits on that.
+factory deployed <pr-url>
+
+# Makes one GitHub issue write for an agent, logged in the running session's events.
+factory issue create  --repo <owner/repo> --key <stable key> --title "<t>" --body-file <path> [--parent <number>]
+factory issue update  --repo <owner/repo> --number <n> --append-file <path>
+factory issue comment --repo <owner/repo> --number <n> --body-file <path>
+factory issue close   --repo <owner/repo> --number <n> --evidence <kind:ref> [--comment-file <path>]
+factory issue assign  --repo <owner/repo> --number <n>
+
+# Builds agents.json and the session prompts from the blueprint, once it passes its check.
+factory agents
+
+# Installs or removes the launchd jobs that run tick and repo-worker every minute.
+factory launchd install|remove
+
+# Exits 0 while <lease> is the set's current lease.
+factory lease-ok <set-id> <lease>
+
+# Does the repo work the tick queued.
+factory repo-worker
+```
+
 ## `factory status --json`
 
 One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory status` without

@@ -182,6 +182,13 @@ func (w *world) setState(name string, pid int, state string) {
 	}
 }
 
+// setStatus sets a listed session's status, busy or idle.
+func (w *world) setStatus(name, status string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.session(func(s *claude.Session) bool { return s.Name == name }).Status = status
+}
+
 // listedSession returns the session listed under name.
 func (w *world) listedSession(name string) claude.Session {
 	w.mu.Lock()

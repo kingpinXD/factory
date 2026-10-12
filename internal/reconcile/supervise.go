@@ -56,6 +56,8 @@ const (
 	setRunning        = "running"
 	// listedTurnEnded is the listed state of a session whose turn ended.
 	listedTurnEnded = "done"
+	// listedIdle is the listed status of a live session between turns.
+	listedIdle = "idle"
 )
 
 // maxHolds bounds the holds kept in status.json; older ones no longer

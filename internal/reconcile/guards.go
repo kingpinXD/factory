@@ -535,11 +535,11 @@ func (r *run) handedBack(e *entity) (bool, string, error) {
 	return false, "", nil
 }
 
-// listedWorking: the session is listed with a pid, working, and its
-// transcript does not show its turn ended.
+// listedWorking: the session is listed with a pid and working, and neither
+// its listing nor its transcript shows its turn ended.
 func (r *run) listedWorking(e *entity) (bool, string, error) {
 	s, ok := r.findSession(e.session.Name)
-	return ok && s.Live() && s.State == listedWorking && e.turnEndedAt.IsZero(), "", nil
+	return ok && s.Live() && s.State == listedWorking && !turnEndedInListing(s) && e.turnEndedAt.IsZero(), "", nil
 }
 
 // transcriptRef starts the ref of a turn_ended move that only the session's

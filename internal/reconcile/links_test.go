@@ -421,6 +421,21 @@ func TestTheEpicDoesNotMoveWhileThePlannerWorks(t *testing.T) {
 	}
 }
 
+// A planner a post woke is listed working after its turn, idle: its turn is
+// over, so the epic moves.
+func TestTheEpicMovesWhileItsIdlePlannerIsListedWorking(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.epic("e1", "checking")
+	w.setStatus(w.planner("e1", "turn_ended", 4300, "working").Name, "idle")
+	w.end("e1", "state-check.v1.md", stateCheck)
+	w.end("e1", "epic.v1.yaml", "feature: my-feature\n"+twoItems("[]"))
+	w.tick(false)
+	if got, want := w.dir("e1"), filepath.Join(w.brain, "features", "my-feature"); got != want {
+		t.Errorf("e1 is in %s, want %s: an idle planner's turn is over", got, want)
+	}
+}
+
 // Each guard of each item, set and epic waiting on a blocker asks where it
 // stands; GitHub is read for it once a tick.
 func TestABlockerIsReadOnceATick(t *testing.T) {

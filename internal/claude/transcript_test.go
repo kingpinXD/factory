@@ -3,8 +3,10 @@ package claude
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +141,47 @@ func TestALimitMessageKeepsTheContextFigure(t *testing.T) {
 	pct, _, err := c.Context(context.Background(), compactID, 100_000)
 	if err != nil || pct != 69 {
 		t.Errorf("Context = %d%%, %v; want 69%%", pct, err)
+	}
+}
+
+// turnID is the session in testdata/turn.jsonl: the orchestrator of the first
+// end-to-end run, cut from its transcript around a turn that ended at 10:21:54
+// while `claude agents` kept listing it as working until 11:42.
+const turnID = "c62d6568-295a-4792-ac88-342bff7e0ba8"
+
+func TestTurnEndedAt(t *testing.T) {
+	lines := fixtureLines(t, "turn.jsonl")
+	compact := fixtureLines(t, "compact.jsonl")
+	ended := time.Date(2026, 10, 12, 10, 21, 54, 462000000, time.UTC)
+	join := func(parts ...[][]byte) []byte { return bytes.Join(slices.Concat(parts...), nil) }
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want time.Time
+	}{
+		// Line 9 ends a turn while a helper still runs in the background
+		// (pendingBackgroundAgentCount 1): its result starts the next turn.
+		{"a turn ended with a helper running", join(lines[:9]), time.Time{}},
+		// Line 17 ends the turn with nothing pending.
+		{"the turn ended", join(lines[:17]), ended},
+		// Lines 1-6 and compact.jsonl's line 5 carry no time of their own:
+		// Claude Code rewrites them whenever it likes.
+		{"records without a time after it", join(lines[:17], lines[:6], compact[4:5]), ended},
+		{"the spike session's last turn", join(compact), time.Date(2026, 10, 9, 20, 8, 49, 936000000, time.UTC)},
+		// Line 18 is the nudge arriving 46 minutes later.
+		{"a message came in after it", join(lines), time.Time{}},
+		{"a line still being written after it", append(join(lines[:17]), `{"type":"queue-operation","operation":"enq`...), time.Time{}},
+		{"an answer is the newest record", join(fixtureLines(t, "limit.jsonl")), time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := withTranscript(t, turnID, tc.data).TurnEndedAt(context.Background(), turnID)
+			if err != nil || !got.Equal(tc.want) {
+				t.Errorf("TurnEndedAt = %v, %v; want %v", got, err, tc.want)
+			}
+		})
+	}
+	if _, err := withTranscript(t, turnID, nil).TurnEndedAt(context.Background(), compactID); !errors.Is(err, ErrNoTranscript) {
+		t.Errorf("err = %v, want ErrNoTranscript", err)
 	}
 }
 

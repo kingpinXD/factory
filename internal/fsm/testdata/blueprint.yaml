@@ -214,7 +214,7 @@ machines:
         health: events
       verifying:
         entry: the implementation step ended
-        exits: pr_open when verify.v<n>.md ends with the verdict pass; implementing when it ends with fail (the orchestrator sends its Send back to the implementor); restarted after 2h
+        exits: pr_open when verify.v<n>.md ends with the verdict pass (or pass with notes); implementing when it ends with fail (the orchestrator sends its Send back to the implementor); restarted after 2h
         timeout: 2h
         on_timeout: verifying
         health: events
@@ -236,11 +236,11 @@ machines:
         health: github
       merged:
         entry: GitHub shows the PR merged
-        exits: done once the item's worktrees and local branch are removed
+        exits: done once the item's worktree and local branch are removed, and its merged branch on origin
         health: waits
         end: true
       done:
-        entry: the item's worktrees and local branch are removed
+        entry: the item's worktree and local branch are removed, and its merged branch on origin
         health: waits
         end: true
       rechecking:

@@ -86,13 +86,6 @@ func (r *run) remindCheckpoint(sess *entity, pct int, compactedAt time.Time) {
 	}))
 }
 
-// turnEnded reports whether the session is listed with a pid and its turn
-// ended.
-func (r *run) turnEnded(sess *entity) bool {
-	s, ok := r.findSession(sess.session.Name)
-	return ok && s.Live() && s.State == listedTurnEnded
-}
-
 // checkpointReady: the account is ok, the session's turn ended, the newest
 // event it wrote is a checkpoint no compaction used yet, and none of its
 // steps has a start without an end.

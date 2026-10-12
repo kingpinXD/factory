@@ -17,6 +17,7 @@ import (
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
+	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -388,6 +389,70 @@ func TestEarlyMergeWhileImplementing(t *testing.T) {
 	}
 }
 
+// After a merge, the cleanup also deletes the item's factory branch on
+// origin, unless someone pushed to it since. An adopted PR's branch is the
+// user's: it stays.
+func TestTheCleanupAfterAMergeDeletesTheFactoryBranchOnOrigin(t *testing.T) {
+	const lsRemote, deleteBranch = " ls-remote origin refs/heads/factory/e1-w3", " push --no-verify origin --delete factory/e1-w3"
+	for _, tc := range []struct {
+		name      string
+		adopted   bool
+		remoteTip string
+		calls     []string
+		done      string
+	}{
+		{"a factory branch", false, "abc", []string{lsRemote, deleteBranch}, cleanupRequest},
+		{"a factory branch pushed to since", false, "def", []string{lsRemote}, "cleanup: kept origin/factory/e1-w3: not in the merged head abc"},
+		{"an adopted PR's branch", true, "abc", nil, cleanupRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			oneSet(w)
+			head := "factory/e1-w3"
+			w.item("e1", "e1-s1", "e1-w3", "starting", func(in *WorkInputs) {
+				if tc.adopted {
+					in.PR, head = 31, "me/own"
+				}
+			})
+			w.append(w.dir("e1-w3"), events.Event{Kind: events.KindRequest, Recipient: events.RecipientRepoWorker, Request: worktreeRequest})
+			w.readyWorktree("e1-w3")
+			w.append(w.dir("e1-w3"), events.Event{Kind: events.KindTransition, At: t0, From: "starting", To: "implementing", Trigger: "file"})
+			w.prs[head] = gh.PR{Number: 31, HeadRefName: head, State: "MERGED", HeadRefOid: "abc", CreatedAt: t0}
+			clone := filepath.Join(w.home, "src", "r")
+			orig := w.fake.Respond
+			w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+				if c.Name == "git" && slices.Contains(c.Args, "ls-remote") {
+					return []byte(tc.remoteTip + "\trefs/heads/factory/e1-w3\n"), nil
+				}
+				return orig(c)
+			}
+
+			w.tick(false)
+			if st := w.status("e1-w3").State; st != stateMerged {
+				t.Fatalf("e1-w3 is %s, want merged", st)
+			}
+			if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+				t.Fatal(err)
+			}
+			var want []string
+			for _, c := range tc.calls {
+				want = append(want, "git -C "+clone+c)
+			}
+			if got := append(w.called("git -C "+clone+lsRemote), w.called("git -C "+clone+" push")...); !reflect.DeepEqual(got, want) {
+				t.Errorf("remote calls = %q, want %q", got, want)
+			}
+			if done := last(w.kinds("e1-w3", events.KindDone)); done.Text != tc.done {
+				t.Errorf("cleanup answer = %q, want %q", done.Text, tc.done)
+			}
+			w.now = w.now.Add(time.Minute)
+			w.tick(false)
+			if got := w.moves("e1-w3"); last(got) != "merged→done" {
+				t.Errorf("moves = %v, want done once cleaned up", got)
+			}
+		})
+	}
+}
+
 // snapshot returns every file under dir with its content.
 func snapshot(t *testing.T, dir string) map[string]string {
 	t.Helper()
@@ -730,6 +795,19 @@ func TestStepsMoveOnEndedOutputs(t *testing.T) {
 	w.tick(false)
 	if got := w.moves("e1-w3"); !reflect.DeepEqual(got[len(got)-2:], []string{"implementing→verifying", "verifying→pr_open"}) {
 		t.Errorf("moves = %v, want verifying, then pr_open on the passing verdict", got)
+	}
+}
+
+// After three failed verifies the verifier runs only the checks and, when
+// they pass, writes pass with notes: the item goes on to its PR.
+func TestAPassWithNotesVerdictOpensThePR(t *testing.T) {
+	w := newWorld(t)
+	oneSet(w)
+	w.item("e1", "e1-s1", "e1-w3", "verifying")
+	w.end("e1-w3", "verify.v4.md", "## Verdict\n\npass with notes\n\n## Checks\n## Review\n## Send back\nnone\n## Notes\n- the README's tick wording\n")
+	w.tick(false)
+	if got := w.moves("e1-w3"); !reflect.DeepEqual(got, []string{"→verifying", "verifying→pr_open"}) {
+		t.Errorf("moves = %v, want pr_open", got)
 	}
 }
 

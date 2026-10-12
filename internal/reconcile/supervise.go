@@ -244,7 +244,8 @@ type stall struct {
 // open and nothing came for an inbox check interval.
 func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bool) {
 	v := r.b.Values
-	if s.State == listedWorking {
+	turnEnded := r.turnEnded(sess)
+	if !turnEnded && s.State == listedWorking {
 		unacked := time.Duration(v.Inbox.Unacked)
 		if inbox := events.Inbox(owner.evs); len(inbox) > 0 && !r.helperBusy(owner) && r.elapsed(inbox[0].At) >= unacked {
 			m := inbox[0]
@@ -259,7 +260,7 @@ func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bo
 		}
 		return stall{}, false
 	}
-	if subject == nil || s.State != listedTurnEnded {
+	if subject == nil || !turnEnded {
 		return stall{}, false
 	}
 	base := later(r.progress(owner, subject, sess), sess.cur.Since)
@@ -447,7 +448,7 @@ func (r *run) superviseSession(sess *entity) {
 		return
 	}
 	if sess.cur.State == sessionFinished {
-		if s.State == listedTurnEnded {
+		if r.turnEnded(sess) {
 			if err := r.stopSession(sess, s, "finished", "stop "+s.Name+": its work is over"); err != nil {
 				r.fail("%v", err)
 			}

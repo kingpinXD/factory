@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -70,19 +71,86 @@ func (r *run) findSession(name string) (claude.Session, bool) {
 	return claude.FindByName(sessions, name)
 }
 
-// observe keeps the session's short id, and when it was first seen without
-// a pid.
+// observe keeps the session's short id, how it is listed, and when it was
+// first seen without a pid. For a live session not listed as done, it reads
+// whether its transcript shows its turn ended.
 func (r *run) observe(e *entity) {
 	s, ok := r.findSession(e.session.Name)
 	if ok {
 		e.st.ShortID = s.ID
 	}
+	r.noteListed(e, s, ok)
 	switch {
 	case ok && s.Live():
 		e.st.NoPIDSince = time.Time{}
 	case e.st.NoPIDSince.IsZero():
 		e.st.NoPIDSince = r.now
 	}
+	if ok && s.Live() && s.State != listedTurnEnded {
+		e.turnEndedAt = r.transcriptTurnEnd(e, s)
+	}
+}
+
+// noteListed keeps how the session is listed, and logs each change, so the
+// tick log shows what the listing said around a stall.
+func (r *run) noteListed(sess *entity, s claude.Session, ok bool) {
+	now := listedAs(s, ok)
+	switch sess.st.Listed {
+	case now:
+		return
+	case "":
+		r.say("listed %s: %s", sess.session.Name, now)
+	default:
+		r.say("listed %s: %s → %s", sess.session.Name, sess.st.Listed, now)
+	}
+	sess.st.Listed = now
+}
+
+// listedAs names how a session is listed: its state, with its status in
+// brackets when it has one.
+func listedAs(s claude.Session, ok bool) string {
+	switch {
+	case !ok:
+		return "not listed"
+	case s.Status == "":
+		return s.State
+	}
+	return s.State + " (" + s.Status + ")"
+}
+
+// quietTurn is how long a turn must have ended in a session's transcript,
+// with nothing after it, to count as ended while `claude agents` still lists
+// the session as working.
+const quietTurn = 2 * time.Minute
+
+// transcriptTurnEnd returns when the session's transcript shows its turn
+// ended, at least quietTurn ago and after the program last started or
+// resumed it; zero otherwise.
+func (r *run) transcriptTurnEnd(sess *entity, s claude.Session) time.Time {
+	if s.SessionID == "" {
+		return time.Time{}
+	}
+	ctx, cancel := r.call()
+	at, err := r.d.Claude.TurnEndedAt(ctx, s.SessionID)
+	cancel()
+	switch {
+	case errors.Is(err, claude.ErrNoTranscript):
+		return time.Time{}
+	case err != nil:
+		r.fail("%s: %v", sess.id, err)
+		return time.Time{}
+	case at.IsZero() || !at.After(startedAt(sess)) || r.now.Sub(at) < quietTurn:
+		return time.Time{}
+	}
+	return at
+}
+
+// turnEnded reports whether the session is listed with a pid and its turn
+// ended: listed done, or listed working while its transcript shows the turn
+// ended.
+func (r *run) turnEnded(sess *entity) bool {
+	s, ok := r.findSession(sess.session.Name)
+	return ok && s.Live() && (s.State == listedTurnEnded || !sess.turnEndedAt.IsZero())
 }
 
 // delivery is one thing a session is told: a message in its owner's inbox,

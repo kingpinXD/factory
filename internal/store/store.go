@@ -134,6 +134,9 @@ type Status struct {
 	// ShortID is the short id `claude agents` last listed a session under,
 	// which `claude attach` and `claude logs` take as well as its name.
 	ShortID string `json:"short_id,omitempty"`
+	// Listed is how `claude agents` last listed a session: its state, with
+	// its status in brackets when it has one, or "not listed".
+	Listed string `json:"listed,omitempty"`
 	// NoPIDSince is when a session was first listed with no pid, since it
 	// last had one.
 	NoPIDSince time.Time `json:"no_pid_since,omitzero"`

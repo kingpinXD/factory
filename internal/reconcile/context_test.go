@@ -94,6 +94,26 @@ func TestACheckpointIsCompactedThenReadBack(t *testing.T) {
 	}
 }
 
+// The session's own ack or heartbeat after its checkpoint leaves the
+// checkpoint ready, as `factory inbox --ack` right after it did in the first
+// end-to-end run; anything else it writes after it makes it stale.
+func TestWhatTheSessionWritesAfterItsCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		kind     string
+		compacts bool
+	}{{events.KindAck, true}, {events.KindHeartbeat, true}, {events.KindIntent, false}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			w := newWorld(t)
+			checkpointed(t, w, events.KindStart, events.KindEnd)
+			w.append(w.dir("e1-s1"), events.Event{Kind: tc.kind, Sender: "e1-s1", Lease: 1, At: w.now.Add(2 * time.Second)})
+			w.tick(false)
+			if got := len(w.called("claude stop")) == 1; got != tc.compacts {
+				t.Errorf("compacted = %v, want %v; calls %q", got, tc.compacts, w.calls())
+			}
+		})
+	}
+}
+
 func TestACompactionThatNeverComes(t *testing.T) {
 	w := newWorld(t)
 	checkpointed(t, w, events.KindStart, events.KindEnd)

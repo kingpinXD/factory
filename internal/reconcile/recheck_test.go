@@ -346,6 +346,81 @@ func TestAnUpdatedResultAfterHandoverHandsTheWorktreeBack(t *testing.T) {
 	}
 }
 
+// recheckUpdated runs a re-check of e1 that writes plan as epic.v<v>.yaml,
+// with o/r#12 planned updated; the planner updates each issue of updates on
+// GitHub during it.
+func (w *world) recheckUpdated(v int, updates ...string) {
+	w.t.Helper()
+	if _, err := Replan(context.Background(), w.deps(), "e1", "check again"); err != nil {
+		w.t.Fatal(err)
+	}
+	w.tick(false)
+	for _, ref := range updates {
+		w.append(w.dir("e1"), events.Event{Kind: events.KindDone, Sender: "e1", Key: "done:issue-update:" + ref + ":abcd1234"})
+	}
+	w.end("e1", "state-check.v"+strconv.Itoa(v)+".md", stateCheck)
+	w.end("e1", "epic.v"+strconv.Itoa(v)+".yaml", withResult(twoItems("[]"), "o/r#12", "updated"))
+	w.tick(false)
+}
+
+// A re-check copies an updated result it did not re-check: that is no new
+// update, so the item in review keeps its babysitter and no re-read is sent.
+func TestACopiedUpdatedResultLeavesAnInReviewItemInReview(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", withResult(twoItems("[]"), "o/r#12", "updated"))
+	w.append(w.dir("e1"), events.Event{Kind: events.KindDone, Sender: "e1", Key: "done:issue-update:o/r#12:0f0f0f0f"})
+	w.tick(false)
+	w.inReview("e1-w1", 41)
+	w.listen(w.orchestrator("e1-s1", "turn_ended", 4402, "done").PID)
+	w.recheckUpdated(2, "o/r#13")
+	w.tick(false)
+	if got := last(w.moves("e1-w1")); got != "rechecking→in_review" {
+		t.Errorf("last move = %s, want back in in_review; moves %v", got, w.moves("e1-w1"))
+	}
+	if hb := w.kinds("e1-w1", events.KindHandback); len(hb) != 0 || len(w.called("claude stop")) != 0 {
+		t.Errorf("handbacks %+v, stops %v: a copied updated result changes no scope", hb, w.called("claude stop"))
+	}
+	if inbox := strings.Join(w.inbox("e1-s1"), "\n"); strings.Contains(inbox, "Re-read it") {
+		t.Errorf("orchestrator told to re-read a copied result:\n%s", inbox)
+	}
+}
+
+// After a re-check that copied the updated result, one that updates the
+// issue again hands the worktree back and asks for one re-read.
+func TestANewUpdateDuringARecheckHandsTheWorktreeBack(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", withResult(twoItems("[]"), "o/r#12", "updated"))
+	w.tick(false)
+	w.inReview("e1-w1", 41)
+	w.listen(w.orchestrator("e1-s1", "turn_ended", 4402, "done").PID)
+	w.recheckUpdated(2)
+	if got := last(w.moves("e1-w1")); got != "rechecking→in_review" {
+		t.Fatalf("after the copying re-check, last move = %s", got)
+	}
+	w.recheckUpdated(3, "O/R#12")
+	moves := w.moves("e1-w1")
+	if got := moves[len(moves)-3:]; !slices.Equal(got, []string{"in_review→rechecking", "rechecking→in_review", "in_review→implementing"}) {
+		t.Fatalf("moves = %v", moves)
+	}
+	if hb := w.kinds("e1-w1", events.KindHandback); len(hb) != 1 {
+		t.Errorf("handbacks = %+v", hb)
+	}
+	if got := w.called("claude stop"); len(got) != 1 {
+		t.Errorf("stops = %v, want the babysitter stopped", got)
+	}
+	var rereads []string
+	for _, m := range w.inbox("e1-s1") {
+		if strings.Contains(m, "e1-w1: the planner updated issue o/r#12. Re-read it") {
+			rereads = append(rereads, m)
+		}
+	}
+	if len(rereads) != 1 {
+		t.Errorf("re-read messages = %q, want one, for the re-check that updated the issue", rereads)
+	}
+}
+
 func TestAnOrchestratorThatDiesBeforeHandoverStillGetsTheItemToReview(t *testing.T) {
 	w := newWorld(t)
 	w.registry()

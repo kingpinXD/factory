@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 )
@@ -14,6 +15,7 @@ var commands = []string{
 	"add", "tick", "status", "answer", "retry", "stop", "replan", "check",
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
+	"version",
 }
 
 var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
@@ -37,6 +39,7 @@ var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"stop":        runStop,
 	"retry":       runRetry,
 	"launchd":     runLaunchd,
+	"version":     runVersion,
 }
 
 func main() {
@@ -49,6 +52,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	name := args[0]
+	if name == "--version" {
+		name = "version"
+	}
 	if _, ok := handlers[name]; !ok {
 		fmt.Fprintf(stderr, "factory: unknown command: %s (run factory --help)\n", name)
 		return 2
@@ -75,6 +81,36 @@ func runBlueprint(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// readBuildInfo reads the binary's build info. Tests replace it.
+var readBuildInfo = debug.ReadBuildInfo
+
+// runVersion prints the module version and the git commit the binary was built from.
+func runVersion(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintln(stderr, "usage: factory version")
+		return 2
+	}
+	fmt.Fprintln(stdout, versionLine(readBuildInfo()))
+	return 0
+}
+
+// versionLine formats build info as "factory <version> <commit>", with unknown for a missing part.
+func versionLine(info *debug.BuildInfo, ok bool) string {
+	if !ok {
+		return "factory unknown unknown"
+	}
+	version, commit := "unknown", "unknown"
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		version = v
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && s.Value != "" {
+			commit = s.Value
+		}
+	}
+	return fmt.Sprintf("factory %s %s", version, commit)
 }
 
 func printUsage(w io.Writer) {

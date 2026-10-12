@@ -37,7 +37,7 @@ factory stop <id> --reason "<why>"
 # Asks the next tick to re-check every issue of an epic, with the note for its planner.
 factory replan <epic-id> "<note>"
 
-# Checks the blueprint and prints each problem; --output instead checks one step's output file for its required headings.
+# Checks the blueprint and prints each problem, or its machine, state and transition counts when it passes; --output instead checks one step's output file for its required headings.
 factory check [--output <component> <file>]
 
 # Prints the blueprint as JSON.
@@ -53,8 +53,8 @@ factory heartbeat <set-id> <lease>
 factory inbox <id> [--ack <seq>] [--read-only]
 
 # Lists a repo's in-flight items: one block per item (id, epic, state, issue, files), then a final "<n> items" line.
-# --files keeps items touching the paths or whose files are unknown. --state keeps items in any of the given states;
-# an unknown state is an error that names the valid ones.
+# --files keeps those touching the paths or whose files are unknown. --state keeps those in one of the given states
+# (repeat it for more); an unknown state is an error that names the valid ones.
 factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...
 
 # Exits 0 when the factory's plans let a PR merge, 1 when not yet or unknown, and prints why.
@@ -81,12 +81,15 @@ factory lease-ok <set-id> <lease>
 
 # Does the repo work the tick queued.
 factory repo-worker
+
+# Prints the module version and the git commit the binary was built from; a missing part prints unknown. factory --version does the same.
+factory version
 ```
 
 ## `factory status --json`
 
 One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory status` without
-`--json` prints the same report as text, with ages counted to `at`.
+`--json` prints the same report as text, with ages counted to `at` and at most 10 items per section.
 
 ```jsonc
 {
@@ -102,6 +105,10 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
       "seven_day": {"used_percentage": 61, "resets_at": 1791817200}
     },
     "resets_at": "…", "weekly": true,    // the reset a pause waits for; left out when none
+    "held": 10800000000000,              // time in this state while the factory was idle, not counted toward its timeout
+                                         // nanoseconds; only holds that ended; left out at 0
+    "held_since": "…",                   // when the current hold began, or `since` if it began in an earlier state
+                                         // left out when none
     "probed_at": "…", "errors": ["…"]    // left out when none
   },
   "sessions": {"running": 2, "by_repo": {"o/r": 2}},   // sessions not stopped, dead or finished; a planner's are in no repo

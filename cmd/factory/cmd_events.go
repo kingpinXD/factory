@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -254,18 +255,32 @@ type item struct {
 	filesErr error
 }
 
+const queryUsage = "usage: factory query items --repo <owner/repo> [--files <path>...] [--state <state>]..."
+
 // runQuery answers from the program's own files:
-// factory query items --repo <owner/repo> [--files <path>...].
+// factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...
 func runQuery(args []string, stdout, stderr io.Writer) int {
-	repo, files, err := parseQuery(args)
+	repo, files, states, err := parseQuery(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "factory query: %v\nusage: factory query items --repo <owner/repo> [--files <path>...]\n", err)
+		fmt.Fprintf(stderr, "factory query: %v\n%s\n", err, queryUsage)
 		return 2
 	}
-	ix, err := store.ReadIndex(blueprint.Brain())
+	brain := blueprint.Brain()
+	ix, err := store.ReadIndex(brain)
 	if err != nil {
 		fmt.Fprintf(stderr, "factory query: %v\n", err)
 		return 1
+	}
+	if len(states) > 0 {
+		b, err := reconcile.RunningBlueprint(context.Background(), brain)
+		if err != nil {
+			fmt.Fprintf(stderr, "factory query: %v\n", err)
+			return 1
+		}
+		if err := checkStates(b, states); err != nil {
+			fmt.Fprintf(stderr, "factory query: %v\n%s\n", err, queryUsage)
+			return 2
+		}
 	}
 	items, err := inFlight(ix, repo)
 	if err != nil {
@@ -274,6 +289,9 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 	}
 	printed := 0
 	for _, it := range items {
+		if len(states) > 0 && !slices.Contains(states, it.state) {
+			continue
+		}
 		if len(files) > 0 && it.filesErr == nil && !epic.Overlap(it.files, files) {
 			continue
 		}
@@ -293,17 +311,22 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func parseQuery(args []string) (repo string, files []string, err error) {
+func parseQuery(args []string) (repo string, files, states []string, err error) {
 	if len(args) == 0 || args[0] != "items" {
-		return "", nil, errors.New("only items can be queried")
+		return "", nil, nil, errors.New("only items can be queried")
 	}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--repo":
 			if i++; i == len(args) {
-				return "", nil, errors.New("--repo needs owner/repo")
+				return "", nil, nil, errors.New("--repo needs owner/repo")
 			}
 			repo = args[i]
+		case "--state":
+			if i++; i == len(args) {
+				return "", nil, nil, errors.New("--state needs a state")
+			}
+			states = append(states, args[i])
 		case "--files":
 			n := len(files)
 			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
@@ -311,16 +334,34 @@ func parseQuery(args []string) (repo string, files []string, err error) {
 				files = append(files, args[i])
 			}
 			if len(files) == n {
-				return "", nil, errors.New("--files needs at least one path")
+				return "", nil, nil, errors.New("--files needs at least one path")
 			}
 		default:
-			return "", nil, fmt.Errorf("unknown argument %q", args[i])
+			return "", nil, nil, fmt.Errorf("unknown argument %q", args[i])
 		}
 	}
 	if repo == "" {
-		return "", nil, errors.New("--repo is required")
+		return "", nil, nil, errors.New("--repo is required")
 	}
-	return repo, files, nil
+	return repo, files, states, nil
+}
+
+// checkStates returns an error for the first of states that is not an
+// in-flight state of the work machine.
+func checkStates(b *blueprint.Blueprint, states []string) error {
+	var valid []string
+	for name, st := range b.Machines[blueprint.MachineWork].States {
+		if !st.End {
+			valid = append(valid, name)
+		}
+	}
+	slices.Sort(valid)
+	for _, s := range states {
+		if !slices.Contains(valid, s) {
+			return fmt.Errorf("unknown state %q (valid: %s)", s, strings.Join(valid, ", "))
+		}
+	}
+	return nil
 }
 
 // inFlight returns the work items in repo that are not in an end state,

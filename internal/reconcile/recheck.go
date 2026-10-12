@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/issue"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -167,9 +169,13 @@ func covered(ep *entity) []string {
 // recheckBegan returns the seq of the move into checking that began the
 // epic's newest check: the newest one from another state, since checking's
 // timeout restarts it with a move from checking to itself.
-func recheckBegan(ep *entity) int {
+func recheckBegan(ep *entity) int { return recheckBeganBefore(ep, math.MaxInt) }
+
+// recheckBeganBefore returns the seq of the move into checking that began
+// the epic's check running at seq, as recheckBegan does.
+func recheckBeganBefore(ep *entity, seq int) int {
 	for i := len(ep.evs) - 1; i >= 0; i-- {
-		if t := ep.evs[i]; t.Kind == events.KindTransition && t.To == epicChecking && t.From != epicChecking {
+		if t := ep.evs[i]; t.Kind == events.KindTransition && t.To == epicChecking && t.From != epicChecking && t.Seq < seq {
 			return t.Seq
 		}
 	}
@@ -279,43 +285,72 @@ func issueResult(p *epic.Plan, it *entity) string {
 	return i.Result
 }
 
-// scopeChanged: a re-check marked the item's issue updated while its
-// worktree is with the babysitter, and returned the item to in_review (from
-// merging too: the merge was taken back on entering rechecking).
+// recheckUpdated reports whether the re-check that moved the item with t,
+// a move whose ref names that re-check's plan, updated the item's issue:
+// the planner updated it on GitHub during that re-check, or its result
+// became updated. A re-check copies the results it does not re-check, so a
+// result that was updated already is no new update.
+func (r *run) recheckUpdated(it *entity, t events.Event) (bool, error) {
+	ep := r.ents[it.entry.Epic]
+	seq, ok := strings.CutPrefix(t.TriggerRef, "plan:")
+	if ep == nil || !ok {
+		return false, nil
+	}
+	end, ok := planEnd(ep, seq)
+	if !ok {
+		return false, nil
+	}
+	p, err := loadEnded(end)
+	if err != nil || issueResult(p, it) != epic.ResultUpdated {
+		return false, err
+	}
+	began := recheckBeganBefore(ep, end.Seq)
+	if updatedOnGitHub(ep, it, began, end.Seq) {
+		return true, nil
+	}
+	prev, _, err := appliedBefore(ep, began)
+	if err != nil {
+		return false, err
+	}
+	return prev == nil || issueResult(prev, it) != epic.ResultUpdated, nil
+}
+
+// updatedOnGitHub reports whether the epic's log, between seqs from and to,
+// has the item's issue updated on GitHub.
+func updatedOnGitHub(ep, it *entity, from, to int) bool {
+	prefix := strings.ToLower(issue.UpdatedKey(it.work.Repo, it.work.Issue))
+	return slices.ContainsFunc(ep.evs, func(ev events.Event) bool {
+		return ev.Kind == events.KindDone && ev.Seq > from && ev.Seq < to && strings.HasPrefix(strings.ToLower(ev.Key), prefix)
+	})
+}
+
+// scopeChanged: a re-check updated the item's issue while its worktree is
+// with the babysitter, and returned the item to in_review (from merging
+// too: the merge was taken back on entering rechecking).
 func (r *run) scopeChanged(it *entity) (bool, string, error) {
 	t, _ := lastTransition(it.evs)
 	if !handedOver(it) || t.From != workRechecking {
 		return false, "", nil
 	}
-	_, p, err := r.itemPlan(it)
-	if p == nil || err != nil || issueResult(p, it) != epic.ResultUpdated {
+	if updated, err := r.recheckUpdated(it, t); !updated || err != nil {
 		return false, "", err
 	}
 	return true, "scope:" + seqRef(t), nil
 }
 
 // reread tells the orchestrator to re-read an item's issue after each
-// re-check that kept the item with its issue updated.
+// re-check that kept the item and updated its issue.
 func (r *run) reread(it *entity) error {
-	ep := r.ents[it.entry.Epic]
-	if ep == nil {
-		return nil
-	}
 	for _, t := range it.evs {
-		seq, ok := strings.CutPrefix(t.TriggerRef, "plan:")
 		key := fmt.Sprintf("reread:%s:%d", it.id, t.Seq)
-		if t.Kind != events.KindTransition || !ok || slices.Contains([]string{stateNeedsYou, workCancelled, workRechecking}, t.To) || r.told(it, key) {
+		if t.Kind != events.KindTransition || slices.Contains([]string{stateNeedsYou, workCancelled, workRechecking}, t.To) || r.told(it, key) {
 			continue
 		}
-		end, ok := planEnd(ep, seq)
-		if !ok {
-			continue
-		}
-		p, err := loadEnded(end)
+		updated, err := r.recheckUpdated(it, t)
 		if err != nil {
 			return err
 		}
-		if issueResult(p, it) != epic.ResultUpdated {
+		if !updated {
 			continue
 		}
 		text := fmt.Sprintf("%s: the planner updated issue %s. Re-read it, then redo every step it invalidates, as new versions.", it.id, issueRef(it))

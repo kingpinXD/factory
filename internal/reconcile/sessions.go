@@ -72,8 +72,8 @@ func (r *run) findSession(name string) (claude.Session, bool) {
 }
 
 // observe keeps the session's short id, how it is listed, and when it was
-// first seen without a pid. For a live session not listed as done, it reads
-// whether its transcript shows its turn ended.
+// first seen without a pid. For a live session whose listing does not show
+// its turn ended, it reads whether its transcript does.
 func (r *run) observe(e *entity) {
 	s, ok := r.findSession(e.session.Name)
 	if ok {
@@ -86,7 +86,7 @@ func (r *run) observe(e *entity) {
 	case e.st.NoPIDSince.IsZero():
 		e.st.NoPIDSince = r.now
 	}
-	if ok && s.Live() && s.State != listedTurnEnded {
+	if ok && s.Live() && !turnEndedInListing(s) {
 		e.turnEndedAt = r.transcriptTurnEnd(e, s)
 	}
 }
@@ -146,11 +146,17 @@ func (r *run) transcriptTurnEnd(sess *entity, s claude.Session) time.Time {
 }
 
 // turnEnded reports whether the session is listed with a pid and its turn
-// ended: listed done, or listed working while its transcript shows the turn
-// ended.
+// ended: its listing shows that, or its transcript does.
 func (r *run) turnEnded(sess *entity) bool {
 	s, ok := r.findSession(sess.session.Name)
-	return ok && s.Live() && (s.State == listedTurnEnded || !sess.turnEndedAt.IsZero())
+	return ok && s.Live() && (turnEndedInListing(s) || !sess.turnEndedAt.IsZero())
+}
+
+// turnEndedInListing reports whether the listing shows the session's turn
+// ended: listed done, or idle. A session a post woke is listed working
+// again, and stays so after that turn, idle.
+func turnEndedInListing(s claude.Session) bool {
+	return s.State == listedTurnEnded || s.Status == listedIdle
 }
 
 // delivery is one thing a session is told: a message in its owner's inbox,

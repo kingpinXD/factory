@@ -259,6 +259,8 @@ const queryUsage = "usage: factory query items --repo <owner/repo> [--files <pat
 
 // runQuery answers from the program's own files:
 // factory query items --repo <owner/repo> [--files <path>...] [--state <state>]...
+// It prints one block per item, then a last line "<n> items". An error goes
+// to stderr only, so an empty answer and a failed one look different.
 func runQuery(args []string, stdout, stderr io.Writer) int {
 	repo, files, states, err := parseQuery(args)
 	if err != nil {
@@ -305,9 +307,10 @@ func runQuery(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "id: %s\nepic: %s\nstate: %s\nissue: %d\nfiles: %s\n", it.id, it.epic, it.state, it.issue, listed)
 		printed++
 	}
-	if printed == 0 {
-		fmt.Fprintf(stdout, "no matching in-flight items in %s\n", repo)
+	if printed > 0 {
+		fmt.Fprintln(stdout)
 	}
+	fmt.Fprintf(stdout, "%d items\n", printed)
 	return 0
 }
 

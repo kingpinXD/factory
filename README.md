@@ -28,10 +28,10 @@ factory status [--json]
 # Gives the user's answer to a question or a result that waits on them.
 factory answer <epic-id> <issue> "<choice>"
 
-# Returns <id>, which waits on the user, to the state it left.
+# Asks the next tick to return <id>, which waits on the user, to the state it left.
 factory retry <id>
 
-# Cancels <id> and the work under it.
+# Asks the next tick to cancel <id> and the work under it.
 factory stop <id> --reason "<why>"
 
 # Asks an epic's planner to re-check every issue, with a note.
@@ -61,7 +61,7 @@ factory may-merge <pr-url>
 # Records that a merged PR is deployed, for the work that waits on that.
 factory deployed <pr-url>
 
-# Makes one GitHub issue write for an agent, logged in the running session's events.
+# Makes one GitHub issue write. Run by a factory session, it is logged in that session's events.
 factory issue create  --repo <owner/repo> --key <stable key> --title "<t>" --body-file <path> [--parent <number>]
 factory issue update  --repo <owner/repo> --number <n> --append-file <path>
 factory issue comment --repo <owner/repo> --number <n> --body-file <path>

@@ -5,7 +5,7 @@ package blueprint
 // implements one check per name.
 var Guards = map[string]string{
 	// work
-	"startable":            "the item's gate: start links are released, its repo's base branch is green and the account is ok",
+	"startable":            "the item's gate: start links are released, its repo's base branch is green and the account is ok; a repair epic's item skips the base check and may start near_limit",
 	"step_started":         "the step's start event is logged",
 	"step_ended":           "the step's end event is logged, and its output file has the hash it names and the step's headings",
 	"verify_passed":        "the verifier's newest verify.v<n>.md is ended (as step_ended) and the first line under its ## Verdict is pass, or pass with notes",
@@ -52,7 +52,7 @@ var Guards = map[string]string{
 	"compaction_recorded": "the transcript has a compaction record newer than the stop, and the turn ended",
 	"factory_stopped":     "the factory stopped the session",
 	"no_pid":              "the session has had no pid for supervision.dead_after",
-	"resume_allowed":      "the account is ok and the session's work needs it again",
+	"resume_allowed":      "the account is ok, or near_limit for a repair epic's session, and the session's work needs it again",
 	"work_finished":       "the session's work is over and nothing will wake it",
 	// account
 	"usage_near_limit":        "the newest figure is fresh and at or above usage.near_limit in either window",

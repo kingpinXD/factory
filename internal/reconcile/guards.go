@@ -152,9 +152,9 @@ var steps = map[string]string{
 	"verifying":    verifyStep,
 }
 
-// startable: the account is ok and the item can start now.
+// startable: the account allows the item's work and it can start now.
 func (r *run) startable(e *entity) (bool, string, error) {
-	if !r.accountOK {
+	if !r.workAllowed(e) {
 		return false, "", nil
 	}
 	ok, err := r.canStart(e)
@@ -196,10 +196,14 @@ func (r *run) canStart(it *entity) (bool, error) {
 func active(it *entity) bool { return it.m.States[it.cur.State].Health == blueprint.HealthEvents }
 
 // ready reports whether an item's own start conditions hold: its gate:
-// start links are released and its repo's base branch is not red.
+// start links are released and its repo's base branch is not red. A repair
+// item starts on a red base: it is there to fix it.
 func (r *run) ready(it *entity) (bool, error) {
 	if ok, err := linksReleased(r, it); !ok || err != nil {
 		return false, err
+	}
+	if r.isRepair(it) {
+		return true, nil
 	}
 	return r.baseGreen(it.work.Repo, it.work.Base)
 }
@@ -584,14 +588,14 @@ func (r *run) workFinished(e *entity) (bool, string, error) {
 }
 
 // resumeAllowed: the session's owner has work for it and does not wait for
-// the user, and the account is ok or asked for this resume after a pause.
-// The account's status is read again last: another tick's account step may
-// have paused it since this tick's.
+// the user, and the account allows its work or asked for this resume after
+// a pause. The account's status is read again last: another tick's account
+// step may have paused it since this tick's.
 func (r *run) resumeAllowed(e *entity) (bool, string, error) {
 	owner := r.ents[e.session.Task]
 	afterPause := e.req != nil && e.req.Request == RequestResume
-	if owner == nil || owner.cur.State == stateNeedsYou || !r.accountOK && !afterPause {
+	if owner == nil || owner.cur.State == stateNeedsYou || !r.workAllowed(e) && !afterPause {
 		return false, "", nil
 	}
-	return r.needsSession(owner) && r.accountAllows(afterPause), "", nil
+	return r.needsSession(owner) && r.accountAllows(e, afterPause), "", nil
 }

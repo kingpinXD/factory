@@ -211,10 +211,11 @@ type RepairEpisode struct {
 	WaitingOn string `json:"waiting_on,omitempty"`
 }
 
-// Hold is one time the account held work back.
+// Hold is one time the account held work back, in one state.
 type Hold struct {
-	From time.Time `json:"from"`
-	To   time.Time `json:"to,omitzero"`
+	From  time.Time `json:"from"`
+	To    time.Time `json:"to,omitzero"`
+	State string    `json:"state,omitempty"`
 }
 
 // ReadOverall reads brain's overall status.json. A missing file is the zero

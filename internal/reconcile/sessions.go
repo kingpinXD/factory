@@ -251,16 +251,13 @@ func (r *run) openingPR(it *entity) bool {
 
 // driveSessions starts the sessions entities need and posts new work to
 // live ones. A stopped or dead session is woken by its own machine
-// (resume_allowed), never here. Nothing starts or is posted while the
-// account holds work back.
+// (resume_allowed), never here. Nothing starts or is posted for an owner
+// whose work the account holds back.
 func (r *run) driveSessions() {
-	if !r.accountOK {
-		return
-	}
 	for _, id := range r.order() {
 		owner := r.ents[id]
 		component := sessionComponent(owner)
-		if component == "" || !r.needsSession(owner) {
+		if component == "" || !r.workAllowed(owner) || !r.needsSession(owner) {
 			continue
 		}
 		if err := r.drive(owner, component); err != nil {
@@ -295,7 +292,7 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 		r.say("%s: not started: the session listing is unknown", name)
 		return nil
 	}
-	if !r.accountAllows(false) {
+	if !r.accountAllows(owner, false) {
 		r.say("%s: not started: the account holds work back", name)
 		return nil
 	}

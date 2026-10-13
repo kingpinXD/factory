@@ -64,9 +64,9 @@ type world struct {
 	pulls *pulls
 }
 
-type fakeAccount struct{ ok bool }
+type fakeAccount struct{ state string }
 
-func (a *fakeAccount) Step(context.Context, time.Time, bool) (bool, error) { return a.ok, nil }
+func (a *fakeAccount) Step(context.Context, time.Time, bool) (string, error) { return a.state, nil }
 
 func (w *world) DM(_ context.Context, text string) error {
 	w.mu.Lock()
@@ -121,7 +121,7 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(socks) })
-	w := &world{t: t, brain: brain, home: t.TempDir(), socks: socks, now: t0, acct: &fakeAccount{ok: true},
+	w := &world{t: t, brain: brain, home: t.TempDir(), socks: socks, now: t0, acct: &fakeAccount{state: stateOK},
 		prs: map[string]gh.PR{}, red: map[string]bool{}, bases: map[string]fakeBase{}, hub: newHub(), pulls: newPulls()}
 	w.fake = &proc.Fake{Respond: w.respond}
 	return w

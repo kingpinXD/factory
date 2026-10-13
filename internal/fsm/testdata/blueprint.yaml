@@ -482,7 +482,7 @@ machines:
       - {from: dead, to: finished, trigger: tick, guard: work_finished}
 
   # Plan usage, one per machine. While it is not ok, nothing starts or resumes and the
-  # clocks of the work it holds back are frozen.
+  # clocks of the work it holds back are frozen; near_limit holds back all but repair epics.
   account:
     start: ok
     states:
@@ -491,7 +491,7 @@ machines:
         exits: near_limit at near_limit; paused at pause or a limit message; stale when the figure is older than stale_after
         health: waits
       near_limit:
-        entry: a fresh figure at or above near_limit in either window; no new work starts. After a pause, the probe's fresh figure under pause; the recorded sessions resume one per tick, longest chain first
+        entry: a fresh figure at or above near_limit in either window; no new work starts but a repair epic's. After a pause, the probe's fresh figure under pause; the recorded sessions resume one per tick, longest chain first
         exits: ok when both windows are under near_limit; paused; stale
         health: waits
       paused:

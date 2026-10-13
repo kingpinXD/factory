@@ -170,7 +170,7 @@ func TestAnAutomaticCompactionGetsTheSameMessage(t *testing.T) {
 func TestNoCompactionWhileTheAccountHoldsWork(t *testing.T) {
 	w := newWorld(t)
 	checkpointed(t, w, events.KindStart, events.KindEnd)
-	w.acct.ok = false
+	w.acct.state = statePaused
 	w.tick(false)
 	if got := w.called("claude"); len(got) != 1 || got[0] != "claude agents --json --all" {
 		t.Errorf("calls = %q, want only the listing while held", got)

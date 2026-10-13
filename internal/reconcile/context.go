@@ -86,12 +86,12 @@ func (r *run) remindCheckpoint(sess *entity, pct int, compactedAt time.Time) {
 	}))
 }
 
-// checkpointReady: the account is ok, the session's turn ended, the newest
+// checkpointReady: the account allows the session's work, its turn ended, the newest
 // event it wrote is a checkpoint no compaction used yet, and none of its
 // steps has a start without an end.
 func (r *run) checkpointReady(sess *entity) (bool, string, error) {
 	owner := r.ents[sess.session.Task]
-	if !r.accountOK || owner == nil || !r.turnEnded(sess) {
+	if !r.workAllowed(sess) || owner == nil || !r.turnEnded(sess) {
 		return false, "", nil
 	}
 	cp, ok := r.newestWritten(owner)
@@ -99,7 +99,7 @@ func (r *run) checkpointReady(sess *entity) (bool, string, error) {
 		return false, "", nil
 	}
 	ref := eventRef(owner.id, cp)
-	if usedRef(sess, ref) || r.stepOpen(owner) || !r.accountAllows(false) {
+	if usedRef(sess, ref) || r.stepOpen(owner) || !r.accountAllows(sess, false) {
 		return false, "", nil
 	}
 	return true, ref, nil
@@ -163,11 +163,11 @@ func (r *run) compact(sess *entity) error {
 	return r.act("compact "+s.Name, func(ctx context.Context) error { return r.d.Claude.Compact(ctx, s.ID) })
 }
 
-// compactionRecorded: the account is ok, the transcript has a compaction
-// newer than the stop, and the session's turn ended.
+// compactionRecorded: the account allows the session's work, the transcript
+// has a compaction newer than the stop, and the session's turn ended.
 func (r *run) compactionRecorded(sess *entity) (bool, string, error) {
 	at := r.sup.compactedAt[sess.id]
-	if !r.accountOK || !at.After(sess.cur.Since) || !r.turnEnded(sess) {
+	if !r.workAllowed(sess) || !at.After(sess.cur.Since) || !r.turnEnded(sess) {
 		return false, "", nil
 	}
 	return true, compactedKey(at), nil
@@ -228,7 +228,7 @@ func (r *run) deliver(sess *entity, text string) error {
 		return fmt.Errorf("%s is not listed", sess.session.Name)
 	case s.Live():
 		return r.act("post to "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
-	case !r.accountAllows(false):
+	case !r.accountAllows(sess, false):
 		r.say("%s: not resumed after its compaction: the account holds work back", s.Name)
 		return nil
 	}

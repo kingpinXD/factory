@@ -65,15 +65,17 @@ const (
 const maxHolds = 20
 
 // updateHolds opens a hold on the first tick the account holds work back,
-// and closes it on the first tick it does not.
+// and closes it on the first tick it does not. A hold is in one account
+// state: a change of state closes it and opens the next.
 func (r *run) updateHolds() {
 	h := slices.Clone(r.sup.prev.Holds)
 	open := len(h) > 0 && h[len(h)-1].To.IsZero()
-	switch {
-	case !r.accountOK && !open:
-		h = append(h, store.Hold{From: r.now})
-	case r.accountOK && open:
+	if open && (r.accountOK || h[len(h)-1].State != r.accountState) {
 		h[len(h)-1].To = r.now
+		open = false
+	}
+	if !r.accountOK && !open {
+		h = append(h, store.Hold{From: r.now, State: r.accountState})
 	}
 	if len(h) > maxHolds {
 		h = h[len(h)-maxHolds:]
@@ -81,11 +83,15 @@ func (r *run) updateHolds() {
 	r.sup.holds = h
 }
 
-// elapsed returns how long a clock started at since has run by now, without
-// the time the account held work back.
-func (r *run) elapsed(since time.Time) time.Duration {
+// elapsed returns how long e's clock started at since has run by now,
+// without the time the account held e's work back.
+func (r *run) elapsed(e *entity, since time.Time) time.Duration {
+	repair := r.isRepair(e)
 	d := r.now.Sub(since)
 	for _, h := range r.sup.holds {
+		if repair && h.State == stateNearLimit {
+			continue
+		}
 		to := h.To
 		if to.IsZero() {
 			to = r.now
@@ -121,7 +127,7 @@ func (r *run) supervise() {
 	r.checkAutoContinue()
 	r.countOtherRestarts()
 	r.dmNeedsYou()
-	if !r.accountOK || !r.anySession() {
+	if !r.anySession() {
 		return
 	}
 	if _, known := r.listing(); !known {
@@ -130,6 +136,7 @@ func (r *run) supervise() {
 	for _, id := range r.order() {
 		e := r.ents[id]
 		switch {
+		case !r.workAllowed(e):
 		case e.session != nil:
 			r.superviseSession(e)
 		case e.epic != nil && slices.Contains(plannerStates, e.cur.State), e.set != nil && e.cur.State == setRunning:
@@ -219,7 +226,7 @@ func (r *run) superviseOwner(owner *entity) {
 	switch {
 	case !acted:
 		r.nudge(owner, subject, s, st.why)
-	case last.Kind == events.KindNudge && r.elapsed(last.At) >= st.window:
+	case last.Kind == events.KindNudge && r.elapsed(owner, last.At) >= st.window:
 		r.restart(subject, sess, s, st.why)
 	}
 }
@@ -257,16 +264,16 @@ func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bo
 	turnEnded := r.turnEnded(sess)
 	if !turnEnded && s.State == listedWorking {
 		unacked := time.Duration(v.Inbox.Unacked)
-		if inbox := events.Inbox(owner.evs); len(inbox) > 0 && !r.helperBusy(owner) && r.elapsed(inbox[0].At) >= unacked {
+		if inbox := events.Inbox(owner.evs); len(inbox) > 0 && !r.helperBusy(owner) && r.elapsed(owner, inbox[0].At) >= unacked {
 			m := inbox[0]
-			return stall{fmt.Sprintf("message seq %d unacknowledged for %s", m.Seq, r.elapsed(m.At).Round(time.Minute)), m.At, unacked}, true
+			return stall{fmt.Sprintf("message seq %d unacknowledged for %s", m.Seq, r.elapsed(owner, m.At).Round(time.Minute)), m.At, unacked}, true
 		}
 		if subject == nil {
 			return stall{}, false
 		}
 		p := r.progress(owner, subject, sess)
-		if r.elapsed(p) >= time.Duration(v.Supervision.NoProgress) {
-			return stall{fmt.Sprintf("no progress on %s (%s) for %s", subject.id, subject.cur.State, r.elapsed(p).Round(time.Minute)), p, time.Duration(v.Supervision.NoProgress)}, true
+		if r.elapsed(owner, p) >= time.Duration(v.Supervision.NoProgress) {
+			return stall{fmt.Sprintf("no progress on %s (%s) for %s", subject.id, subject.cur.State, r.elapsed(owner, p).Round(time.Minute)), p, time.Duration(v.Supervision.NoProgress)}, true
 		}
 		return stall{}, false
 	}
@@ -274,7 +281,7 @@ func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bo
 		return stall{}, false
 	}
 	base := later(r.progress(owner, subject, sess), sess.cur.Since)
-	if r.elapsed(base) < time.Duration(v.Inbox.CheckEvery) {
+	if r.elapsed(owner, base) < time.Duration(v.Inbox.CheckEvery) {
 		return stall{}, false
 	}
 	return stall{fmt.Sprintf("its turn ended with %s %s", subject.id, subject.cur.State), base, time.Duration(v.Supervision.NoProgress)}, true
@@ -288,7 +295,7 @@ func (r *run) helperBusy(owner *entity) bool {
 	}
 	for i := len(owner.evs) - 1; i >= 0; i-- {
 		if ev := owner.evs[i]; ev.Kind == events.KindHeartbeat && ev.Sender != events.SenderProgram && ev.Lease == owner.st.Lease {
-			return r.elapsed(ev.At) < time.Duration(r.b.Values.Inbox.CheckEvery)
+			return r.elapsed(owner, ev.At) < time.Duration(r.b.Values.Inbox.CheckEvery)
 		}
 	}
 	return false
@@ -428,11 +435,11 @@ func openIntents(e *entity, sender string) []events.Event {
 func (r *run) checkLease(set, sess *entity) {
 	lease := set.st.Lease
 	renewed := r.leaseRenewed(set, sess)
-	if lease == 0 || r.elapsed(renewed) < time.Duration(r.b.Values.Lease) {
+	if lease == 0 || r.elapsed(set, renewed) < time.Duration(r.b.Values.Lease) {
 		return
 	}
 	set.st.Lease++
-	text := fmt.Sprintf("lease %d expired after %s with no heartbeat; lease %d granted", lease, r.elapsed(renewed).Round(time.Minute), set.st.Lease)
+	text := fmt.Sprintf("lease %d expired after %s with no heartbeat; lease %d granted", lease, r.elapsed(set, renewed).Round(time.Minute), set.st.Lease)
 	r.say("%s: %s", set.id, text)
 	r.logged(r.grantLease(set, text))
 }

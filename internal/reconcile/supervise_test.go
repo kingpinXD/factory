@@ -176,12 +176,12 @@ func TestAHeldBackSessionIsNudgedNotRestarted(t *testing.T) {
 	if got := posted(); len(got) != 1 {
 		t.Fatalf("posted %q, want the turn-ended nudge", got)
 	}
-	w.acct.ok = false
+	w.acct.state = statePaused
 	w.at(11 * time.Minute)
 	w.tick(false)
 	w.at(3*time.Hour + 11*time.Minute)
 	w.tick(false)
-	w.acct.ok = true
+	w.acct.state = stateOK
 	w.at(3*time.Hour + 12*time.Minute)
 	w.tick(false)
 	if got := w.called("claude stop"); len(got) != 0 {
@@ -696,7 +696,7 @@ func TestNothingStartsOrIsPostedWhileTheAccountHoldsWork(t *testing.T) {
 	posted := w.listen(s.PID)
 	w.epic("e2", "checking")
 	w.append(w.dir("e1-s1"), events.Event{At: w.now, Kind: events.KindInstruction, Sender: "e1", Text: "use the v2 API"})
-	w.acct.ok = false
+	w.acct.state = statePaused
 	w.tick(false)
 	if got := w.called("claude --bg"); len(got) != 0 {
 		t.Errorf("started %q while the account holds work", got)

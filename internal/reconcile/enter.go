@@ -181,7 +181,8 @@ func eventBySeq(e *entity, ref string) (events.Event, bool) {
 
 // create makes a new entity in its machine's start state: its folder,
 // inputs.yaml and first transition, and its index entry. The index and its
-// status.json are written when the tick finishes.
+// status.json are written when the tick finishes. A folder a tick that died
+// before writing the index made is reused, with what its log holds.
 func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (*entity, error) {
 	if err := store.CheckID(id); err != nil {
 		return nil, err
@@ -206,6 +207,10 @@ func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (
 			return nil, err
 		}
 		if err := store.WriteInputs(entry.Dir, inputs); err != nil {
+			return nil, err
+		}
+		var err error
+		if e.evs, err = events.Read(store.EventsPath(entry.Dir)); err != nil {
 			return nil, err
 		}
 	}

@@ -101,10 +101,18 @@ func (r *run) elapsed(since time.Time) time.Duration {
 func (r *run) supervised(o *store.Overall) {
 	o.Holds, o.UnknownListings, o.AutoContinue = r.sup.holds, r.sup.unknown, r.sup.autoContinue
 	for _, k := range slices.Sorted(maps.Keys(r.bases)) {
-		if res := r.bases[k]; res.err == nil && !res.green {
+		if read := r.bases[k]; read.err == nil && read.res.Red() && r.queuedOn(k) {
 			o.PausedRepos = append(o.PausedRepos, k)
 		}
 	}
+}
+
+// queuedOn reports whether a work item waits in queued on repo@base k.
+func (r *run) queuedOn(k string) bool {
+	return slices.ContainsFunc(r.order(), func(id string) bool {
+		it := r.ents[id]
+		return it.work != nil && it.cur.State == it.m.Start && it.work.Repo+"@"+it.work.Base == k
+	})
 }
 
 // supervise runs after the entities moved and before sessions are driven.

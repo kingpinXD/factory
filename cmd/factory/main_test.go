@@ -198,6 +198,29 @@ func TestRunCheckPrintsEachProblem(t *testing.T) {
 	}
 }
 
+func TestRunCheckRefusesABlueprintWithoutRedAfter(t *testing.T) {
+	brain := testBrain(t)
+	path := filepath.Join(brain, "factory", "blueprint.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without := strings.Replace(string(data), "  red_after: 15m\n", "", 1)
+	if without == string(data) {
+		t.Fatal("the fixture has no red_after")
+	}
+	if err := os.WriteFile(path, []byte(without), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"check"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if want := "repair: values.red_after is 0s; want how long a base stays red before a repair starts\n"; stdout.String() != want {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestRunBlueprintJSON(t *testing.T) {
 	testBrain(t)
 	var stdout, stderr bytes.Buffer

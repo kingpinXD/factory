@@ -51,10 +51,12 @@ type world struct {
 	mu       sync.Mutex
 	sessions []claude.Session
 	// prs are the pull requests by head branch; red names repo@base
-	// branches whose checks failed.
-	prs map[string]gh.PR
-	red map[string]bool
-	dms []string
+	// branches whose checks failed, and bases says what any repo@base reads
+	// as in full.
+	prs   map[string]gh.PR
+	red   map[string]bool
+	bases map[string]fakeBase
+	dms   []string
 	// hub is GitHub's issues, links and merged PRs (epic_test.go).
 	hub *hub
 	// pulls is GitHub's review threads, comments, checks and merge queues,
@@ -120,7 +122,7 @@ func newWorld(t *testing.T) *world {
 	}
 	t.Cleanup(func() { os.RemoveAll(socks) })
 	w := &world{t: t, brain: brain, home: t.TempDir(), socks: socks, now: t0, acct: &fakeAccount{ok: true},
-		prs: map[string]gh.PR{}, red: map[string]bool{}, hub: newHub(), pulls: newPulls()}
+		prs: map[string]gh.PR{}, red: map[string]bool{}, bases: map[string]fakeBase{}, hub: newHub(), pulls: newPulls()}
 	w.fake = &proc.Fake{Respond: w.respond}
 	return w
 }
@@ -188,15 +190,48 @@ func (w *world) respond(c proc.Cmd) ([]byte, error) {
 			}
 		}
 		return nil, fmt.Errorf("no PR %s", a[2])
-	case c.Name == "gh" && a[0] == "api" && a[1] == "graphql" && strings.Contains(a[3], "statusCheckRollup{state}"):
-		owner, name, ref := field(a, "owner="), field(a, "name="), strings.TrimPrefix(field(a, "ref="), "refs/heads/")
-		state := "SUCCESS"
-		if w.red[owner+"/"+name+"@"+ref] {
-			state = "FAILURE"
-		}
-		return []byte(`{"data":{"repository":{"ref":{"target":{"statusCheckRollup":{"state":"` + state + `"}}}}}}`), nil
+	case c.Name == "gh" && a[0] == "api" && a[1] == "graphql" && strings.Contains(a[3], "ref(qualifiedName:$ref)"):
+		return w.baseRead(field(a, "owner=") + "/" + field(a, "name=") + "@" + strings.TrimPrefix(field(a, "ref="), "refs/heads/"))
 	}
 	return nil, nil
+}
+
+// baseRead answers the read of base branch k, repo@branch: its entry in
+// bases; else red with no checks listed when red says so, or SUCCESS.
+func (w *world) baseRead(k string) ([]byte, error) {
+	res, ok := w.bases[k]
+	switch {
+	case ok && res.err != nil:
+		return nil, res.err
+	case !ok && w.red[k]:
+		res.State = "FAILURE"
+	case !ok:
+		res.State = "SUCCESS"
+	}
+	var nodes []map[string]string
+	for _, c := range res.Checks {
+		conclusion := ""
+		switch {
+		case c.Red:
+			conclusion = "FAILURE"
+		case c.Success:
+			conclusion = "SUCCESS"
+		}
+		status := "COMPLETED"
+		if conclusion == "" {
+			status = "IN_PROGRESS"
+		}
+		nodes = append(nodes, map[string]string{"__typename": "CheckRun", "name": c.Name, "status": status, "conclusion": conclusion, "detailsUrl": c.URL})
+	}
+	rollup := map[string]any{"state": res.State, "contexts": map[string]any{"nodes": nodes}}
+	return json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"ref": map[string]any{"target": map[string]any{"oid": res.SHA, "statusCheckRollup": rollup}}}}})
+}
+
+// fakeBase is a base branch as the world's GitHub shows it, or the error
+// reading it gives.
+type fakeBase struct {
+	gh.BaseResult
+	err error
 }
 
 // field returns the value of the gh api field that starts with prefix.

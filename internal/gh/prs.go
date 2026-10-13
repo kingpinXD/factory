@@ -91,6 +91,12 @@ type Check struct {
 	Required bool
 }
 
+// Check states that count as passed, and as failed.
+var (
+	GreenStates = []string{"SUCCESS", "SKIPPED", "NEUTRAL"}
+	RedStates   = []string{"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+)
+
 const checksQuery = `query($owner:String!,$name:String!,$sha:GitObjectID!,$pr:Int!){repository(owner:$owner,name:$name){` +
 	`pullRequest(number:$pr){baseRef{branchProtectionRule{requiredStatusCheckContexts} refUpdateRule{requiredStatusCheckContexts} ` +
 	`rules(first:100){nodes{parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}}} ` +
@@ -190,30 +196,91 @@ func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]
 }
 
 const baseQuery = `query($owner:String!,$name:String!,$ref:String!){repository(owner:$owner,name:$name){ref(qualifiedName:$ref){` +
-	`target{... on Commit{oid statusCheckRollup{state}}}}}}`
+	`target{... on Commit{oid statusCheckRollup{state contexts(first:100){nodes{__typename ` +
+	`... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}}}`
 
-// BaseGreen reports whether branch's newest commit is not red: it is false
-// only when its checks failed or errored. Pending checks, or none, count as green.
-func (c Client) BaseGreen(ctx context.Context, repo, branch string) (bool, error) {
+// BaseResult is a branch's newest commit and its checks, as BaseState reads
+// them.
+type BaseResult struct {
+	// State is the commit's check rollup: SUCCESS, FAILURE, ERROR, PENDING
+	// or EXPECTED; "" when it has no checks.
+	State  string
+	SHA    string
+	Checks []BaseCheck
+}
+
+// BaseCheck is one check run or commit status on a branch's commit.
+type BaseCheck struct {
+	Name string `json:"name"`
+	// URL is the run's or status's page.
+	URL string `json:"url,omitempty"`
+	// Red is set for a check that failed; Success for one that passed,
+	// skipped included. A pending check is neither.
+	Red     bool `json:"red,omitempty"`
+	Success bool `json:"success,omitempty"`
+}
+
+// Red reports whether the commit's checks failed or errored.
+func (b BaseResult) Red() bool { return b.State == "FAILURE" || b.State == "ERROR" }
+
+// Green reports whether the commit is not red: pending checks, or none,
+// count as green.
+func (b BaseResult) Green() bool { return !b.Red() }
+
+// RedChecks returns the checks that failed.
+func (b BaseResult) RedChecks() []BaseCheck {
+	return slices.DeleteFunc(slices.Clone(b.Checks), func(c BaseCheck) bool { return !c.Red })
+}
+
+// BaseState reads branch's newest commit, its check rollup and each check.
+func (c Client) BaseState(ctx context.Context, repo, branch string) (BaseResult, error) {
 	var data struct {
 		Repository struct {
 			Ref *struct {
 				Target struct {
+					Oid               string
 					StatusCheckRollup *struct {
-						State string
+						State    string
+						Contexts struct {
+							Nodes []struct {
+								Typename   string `json:"__typename"`
+								Name       string
+								Status     string
+								Conclusion string
+								DetailsURL string `json:"detailsUrl"`
+								Context    string
+								State      string
+								TargetURL  string `json:"targetUrl"`
+							}
+						}
 					}
 				}
 			}
 		}
 	}
 	if err := c.graphql(ctx, &data, baseQuery, append(repoVars(repo), "-f", "ref=refs/heads/"+branch)...); err != nil {
-		return false, err
+		return BaseResult{}, err
 	}
 	if data.Repository.Ref == nil {
-		return false, fmt.Errorf("%s has no branch %s", repo, branch)
+		return BaseResult{}, fmt.Errorf("%s has no branch %s", repo, branch)
 	}
-	r := data.Repository.Ref.Target.StatusCheckRollup
-	return r == nil || r.State != "FAILURE" && r.State != "ERROR", nil
+	t := data.Repository.Ref.Target
+	res := BaseResult{SHA: t.Oid}
+	if t.StatusCheckRollup == nil {
+		return res, nil
+	}
+	res.State = t.StatusCheckRollup.State
+	for _, n := range t.StatusCheckRollup.Contexts.Nodes {
+		name, url, state := n.Name, n.DetailsURL, n.Conclusion
+		switch {
+		case n.Typename == "StatusContext":
+			name, url, state = n.Context, n.TargetURL, n.State
+		case n.Status != "COMPLETED":
+			state = n.Status
+		}
+		res.Checks = append(res.Checks, BaseCheck{Name: name, URL: url, Red: slices.Contains(RedStates, state), Success: slices.Contains(GreenStates, state)})
+	}
+	return res, nil
 }
 
 // Thread is a review thread on a pull request.

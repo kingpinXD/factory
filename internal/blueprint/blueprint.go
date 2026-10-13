@@ -85,6 +85,12 @@ type Values struct {
 	// WaitDM is how long any wait, such as one for `factory deployed`, lasts
 	// before the user gets one DM about it.
 	WaitDM Duration `yaml:"wait_dm" json:"wait_dm"`
+	// RedAfter is how long a base branch an open item works on stays red
+	// before a repair epic starts, and how long after a repair epic ended
+	// with the base still red the next one starts.
+	RedAfter Duration `yaml:"red_after" json:"red_after"`
+	// RepairAttempts is how many repair epics one red episode gets.
+	RepairAttempts int `yaml:"repair_attempts" json:"repair_attempts"`
 }
 
 // Supervision holds the restart, nudge and escalation values.

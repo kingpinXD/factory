@@ -96,6 +96,8 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	r.attachMachines()
 	if r.full {
 		r.reconcileGitHub()
+		r.watchBases()
+		r.startRepairs()
 	}
 	for _, id := range r.order() {
 		r.tickEntity(r.ents[id])
@@ -116,7 +118,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if err := r.save(); err != nil {
 		return err
 	}
-	overall := store.Overall{LastTick: r.now, Tick: r.n, Errors: r.errs}
+	overall := store.Overall{LastTick: r.now, Tick: r.n, Errors: r.errs, Repairs: r.repairs}
 	for _, p := range r.problems {
 		overall.Problems = append(overall.Problems, p.String())
 	}
@@ -169,16 +171,18 @@ type run struct {
 	listed        bool
 	sessions      []claude.Session
 	sessionsKnown bool
-	bases         map[string]baseResult
+	bases         map[string]baseRead
 	blockerReads  map[string]blockerRead
 	agents        map[string]agents.Agent
 	errs          []string
 	sup           supervision
+	// repairs are the open repair episodes, carried from the last tick.
+	repairs []store.RepairEpisode
 }
 
-type baseResult struct {
-	green bool
-	err   error
+type baseRead struct {
+	res gh.BaseResult
+	err error
 }
 
 func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
@@ -196,9 +200,10 @@ func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
 		n:     overall.Tick + 1,
 		ix:    ix,
 		ents:  map[string]*entity{},
-		bases: map[string]baseResult{},
+		bases: map[string]baseRead{},
 		sup:   supervision{prev: overall, compactedAt: map[string]time.Time{}},
 	}
+	r.repairs = slices.Clone(overall.Repairs)
 	for _, id := range slices.Sorted(maps.Keys(ix)) {
 		e, err := loadEntity(id, ix[id])
 		if err != nil {

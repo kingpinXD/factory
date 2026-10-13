@@ -26,12 +26,6 @@ import (
 // dead-letters the item.
 const merger = "merger"
 
-// Check states, as gh.Checks reports them.
-var (
-	greenChecks = []string{"SUCCESS", "SKIPPED", "NEUTRAL"}
-	redChecks   = []string{"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
-)
-
 // holdBehind is the merge hold of a PR that is ready but behind its base
 // branch, which the base requires it to be up to date with.
 const holdBehind = "it is behind its base branch"
@@ -185,14 +179,14 @@ func gating(checks []gh.Check) []gh.Check {
 }
 
 func allGreen(checks []gh.Check) bool {
-	return !slices.ContainsFunc(checks, func(c gh.Check) bool { return !slices.Contains(greenChecks, c.State) })
+	return !slices.ContainsFunc(checks, func(c gh.Check) bool { return !slices.Contains(gh.GreenStates, c.State) })
 }
 
 // failing returns the names of the checks that failed.
 func failing(checks []gh.Check) []string {
 	var names []string
 	for _, c := range checks {
-		if slices.Contains(redChecks, c.State) {
+		if slices.Contains(gh.RedStates, c.State) {
 			names = append(names, c.Name)
 		}
 	}

@@ -43,6 +43,10 @@ values:
     auto_compact_at: 60
     compact_failures_dm: 2
   wait_dm: 24h
+  # A base branch an open item works on that stays red red_after gets a repair epic; one that
+  # is still red red_after after a repair epic ended gets another, up to repair_attempts.
+  red_after: 15m
+  repair_attempts: 2
 
 deny:
   models: [fable]

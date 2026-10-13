@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 var (
@@ -41,6 +42,12 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 		v.add("context", "values.context.window %d is under %d: a session's system prompt and tools take about 50k tokens, which leaves too little room", w, minContextWindow)
 	case w > maxContextWindow:
 		v.add("context", "values.context.window %d is over %d, the largest auto-compact window Claude Code takes", w, maxContextWindow)
+	}
+	if b.Values.RedAfter <= 0 {
+		v.add("repair", "values.red_after is %s; want how long a base stays red before a repair starts", time.Duration(b.Values.RedAfter))
+	}
+	if b.Values.RepairAttempts < 1 {
+		v.add("repair", "values.repair_attempts is %d; want at least 1", b.Values.RepairAttempts)
 	}
 	return v.problems
 }

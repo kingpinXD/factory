@@ -118,7 +118,16 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
   ],
   "in_review": [{"repo": "o/r", "count": 1, "oldest": "e1-w1", "oldest_since": "…"}],
   "dead_letters": [{"id": "e1-w2", "error": "the error reported too often"}],
-  "paused_repos": ["o/r@main"],          // base branches whose checks were red: nothing new starts there
+  "paused_repos": ["o/r@main"],          // red base branches a queued item waits on: nothing new starts there
+  "repairs": [                           // base branches red since a full reconcile read them red, until they read green
+    {"repo": "o/r", "base": "main", "red_since": "…",
+     "checks": ["govulncheck"],          // the checks that failed on the newest red head
+     "epic": "e2610131",                 // the open repair epic; "" when none is open
+     "epic_state": "checking",           // its state; "" when none is open
+     "attempts": 1,                      // repair epics that count toward values.repair_attempts
+     "stopped": false,                   // a repair epic was stopped with factory stop: no more start
+     "waiting_on": ""}                   // the open PR, owner/repo#n, a repair found fixing it elsewhere
+  ],
   "epics": [{"id": "e1", "state": "running", "since": "…", "rechecks": 1}],   // open epics
   "agents": [                            // sessions not finished
     {"name": "factory:e1-s1:orchestrator",   // for claude attach <name> or claude logs <name>

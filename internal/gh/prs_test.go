@@ -127,26 +127,36 @@ func TestChecksOnAnUnknownCommit(t *testing.T) {
 	}
 }
 
-func TestBaseGreen(t *testing.T) {
-	rollup := func(state string) string {
-		return `{"data":{"repository":{"ref":{"target":{"oid":"f453fce","statusCheckRollup":{"state":"` + state + `"}}}}}}`
+func TestBaseState(t *testing.T) {
+	rollup := func(state, nodes string) string {
+		return `{"data":{"repository":{"ref":{"target":{"oid":"f453fce","statusCheckRollup":{"state":"` + state + `","contexts":{"nodes":[` + nodes + `]}}}}}}}`
 	}
+	vuln := `{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci/1"}`
+	lint := `{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"SKIPPED","detailsUrl":"https://ci/2"}`
+	build := `{"__typename":"CheckRun","name":"build","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://ci/3"}`
+	deploy := `{"__typename":"StatusContext","context":"deploy","state":"ERROR","targetUrl":"https://deploy/4"}`
 	for _, tc := range []struct {
-		name  string
-		out   string
-		green bool
+		name       string
+		out        string
+		want       BaseResult
+		red, green bool
 	}{
-		{"recorded success", fixture(t, "base.json"), true},
-		{"failure", rollup("FAILURE"), false},
-		{"error", rollup("ERROR"), false},
-		{"pending", rollup("PENDING"), true},
-		{"no checks", `{"data":{"repository":{"ref":{"target":{"oid":"f453fce","statusCheckRollup":null}}}}}`, true},
+		{"recorded success", fixture(t, "base.json"), BaseResult{State: "SUCCESS", SHA: "1747cd4997f9caa0d6b7a1df43530e0b75fd7a82",
+			Checks: []BaseCheck{{Name: "ci", URL: "https://github.com/kingpinXD/factory/actions/runs/38418484316/job/115369153028", Success: true}}}, false, true},
+		{"failure", rollup("FAILURE", strings.Join([]string{vuln, lint, build}, ",")), BaseResult{State: "FAILURE", SHA: "f453fce", Checks: []BaseCheck{
+			{Name: "govulncheck", URL: "https://ci/1", Red: true}, {Name: "lint", URL: "https://ci/2", Success: true}, {Name: "build", URL: "https://ci/3"}}}, true, false},
+		{"error", rollup("ERROR", deploy), BaseResult{State: "ERROR", SHA: "f453fce", Checks: []BaseCheck{{Name: "deploy", URL: "https://deploy/4", Red: true}}}, true, false},
+		{"pending", rollup("PENDING", build), BaseResult{State: "PENDING", SHA: "f453fce", Checks: []BaseCheck{{Name: "build", URL: "https://ci/3"}}}, false, true},
+		{"no checks", `{"data":{"repository":{"ref":{"target":{"oid":"f453fce","statusCheckRollup":null}}}}}`, BaseResult{SHA: "f453fce"}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := fakeGH(map[string]reply{"ref(qualifiedName:$ref)": {out: tc.out}})
-			green, err := Client{Runner: f}.BaseGreen(ctx, "kingpinXD/factory", "main")
-			if err != nil || green != tc.green {
-				t.Errorf("BaseGreen = %v, %v; want %v", green, err, tc.green)
+			got, err := Client{Runner: f}.BaseState(ctx, "kingpinXD/factory", "main")
+			if err != nil || !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("BaseState = %+v, %v; want %+v", got, err, tc.want)
+			}
+			if got.Red() != tc.red || got.Green() != tc.green {
+				t.Errorf("Red() = %v, Green() = %v; want %v, %v", got.Red(), got.Green(), tc.red, tc.green)
 			}
 			if call := strings.Join(f.Calls()[0].Args, " "); !strings.Contains(call, "-f ref=refs/heads/main") {
 				t.Errorf("call = %q", call)
@@ -154,8 +164,18 @@ func TestBaseGreen(t *testing.T) {
 		})
 	}
 	f := fakeGH(map[string]reply{"ref(qualifiedName:$ref)": {out: `{"data":{"repository":{"ref":null}}}`}})
-	if _, err := (Client{Runner: f}).BaseGreen(ctx, "kingpinXD/factory", "gone"); err == nil || err.Error() != "kingpinXD/factory has no branch gone" {
+	if _, err := (Client{Runner: f}).BaseState(ctx, "kingpinXD/factory", "gone"); err == nil || err.Error() != "kingpinXD/factory has no branch gone" {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestRedChecks(t *testing.T) {
+	b := BaseResult{Checks: []BaseCheck{{Name: "a", Red: true}, {Name: "b", Success: true}, {Name: "c"}, {Name: "d", Red: true}}}
+	if got := b.RedChecks(); !reflect.DeepEqual(got, []BaseCheck{{Name: "a", Red: true}, {Name: "d", Red: true}}) {
+		t.Errorf("RedChecks = %+v", got)
+	}
+	if len(b.Checks) != 4 {
+		t.Errorf("RedChecks changed the checks: %+v", b.Checks)
 	}
 }
 

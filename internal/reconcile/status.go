@@ -26,6 +26,7 @@ type Report struct {
 	InReview []RepoReview  `json:"in_review"`
 	Dead     []DeadLetter  `json:"dead_letters"`
 	Paused   []string      `json:"paused_repos"`
+	Repairs  []RepairLoad  `json:"repairs"`
 	Epics    []EpicLoad    `json:"epics"`
 	Agents   []Agent       `json:"agents"`
 	PRs      []OpenPR      `json:"open_prs"`
@@ -62,6 +63,20 @@ type RepoReview struct {
 type DeadLetter struct {
 	ID    string `json:"id"`
 	Error string `json:"error"`
+}
+
+// RepairLoad is a base branch red since RedSince, and its repair: the open
+// repair epic, if any, and how many repair epics counted so far.
+type RepairLoad struct {
+	Repo      string    `json:"repo"`
+	Base      string    `json:"base"`
+	RedSince  time.Time `json:"red_since"`
+	Checks    []string  `json:"checks"`
+	Epic      string    `json:"epic"`
+	EpicState string    `json:"epic_state"`
+	Attempts  int       `json:"attempts"`
+	Stopped   bool      `json:"stopped"`
+	WaitingOn string    `json:"waiting_on"`
 }
 
 // EpicLoad is an open epic's state and its re-checks so far.
@@ -113,13 +128,28 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 	rep := Report{
 		At: r.now, LastTick: o.LastTick, Tick: o.Tick, Account: acct,
 		Sessions: SessionLoad{ByRepo: map[string]int{}},
-		Waiting:  []Waiting{}, InReview: []RepoReview{}, Dead: []DeadLetter{}, Epics: []EpicLoad{}, Agents: []Agent{}, PRs: []OpenPR{},
+		Waiting:  []Waiting{}, InReview: []RepoReview{}, Dead: []DeadLetter{}, Repairs: []RepairLoad{}, Epics: []EpicLoad{}, Agents: []Agent{}, PRs: []OpenPR{},
 		Paused: append([]string{}, o.PausedRepos...), Errors: append([]string{}, o.Errors...), Problems: append([]string{}, o.Problems...),
 	}
 	for _, id := range r.order() {
 		r.report(&rep, r.ents[id])
 	}
+	for _, ep := range o.Repairs {
+		rep.Repairs = append(rep.Repairs, r.repairLoad(ep))
+	}
 	return rep, nil
+}
+
+func (r *run) repairLoad(ep store.RepairEpisode) RepairLoad {
+	rl := RepairLoad{Repo: ep.Repo, Base: ep.Base, RedSince: ep.RedSince, Checks: []string{},
+		Attempts: r.attempts(r.repairsOf(ep)), Stopped: ep.Stopped, WaitingOn: ep.WaitingOn}
+	for _, c := range ep.Checks {
+		rl.Checks = append(rl.Checks, c.Name)
+	}
+	if e := r.openRepair(ep.Repo, ep.Base); e != nil {
+		rl.Epic, rl.EpicState = e.id, e.cur.State
+	}
+	return rl
 }
 
 // report adds what entity e contributes to rep.
@@ -232,6 +262,22 @@ func (rep Report) WriteText(w io.Writer) {
 	})
 	section(w, "dead-letters", rep.Dead, func(x DeadLetter) string { return fmt.Sprintf("%s  %s", x.ID, x.Error) })
 	section(w, "paused repos", rep.Paused, func(x string) string { return x })
+	section(w, "repairs", rep.Repairs, func(x RepairLoad) string {
+		line := fmt.Sprintf("%s@%s  red for %s (%s), ", x.Repo, x.Base, age(x.RedSince), strings.Join(x.Checks, ", "))
+		if x.Epic == "" {
+			line += "no repair epic open"
+		} else {
+			line += fmt.Sprintf("repair %s %s", x.Epic, x.EpicState)
+		}
+		line += fmt.Sprintf(", attempts %d", x.Attempts)
+		switch {
+		case x.Stopped:
+			line += ", stopped by you"
+		case x.WaitingOn != "":
+			line += ", waiting on " + x.WaitingOn
+		}
+		return line
+	})
 	section(w, "epics", rep.Epics, func(x EpicLoad) string {
 		return fmt.Sprintf("%s  %s for %s, re-checks %d", x.ID, x.State, age(x.Since), x.Rechecks)
 	})

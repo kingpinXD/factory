@@ -55,16 +55,21 @@ func (r *run) record(e *entity, pr gh.PR) {
 	e.st.PR, e.st.PRURL, e.st.PRState, e.st.HeadSHA = pr.Number, pr.URL, pr.State, pr.HeadRefOid
 }
 
-// baseGreen reports whether repo's base branch is not red, read once per
-// tick.
+// baseGreen reports whether repo's base branch is not red.
 func (r *run) baseGreen(repo, base string) (bool, error) {
+	res, err := r.baseState(repo, base)
+	return err == nil && res.Green(), err
+}
+
+// baseState reads repo's base branch, once per tick.
+func (r *run) baseState(repo, base string) (gh.BaseResult, error) {
 	k := repo + "@" + base
-	if res, ok := r.bases[k]; ok {
-		return res.green, res.err
+	if read, ok := r.bases[k]; ok {
+		return read.res, read.err
 	}
 	ctx, cancel := r.call()
 	defer cancel()
-	green, err := r.d.GitHub.BaseGreen(ctx, repo, base)
-	r.bases[k] = baseResult{green, err}
-	return green, err
+	res, err := r.d.GitHub.BaseState(ctx, repo, base)
+	r.bases[k] = baseRead{res, err}
+	return res, err
 }

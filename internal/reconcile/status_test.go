@@ -14,6 +14,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -83,8 +84,12 @@ func busyFactory(t *testing.T) *world {
 	put(t, store.StatusPath(accountDir(w.brain)), mustJSON(t, AccountStatus{State: "near_limit", Since: w.now.Add(-30 * time.Minute),
 		Usage: &Figure{SessionID: "sid-1", WrittenAt: w.now.Add(-2 * time.Minute), FiveHour: Window{Used: 82, ResetsAt: w.now.Add(time.Hour).Unix()},
 			SevenDay: Window{Used: 61, ResetsAt: w.now.Add(72 * time.Hour).Unix()}}}))
+	w.put("e3", blueprint.MachineEpic, "e3", w.epicDir("e3"), epicChecking,
+		&EpicInputs{ID: "e3", Kind: epicKindRepair, Repo: "o/r", Base: "main", Input: "o/r@main is red", AddedAt: w.now.Add(-time.Hour)})
+	red := store.RepairEpisode{Repo: "o/r", Base: "main", RedSince: w.now.Add(-2 * time.Hour), RedSHA: "f453fce",
+		Checks: []gh.BaseCheck{{Name: "govulncheck", URL: "https://ci/1", Red: true}, {Name: "lint", URL: "https://ci/2", Red: true}}}
 	if err := store.WriteOverall(w.brain, store.Overall{LastTick: w.now.Add(-time.Minute), Tick: 42, PausedRepos: []string{"o/r@main"},
-		Errors: []string{"e9: claude agents: exit status 1"}}); err != nil {
+		Repairs: []store.RepairEpisode{red}, Errors: []string{"e9: claude agents: exit status 1"}}); err != nil {
 		t.Fatal(err)
 	}
 	return w

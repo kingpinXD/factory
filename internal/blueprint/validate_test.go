@@ -406,6 +406,16 @@ func TestValidateRules(t *testing.T) {
 			rule:   "context", msg: "values.context.window 1000001 is over 1000000, the largest auto-compact window Claude Code takes",
 		},
 		{
+			name:   "red_after missing",
+			breaks: func(b *Blueprint) { b.Values.RedAfter = 0 },
+			rule:   "repair", msg: "values.red_after is 0s; want how long a base stays red before a repair starts",
+		},
+		{
+			name:   "repair_attempts missing",
+			breaks: func(b *Blueprint) { b.Values.RepairAttempts = 0 },
+			rule:   "repair", msg: "values.repair_attempts is 0; want at least 1",
+		},
+		{
 			name: "a live entity's state was removed",
 			live: []EntityState{{Machine: MachineWork, ID: "w-1", State: "exploring"}},
 			rule: "live_state", msg: `work w-1 is in state "exploring", which machine "work" no longer has`,

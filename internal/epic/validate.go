@@ -68,11 +68,13 @@ func (v *validator) top() {
 	}
 }
 
-// evidenceKinds are the evidence kinds each closing result takes.
+// evidenceKinds are the evidence kinds each result takes: each closing
+// result, and elsewhere, which may name the open PR that does the work.
 var evidenceKinds = map[string][]string{
 	ResultDone:      {EvidencePR, EvidenceCommit, EvidenceChildren},
 	ResultObsolete:  {EvidencePR, EvidenceCommit, EvidenceChildren},
 	ResultDuplicate: {EvidenceDuplicate},
+	ResultElsewhere: {EvidencePR},
 }
 
 func (v *validator) issues() {
@@ -106,7 +108,7 @@ func (v *validator) issues() {
 func (v *validator) evidence(ref Ref, i Issue) {
 	kinds := evidenceKinds[i.Result]
 	if i.Evidence == "" {
-		if kinds != nil && i.Result != ResultObsolete {
+		if slices.Contains(closing, i.Result) && i.Result != ResultObsolete {
 			v.add("issue %s: result %s needs evidence %s", ref, i.Result, strings.Join(withColon(kinds), " or "))
 		}
 		return

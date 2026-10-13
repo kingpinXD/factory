@@ -72,7 +72,8 @@ type Plan struct {
 type Issue struct {
 	Ref    string `yaml:"ref"`
 	Result string `yaml:"result"`
-	// Evidence is kind:ref for a closing result (see ParseEvidence).
+	// Evidence is kind:ref for a closing result (see ParseEvidence), or
+	// pr:<ref> for elsewhere, the open PR that does the work.
 	Evidence string `yaml:"evidence,omitempty"`
 	Why      string `yaml:"why,omitempty"`
 	// Answers are the choices the user may give a result that waits on them.

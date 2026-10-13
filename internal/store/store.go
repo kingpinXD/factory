@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/gh"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -184,9 +185,30 @@ type Overall struct {
 	// PausedRepos are the repo@base branches whose checks were red: no new
 	// item starts in them.
 	PausedRepos []string `json:"paused_repos,omitempty"`
+	// Repairs are the base branches red since a red read, until they read
+	// green again.
+	Repairs []RepairEpisode `json:"repairs,omitempty"`
 	// AutoContinue is set while the user settings turn on
 	// autoContinueAtUsageLimit, which would run past a limit on credits.
 	AutoContinue bool `json:"auto_continue_at_usage_limit,omitempty"`
+}
+
+// RepairEpisode is a base branch red since RedSince. Its repair epics are
+// the epics of kind repair for Repo and Base added since then.
+type RepairEpisode struct {
+	Repo     string    `json:"repo"`
+	Base     string    `json:"base"`
+	RedSince time.Time `json:"red_since"`
+	// RedSHA is the newest red head; Checks the checks that failed on it.
+	RedSHA string         `json:"red_sha"`
+	Checks []gh.BaseCheck `json:"checks"`
+	// Stopped is set once the user stopped a repair epic of the episode: no
+	// more start.
+	Stopped bool `json:"stopped,omitempty"`
+	// WaitingOn is the open PR, owner/repo#n, that the last repair epic
+	// found fixing the base elsewhere: no new repair starts while it is
+	// open.
+	WaitingOn string `json:"waiting_on,omitempty"`
 }
 
 // Hold is one time the account held work back.

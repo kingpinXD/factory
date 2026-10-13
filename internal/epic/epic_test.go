@@ -123,6 +123,8 @@ func TestEachRuleIsRefusedWithItsMessage(t *testing.T) {
 		{"unknown evidence kind", `evidence: "pr:kingpinXD/factory#10"`, `evidence: "vibes:yes"`,
 			"issue kingpinXD/factory#9: evidence \"vibes:yes\": unknown kind \"vibes\": want pr:<url>, commit:<sha>, duplicate:<number> or children"},
 		{"a duplicate of itself", `evidence: "duplicate:12"`, `evidence: "duplicate:8"`, "issue kingpinXD/factory#8: a duplicate of itself"},
+		{"elsewhere naming a commit", `result: done, evidence: "pr:kingpinXD/factory#10"`, `result: elsewhere, evidence: "commit:abc1234"`,
+			"issue kingpinXD/factory#9: result elsewhere takes evidence pr:, not commit"},
 		{"needs-user result without answers", `why: "your open PR #41", answers: [take over, leave]`, `why: "your open PR #41"`,
 			"issue anuma-ai/sdk#40: result yours waits on the user, so it needs answers"},
 		{"issue without a result", "{ref: kingpinXD/factory#13, result: updated}", "{ref: kingpinXD/factory#13}",
@@ -167,6 +169,15 @@ func TestEachRuleIsRefusedWithItsMessage(t *testing.T) {
 				t.Fatalf("problems = %q\nwant %q", problems, tt.want)
 			}
 		})
+	}
+}
+
+func TestElsewhereMayNameItsPR(t *testing.T) {
+	for _, issue := range []string{`result: elsewhere, evidence: "pr:kingpinXD/factory#10"`, `result: elsewhere`} {
+		text := strings.Replace(validPlan, `result: done, evidence: "pr:kingpinXD/factory#10"`, issue, 1)
+		if problems := mustParse(t, text).Validate(testEnv()); len(problems) > 0 {
+			t.Errorf("%s: problems: %q", issue, problems)
+		}
 	}
 }
 

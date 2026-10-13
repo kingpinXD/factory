@@ -10,9 +10,12 @@ dead-letters (1):
   e1-w2  go test ./... fails: no such file
 paused repos (1):
   o/r@main
-epics (2):
+repairs (1):
+  o/r@main  red for 2h0m0s (govulncheck, lint), repair e3 checking, attempts 1
+epics (3):
   e1  planned for 3h0m0s, re-checks 0
   e2  checking for 2h0m0s, re-checks 1
+  e3  checking for 0s, re-checks 0
 agents (3):
   factory:e1-s1:orchestrator  id 00000002  running, context 54%, 2 unread, oldest 20m0s
   factory:e1-w1:babysitter  id ?  running, context ?, 0 unread

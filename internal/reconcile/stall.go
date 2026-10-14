@@ -83,12 +83,11 @@ func (r *run) releaseEscalations() {
 }
 
 // releasable: a work item is in needs_you for a cause the program re-tests,
-// it has no release for that move yet, and it was released fewer than
-// releasesPerDay times in the 24h before the move.
+// it has no release for that move yet, and its releases are not used up.
 func releasable(it *entity) bool {
 	t := it.enteredBy
 	return it.work != nil && it.cur.State == stateNeedsYou && retestable(t) &&
-		!it.has(autoReleaseKey(t)) && len(releasesBefore(it, t)) < releasesPerDay
+		!it.has(autoReleaseKey(t)) && !releasesUsedUp(it, t)
 }
 
 // retestable: the move into needs_you was made because a head stayed red
@@ -103,11 +102,12 @@ func isRelease(ev events.Event) bool {
 	return ev.Kind == events.KindRequest && strings.HasPrefix(ev.Key, autoReleasePrefix)
 }
 
-// releasesBefore returns the item's releases in the 24h before move t.
-func releasesBefore(it *entity, t events.Event) []events.Event {
-	return countedSince(it, 0, func(ev events.Event) bool {
+// releasesUsedUp: the item was released releasesPerDay times in the 24h
+// before move t.
+func releasesUsedUp(it *entity, t events.Event) bool {
+	return len(countedSince(it, 0, func(ev events.Event) bool {
 		return isRelease(ev) && ev.Seq < t.Seq && ev.At.After(t.At.Add(-24*time.Hour))
-	})
+	})) >= releasesPerDay
 }
 
 // retestChecks reads the checks on the item's red head: none red that a
@@ -163,7 +163,7 @@ func (r *run) dmReleases() {
 // releasedNote says, for a releasable cause, that the item stays for the
 // user because it was released as often as it may be.
 func releasedNote(e *entity, t events.Event) string {
-	if e.work == nil || !retestable(t) || len(releasesBefore(e, t)) < releasesPerDay {
+	if e.work == nil || !retestable(t) || !releasesUsedUp(e, t) {
 		return ""
 	}
 	return fmt.Sprintf("; it was released automatically %d times in 24h and the cause came back, so it stays for you", releasesPerDay)

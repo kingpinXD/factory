@@ -82,8 +82,9 @@ type Values struct {
 	Inbox   Inbox    `yaml:"inbox" json:"inbox"`
 	Usage   Usage    `yaml:"usage" json:"usage"`
 	Context Context  `yaml:"context" json:"context"`
-	// WaitDM is how long any wait, such as one for `factory deployed`, lasts
-	// before the user gets one DM about it.
+	// WaitDM is how long a work item waits in one state before it is in the
+	// user's daily digest of long waits, and how long a PR posted for review
+	// goes unreviewed before one reminder post.
 	WaitDM Duration `yaml:"wait_dm" json:"wait_dm"`
 	// RedAfter is how long a base branch an open item works on stays red
 	// before a repair epic starts, and how long after a repair epic ended

@@ -14,6 +14,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/intake"
 	"github.com/kingpinXD/factory/internal/notify"
 )
@@ -56,7 +57,7 @@ func reviewItemDMKey(ref epic.Ref) string { return "review-dm:" + ref.String() }
 func (r *run) requestReviews() {
 	for _, id := range r.order() {
 		if ep := r.ents[id]; ep.epic != nil {
-			for _, intent := range reviewIntents(ep) {
+			for _, intent := range intents(ep, reviewIntentPrefix) {
 				r.settleReviewPost(ep, intent)
 			}
 		}
@@ -151,10 +152,19 @@ func (r *run) holdsOn(ep *entity, l epic.Link, it *entity) bool {
 	return err == nil && ref.Is(prRef(it))
 }
 
-// reviewIntents returns the intents of the epic's review posts.
-func reviewIntents(ep *entity) []events.Event {
+// intents returns the epic's intents whose key starts with prefix.
+func intents(ep *entity, prefix string) []events.Event {
 	return slices.DeleteFunc(slices.Clone(ep.evs), func(ev events.Event) bool {
-		return ev.Kind != events.KindIntent || !strings.HasPrefix(ev.Key, reviewIntentPrefix)
+		return ev.Kind != events.KindIntent || !strings.HasPrefix(ev.Key, prefix)
+	})
+}
+
+// intentNames reports whether an intent of the item's epic whose key starts
+// with prefix names the item's PR URL.
+func (r *run) intentNames(it *entity, prefix string) bool {
+	ep := r.ents[it.entry.Epic]
+	return ep != nil && slices.ContainsFunc(intents(ep, prefix), func(ev events.Event) bool {
+		return slices.Contains(strings.Fields(ev.Text), it.st.PRURL)
 	})
 }
 
@@ -163,13 +173,8 @@ func reviewIntents(ep *entity) []events.Event {
 // or review-dm.
 func (r *run) reviewAsked(it *entity) bool {
 	ref := prRef(it)
-	if _, dmed := reviewDMed(it); dmed || it.has(reviewAskKey(ref)) || it.has(reviewPostKey(ref)) {
-		return true
-	}
-	ep := r.ents[it.entry.Epic]
-	return ep != nil && slices.ContainsFunc(reviewIntents(ep), func(ev events.Event) bool {
-		return slices.Contains(strings.Fields(ev.Text), it.st.PRURL)
-	})
+	_, dmed := reviewDMed(it)
+	return dmed || it.has(reviewAskKey(ref)) || it.has(reviewPostKey(ref)) || r.intentNames(it, reviewIntentPrefix)
 }
 
 // reviewDMed returns the item's review-dm whose refs name its PR.
@@ -192,11 +197,7 @@ func (r *run) postReviews(ep *entity, items []*entity) error {
 	if err != nil {
 		return err
 	}
-	slices.SortFunc(items, func(a, b *entity) int { return cmp.Or(cmp.Compare(a.st.PR, b.st.PR), strings.Compare(a.id, b.id)) })
-	var urls []string
-	for _, it := range items {
-		urls = append(urls, it.st.PRURL)
-	}
+	urls := prURLs(items)
 	text := title + "\n - " + strings.Join(urls, "\n - ")
 	intent, err := r.append(ep, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram,
 		Text: strings.Join(urls, " "), Key: reviewIntentKey(ep, r.n)})
@@ -227,6 +228,16 @@ func (r *run) postReviews(ep *entity, items []*entity) error {
 	return nil
 }
 
+// prURLs returns the items' PR URLs in PR order.
+func prURLs(items []*entity) []string {
+	slices.SortFunc(items, func(a, b *entity) int { return cmp.Or(cmp.Compare(a.st.PR, b.st.PR), strings.Compare(a.id, b.id)) })
+	var urls []string
+	for _, it := range items {
+		urls = append(urls, it.st.PRURL)
+	}
+	return urls
+}
+
 // settleReviewPost marks the items of a review post's intent posted, once
 // the post's done is logged, or DMed, once its DM is. An intent with
 // neither may have been posted: the user is DMed to check, and no post
@@ -244,6 +255,12 @@ func (r *run) settleReviewPost(ep *entity, intent events.Event) {
 	if posted {
 		key, text = reviewPostKey, "review request posted in #"+r.b.Values.ReviewChannelName+" for "
 	}
+	r.markPRs(intent, key, text)
+}
+
+// markPRs logs key on the item of each PR the intent names, with text and
+// the PR's URL, once.
+func (r *run) markPRs(intent events.Event, key func(epic.Ref) string, text string) {
 	for _, url := range strings.Fields(intent.Text) {
 		ref, err := epic.ParseRef(url)
 		if err != nil {
@@ -305,4 +322,92 @@ func (r *run) reviewStatus(it *entity) (string, time.Time) {
 		return "wants a review", time.Time{}
 	}
 	return "", time.Time{}
+}
+
+// Review reminders. A PR posted in review_channel wait_dm ago that is still
+// in review, not approved, and reviewed by no approver, as approved()
+// counts them, but its author gets one reminder: per epic, one post in
+// review_channel, with its own intent, done and item mark. An intent naming
+// the PR is enough to never post it again: a reminder that may have landed
+// is not repeated.
+
+// reminderIntentPrefix starts the key of the intent of an epic's reminder,
+// review-reminder-intent:<epic>:<tick>; its text is the URLs it posts.
+const reminderIntentPrefix = "review-reminder-intent:"
+
+func reminderDoneKey(intent string) string {
+	return "review-reminder-done:" + strings.TrimPrefix(intent, reminderIntentPrefix)
+}
+func reviewReminderKey(ref epic.Ref) string { return "review-reminder:" + ref.String() }
+
+// remindReviews runs on a full reconcile: it marks the PRs of the
+// reminders earlier ticks posted, then posts, per epic, the PRs that want
+// a reminder.
+func (r *run) remindReviews() {
+	want := map[string][]*entity{}
+	for _, id := range r.order() {
+		e := r.ents[id]
+		if e.epic != nil {
+			for _, intent := range intents(e, reminderIntentPrefix) {
+				if e.has(reminderDoneKey(intent.Key)) {
+					r.markPRs(intent, reviewReminderKey, r.reminderMark())
+				}
+			}
+		}
+		if e.work != nil && r.wantsReminder(e) {
+			want[e.entry.Epic] = append(want[e.entry.Epic], e)
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(want)) {
+		if ep := r.ents[id]; ep != nil {
+			r.postReminder(ep, want[id])
+		}
+	}
+}
+
+// wantsReminder: the item's PR was posted for review wait_dm ago, is in
+// review, is not approved, has no review by an approver other than its
+// author, and no reminder named it.
+func (r *run) wantsReminder(it *entity) bool {
+	posted, ok := it.byKey(reviewPostKey(prRef(it)))
+	if !ok || it.cur.State != workInReview || it.pr == nil || r.now.Sub(posted.At) < time.Duration(r.b.Values.WaitDM) || approved(*it.pr) {
+		return false
+	}
+	author := it.pr.Author.Login
+	if slices.ContainsFunc(approverReviews(*it.pr), func(rv gh.Review) bool { return rv.Author.Login != author }) {
+		return false
+	}
+	return !it.has(reviewReminderKey(prRef(it))) && !r.intentNames(it, reminderIntentPrefix)
+}
+
+// postReminder posts one reminder for items, PRs of epic ep, in
+// review_channel.
+func (r *run) postReminder(ep *entity, items []*entity) {
+	urls := prURLs(items)
+	intent, err := r.append(ep, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram,
+		Text: strings.Join(urls, " "), Key: reminderIntentPrefix + ep.id + ":" + strconv.Itoa(r.n)})
+	if err != nil {
+		r.fail("%s: %v", ep.id, err)
+		return
+	}
+	var ts string
+	err = r.act("post a review reminder for "+strings.Join(urls, ", "), func(ctx context.Context) error {
+		var err error
+		ts, err = r.d.Post.Post(ctx, r.b.Values.ReviewChannel, "Still waiting on a review:\n - "+strings.Join(urls, "\n - "))
+		return err
+	})
+	if r.dry {
+		return
+	}
+	if err != nil {
+		r.fail("%s: %v", ep.id, err)
+		return
+	}
+	r.logged(r.append(ep, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram,
+		Text: ts + " " + intent.Text, Key: reminderDoneKey(intent.Key)}))
+	r.markPRs(intent, reviewReminderKey, r.reminderMark())
+}
+
+func (r *run) reminderMark() string {
+	return "review reminder posted in #" + r.b.Values.ReviewChannelName + " for "
 }

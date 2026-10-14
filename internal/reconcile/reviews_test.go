@@ -471,3 +471,101 @@ func (w *world) approve(id string) {
 	pr.Reviews = []gh.Review{{Author: gh.User{Login: "alice"}, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
 	w.prs[git.Branch(id)] = pr
 }
+
+const reminded = "Still waiting on a review:\n - " + prURL
+
+func TestAPRNoPersonReviewedForADayGetsOneReminder(t *testing.T) {
+	greptile := gh.Review{Author: gh.User{Login: "greptile-apps[bot]"}, AuthorAssociation: "NONE", State: "COMMENTED", SubmittedAt: t0}
+	mine := gh.Review{Author: gh.User{Login: "me"}, AuthorAssociation: "OWNER", State: "COMMENTED", SubmittedAt: t0}
+	alice := gh.Review{Author: gh.User{Login: "alice"}, AuthorAssociation: "MEMBER", State: "COMMENTED", SubmittedAt: t0}
+	for _, tc := range []struct {
+		name     string
+		reviews  []gh.Review
+		reminded bool
+	}{
+		{name: "no review", reminded: true},
+		{name: "only a bot's", reviews: []gh.Review{greptile}, reminded: true},
+		{name: "only its author's", reviews: []gh.Review{mine}, reminded: true},
+		{name: "a person commented", reviews: []gh.Review{greptile, alice}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := awaitingReview(t, oneItem("[]"))
+			w.tick(false)
+			w.pr(func(pr *gh.PR) { pr.Reviews = tc.reviews })
+			w.fullTickAt(23*time.Hour + 59*time.Minute)
+			if len(w.posts) != 1 {
+				t.Fatalf("posts before 24h = %q, want the request only", w.posts)
+			}
+			w.fullTickAt(24*time.Hour + time.Minute)
+			w.fullTickAt(24*time.Hour + 6*time.Minute)
+			want := []post{{"C09QMJQ71FW", "do the thing\n - " + prURL}}
+			if tc.reminded {
+				want = append(want, post{"C09QMJQ71FW", reminded})
+			}
+			if !slices.Equal(w.posts, want) {
+				t.Errorf("posts = %q, want %q", w.posts, want)
+			}
+			if got := w.keyed(item, "review-reminder:o/r#5"); got != tc.reminded {
+				t.Errorf("review-reminder:o/r#5 logged = %v, want %v", got, tc.reminded)
+			}
+			w.noErrors()
+		})
+	}
+}
+
+func TestAnApprovedPRGetsNoReminder(t *testing.T) {
+	w := awaitingReview(t, oneItem("[]"))
+	w.tick(false)
+	w.pr(func(pr *gh.PR) { pr.IsDraft = true; pr.ReviewDecision = "APPROVED" })
+	w.fullTickAt(25 * time.Hour)
+	if len(w.posts) != 1 {
+		t.Errorf("posts = %q, want the request only", w.posts)
+	}
+}
+
+// A tick that posted the reminder and died before logging it: no second
+// reminder follows.
+func TestATickThatDiedAfterRemindingDoesNotRemindAgain(t *testing.T) {
+	w := awaitingReview(t, oneItem("[]"))
+	w.tick(false)
+	w.fullTickAt(25 * time.Hour)
+	if len(w.posts) != 2 {
+		t.Fatalf("posts = %q, want the request and a reminder", w.posts)
+	}
+	w.forget("e1", "review-reminder-done:")
+	w.forget(item, "review-reminder:")
+	w.fullTickAt(25*time.Hour + 5*time.Minute)
+	w.fullTickAt(25*time.Hour + 10*time.Minute)
+	if len(w.posts) != 2 {
+		t.Errorf("posts = %q, want still two", w.posts)
+	}
+}
+
+// e1-w1 was posted a day ago; e1-w2's checks just turned green. One tick
+// posts e1-w2's request and e1-w1's reminder, each settling its own PR.
+func TestARequestAndAReminderInOneTickSettleTheirOwnPRs(t *testing.T) {
+	w := awaitingReview(t, twoItems("[]"))
+	w.reviewing("e1-w2", 9, prURL9, head9)
+	w.pulls.checks[head9] = []gh.Check{{Name: "ci", State: "FAILURE", Required: true}}
+	w.fullNext()
+	w.tick(false)
+	w.pulls.checks[head9] = []gh.Check{{Name: "ci", State: "SUCCESS", Required: true}}
+	w.fullTickAt(25 * time.Hour)
+	want := []post{{"C09QMJQ71FW", "do the thing\n - " + prURL}, {"C09QMJQ71FW", "do the thing\n - " + prURL9}, {"C09QMJQ71FW", reminded}}
+	if !slices.Equal(w.posts, want) {
+		t.Fatalf("posts = %q, want %q", w.posts, want)
+	}
+	for _, tc := range []struct {
+		id, key string
+		logged  bool
+	}{
+		{item, "review-reminder:o/r#5", true},
+		{"e1-w2", "review-post:o/r#9", true},
+		{"e1-w2", "review-reminder:o/r#9", false},
+	} {
+		if got := w.keyed(tc.id, tc.key); got != tc.logged {
+			t.Errorf("%s has %s = %v, want %v", tc.id, tc.key, got, tc.logged)
+		}
+	}
+	w.noErrors()
+}

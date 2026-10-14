@@ -674,7 +674,7 @@ func (r *run) settle(e *entity) {
 	case e.set != nil:
 		err = errors.Join(r.writeInstructions(e), r.cancelUnder(e))
 	case e.work != nil:
-		err = errors.Join(r.entryActions(e), r.assign(e), r.handOver(e), r.handBack(e), r.reread(e), r.cancelItem(e), r.waitDM(e))
+		err = errors.Join(r.entryActions(e), r.assign(e), r.handOver(e), r.handBack(e), r.reread(e), r.cancelItem(e))
 	}
 	if err != nil {
 		r.fail("%s: %v", e.id, err)

@@ -42,6 +42,9 @@ values:
     checkpoint_at: 50
     auto_compact_at: 60
     compact_failures_dm: 2
+  # A work item that waits in one state longer than wait_dm goes in one digest DM, then daily
+  # while any remain; a PR posted in review_channel that no one reviewed for wait_dm gets one
+  # reminder post there.
   wait_dm: 24h
   # A base branch an open item works on that stays red red_after gets a repair epic; one that
   # is still red red_after after a repair epic ended gets another. A repo@base gets at most

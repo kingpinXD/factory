@@ -4,6 +4,9 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -611,5 +614,119 @@ func TestAStalledItemInARecheckStaysThereAtTheCap(t *testing.T) {
 	w.fullTick(31 * time.Minute)
 	if got := w.status(item).State; got != workRechecking || len(w.stallSignals()) != 3 {
 		t.Errorf("%s is %s with %d stall signals; want rechecking with 3", item, got, len(w.stallSignals()))
+	}
+}
+
+// threeWaiting plans e1 with three items, no links, and moves e1-w1 and
+// e1-w2 to needs_you at t0 on a cause the program does not re-test.
+func threeWaiting(t *testing.T) *world {
+	t.Helper()
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", threeItemsWith("[]"))
+	w.at(0)
+	w.toNeedsYou("e1-w1", workQueued, deadLetterRef+"1")
+	w.toNeedsYou("e1-w2", workQueued, deadLetterRef+"1")
+	w.tick(false)
+	return w
+}
+
+// digests returns the long-wait digests DMed so far.
+func (w *world) digests() []string { return w.dmsWith("factory: long waits:") }
+
+func TestLongWaitsGoInOneDigestAtTheirFirstDayThenDaily(t *testing.T) {
+	w := threeWaiting(t)
+	w.at(3 * time.Hour)
+	w.toNeedsYou("e1-w3", workQueued, deadLetterRef+"1")
+	w.fullTickAt(23*time.Hour + 59*time.Minute)
+	if got := w.digests(); len(got) != 0 {
+		t.Fatalf("digests before 24h = %q, want none", got)
+	}
+	w.fullTickAt(24*time.Hour + time.Minute)
+	want := []string{"factory: long waits:\n" +
+		" - e1-w1 (o/r#12) in needs_you for 24h0m0s, waiting on you\n" +
+		" - e1-w2 (o/r#13) in needs_you for 24h0m0s, waiting on you"}
+	if got := w.digests(); !slices.Equal(got, want) {
+		t.Fatalf("digests = %q, want %q", got, want)
+	}
+	w.fullTickAt(24*time.Hour + 6*time.Minute)
+	if got := w.digests(); len(got) != 1 {
+		t.Fatalf("digests a tick later = %q, want still one", got)
+	}
+	w.fullTickAt(27*time.Hour + time.Minute)
+	want = append(want, "factory: long waits:\n"+
+		" - e1-w1 (o/r#12) in needs_you for 27h0m0s, waiting on you\n"+
+		" - e1-w2 (o/r#13) in needs_you for 27h0m0s, waiting on you\n"+
+		" - e1-w3 (o/r#14) in needs_you for 24h0m0s, waiting on you")
+	if got := w.digests(); !slices.Equal(got, want) {
+		t.Fatalf("digests once e1-w3 crossed 24h = %q, want %q", got, want)
+	}
+	w.fullTickAt(51 * time.Hour)
+	if got := w.digests(); len(got) != 2 {
+		t.Fatalf("digests 23h59m after the last = %q, want still two", got)
+	}
+	w.fullTickAt(51*time.Hour + 2*time.Minute)
+	if got := w.digests(); len(got) != 3 || !strings.Contains(got[2], "e1-w3 (o/r#14) in needs_you for 48h0m0s") {
+		t.Errorf("digests a day after the last = %q, want a third listing all three", got)
+	}
+	if done := slices.DeleteFunc(w.kinds("e1", events.KindDone), func(ev events.Event) bool { return !strings.HasPrefix(ev.Key, waitDigestPrefix) }); len(done) != 3 {
+		t.Errorf("digest dones on e1 = %+v, want three", done)
+	}
+	w.noErrors()
+}
+
+func TestNoDigestWithoutAWaitOverADay(t *testing.T) {
+	w := threeWaiting(t)
+	for _, id := range []string{"e1-w1", "e1-w2", "e1-w3"} {
+		w.moveTo(id, workCancelled)
+	}
+	for h := 1; h <= 30; h++ {
+		w.fullTickAt(time.Duration(h) * time.Hour)
+	}
+	if got := w.digests(); len(got) != 0 {
+		t.Errorf("digests = %q, want none", got)
+	}
+}
+
+// A tick that sent the digest and failed to save status.json: the next one
+// reads the digest's done from e1's log and sends none.
+func TestADigestIsNotResentWhenTheSaveAfterItFailed(t *testing.T) {
+	w := threeWaiting(t)
+	w.fullTickAt(24*time.Hour - time.Minute)
+	saved := w.statusFiles()
+	w.fullTickAt(24*time.Hour + time.Minute)
+	if got := w.digests(); len(got) != 1 {
+		t.Fatalf("digests = %q, want one", got)
+	}
+	w.restore(saved)
+	w.fullTickAt(24*time.Hour + 6*time.Minute)
+	if got := w.digests(); len(got) != 1 {
+		t.Errorf("digests after a lost save = %q, want still one", got)
+	}
+}
+
+// statusFiles returns every status.json in the brain by its path.
+func (w *world) statusFiles() map[string]string {
+	w.t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(w.brain, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.Name() != "status.json" {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		files[p] = string(data)
+		return err
+	})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return files
+}
+
+// restore writes back the status.json files statusFiles returned.
+func (w *world) restore(files map[string]string) {
+	w.t.Helper()
+	for p, data := range files {
+		put(w.t, p, data)
 	}
 }

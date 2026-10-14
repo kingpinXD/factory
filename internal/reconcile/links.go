@@ -2,7 +2,6 @@ package reconcile
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -166,37 +165,6 @@ func (r *run) mayMerge(it *entity) (ok bool, why string, err error) {
 		return true, "", nil
 	}
 	return p.MayMerge(planID(it), r.blockers(ep))
-}
-
-// waitDM sends the user one DM for each link the item has waited on longer
-// than wait_dm: in queued for a gate: start link, in review for any.
-func (r *run) waitDM(it *entity) error {
-	waited := r.now.Sub(it.cur.Since)
-	if waited <= time.Duration(r.b.Values.WaitDM) || it.cur.State != workQueued && it.cur.State != workInReview {
-		return nil
-	}
-	ep, p, err := r.itemPlan(it)
-	if p == nil || err != nil {
-		return err
-	}
-	var errs []error
-	for _, l := range p.LinksTo(planID(it)) {
-		key := fmt.Sprintf("wait-dm:%s:%s", it.id, l.From)
-		if it.cur.State == workQueued && l.Gate != epic.GateStart || it.has(key) {
-			continue
-		}
-		rel, err := r.release(ep, l)
-		if err != nil || rel != epic.Waiting {
-			errs = append(errs, err)
-			continue
-		}
-		text := fmt.Sprintf("factory: %s (%s) has waited %s on %s (gate %s, when %s).", it.id, issueRef(it), waited.Round(time.Hour), l.From, l.Gate, l.When)
-		if l.When == epic.WhenDeployed {
-			text += "\nOnce it is deployed, run: factory deployed <its PR URL>"
-		}
-		errs = append(errs, r.once(it, key, "DM the user that "+it.id+" waits on "+l.From, func(ctx context.Context) error { return r.d.Notify.DM(ctx, text) }))
-	}
-	return errors.Join(errs...)
 }
 
 // readRun is a run for a command that reads the factory's state without the

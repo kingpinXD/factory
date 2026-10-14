@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -28,6 +29,10 @@ import (
 // states have their own timeout, and needs_you and waiting_user are the
 // user's. An item stalled again after planner_runs_per_problem of those
 // re-checks waits for the user.
+//
+// Last, the user gets one digest of the work that waited in its state
+// longer than wait_dm, and a PR no one reviewed for wait_dm after its
+// review request gets one reminder post.
 
 // Key prefixes of a release request, by the move into needs_you it
 // releases, and of its DM, by the request.
@@ -44,6 +49,8 @@ func (r *run) checkStalls() {
 	r.releaseEscalations()
 	r.dmReleases()
 	r.findStalls()
+	r.digestWaits()
+	r.remindReviews()
 }
 
 // releaseEscalations releases each releasable item whose cause is gone. A
@@ -286,10 +293,16 @@ func (r *run) mover(it *entity) string {
 	return ""
 }
 
-// queuedMover names who moves a queued item: its set, while no orchestrator
-// holds it; an item of its set being worked, or an earlier one ready to
-// start first; a gate: start link into it; its red base.
+// queuedMover names who moves a queued item: a gate: start link into it;
+// its red base; its set, while no orchestrator holds it; an item of its set
+// being worked, or an earlier one ready to start first.
 func (r *run) queuedMover(it *entity) string {
+	switch {
+	case r.startWaits(it):
+		return "a gate: start link into it"
+	case r.baseReadRed(it):
+		return fmt.Sprintf("its base %s, red", repoBase{it.work.Repo, it.work.Base})
+	}
 	if set := r.ents[it.work.Set]; set != nil && (set.cur.State == set.m.Start || set.cur.State == setClaimed) {
 		return fmt.Sprintf("its set %s, still %s", set.id, set.cur.State)
 	}
@@ -306,12 +319,6 @@ func (r *run) queuedMover(it *entity) string {
 		if s.cur.State == s.m.Start && !r.startWaits(s) && !r.baseReadRed(s) {
 			return s.id + ", ready to start first"
 		}
-	}
-	switch {
-	case r.startWaits(it):
-		return "a gate: start link into it"
-	case r.baseReadRed(it):
-		return fmt.Sprintf("its base %s, red", repoBase{it.work.Repo, it.work.Base})
 	}
 	return ""
 }
@@ -372,4 +379,58 @@ func (r *run) startWaits(it *entity) bool {
 func (r *run) baseReadRed(it *entity) bool {
 	read, ok := r.bases[repoBase{it.work.Repo, it.work.Base}.String()]
 	return ok && read.err == nil && read.res.Red() && !r.isRepair(it)
+}
+
+// waitDigestPrefix starts the key of a long-wait digest DM,
+// wait-digest:<tick>, logged on the epic of the oldest wait.
+const waitDigestPrefix = "wait-digest:"
+
+// digestWaits DMs the user one digest of the open work items that waited in
+// their state longer than wait_dm, with what each waits on: once a wait
+// crossed wait_dm since the last digest, or wait_dm after it while any
+// remain. The last digest is the newest digest done in any epic's log.
+func (r *run) digestWaits() {
+	limit := time.Duration(r.b.Values.WaitDM)
+	var waits []*entity
+	for _, id := range r.order() {
+		if it := r.ents[id]; it.work != nil && it.open() && r.now.Sub(it.cur.Since) > limit {
+			waits = append(waits, it)
+		}
+	}
+	if len(waits) == 0 {
+		return
+	}
+	slices.SortStableFunc(waits, func(a, b *entity) int { return a.cur.Since.Compare(b.cur.Since) })
+	last := r.lastDigest()
+	if !waits[len(waits)-1].cur.Since.Add(limit).After(last) && r.now.Sub(last) < limit {
+		return
+	}
+	ep := r.ents[waits[0].entry.Epic]
+	if ep == nil {
+		return
+	}
+	lines := []string{"factory: long waits:"}
+	for _, it := range waits {
+		lines = append(lines, fmt.Sprintf(" - %s (%s) in %s for %s, waiting on %s", it.id, issueRef(it), it.cur.State,
+			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(r.mover(it), "no one")))
+	}
+	r.dm(ep, waitDigestPrefix+strconv.Itoa(r.n), strings.Join(lines, "\n"))
+}
+
+// lastDigest returns when the newest long-wait digest was sent, ended
+// epics included.
+func (r *run) lastDigest() time.Time {
+	var last time.Time
+	for _, id := range r.order() {
+		ep := r.ents[id]
+		if ep.epic == nil {
+			continue
+		}
+		for _, ev := range ep.evs {
+			if ev.Kind == events.KindDone && strings.HasPrefix(ev.Key, waitDigestPrefix) {
+				last = later(last, ev.At)
+			}
+		}
+	}
+	return last
 }

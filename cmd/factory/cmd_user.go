@@ -75,6 +75,29 @@ func runRetry(args []string, stdout, stderr io.Writer) int {
 	})
 }
 
+// runReviewAsked records that the user asked for reviews of factory PRs
+// by hand, so the factory never posts them: factory review-asked <pr-url>...
+func runReviewAsked(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: factory review-asked <pr-url>...")
+		return 2
+	}
+	d, err := newDeps(stdout)
+	if err != nil {
+		fmt.Fprintf(stderr, "factory review-asked: %v\n", err)
+		return 1
+	}
+	lines, err := reconcile.ReviewAsked(context.Background(), d, args)
+	for _, line := range lines {
+		fmt.Fprintln(stdout, line)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "factory review-asked: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 // request runs a user command that logs a request for the next tick, and
 // prints that it did, or why the entity's machine refused it.
 func request(stdout, stderr io.Writer, name, id string, ask func(context.Context, reconcile.Deps) error) int {

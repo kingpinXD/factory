@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
 	"github.com/kingpinXD/factory/internal/store"
@@ -58,6 +59,43 @@ func Retry(ctx context.Context, d Deps, id string) error {
 		return fmt.Errorf("%w; it waits on your answer to a re-check: %s", err, hint)
 	}
 	return err
+}
+
+// ReviewAsked logs `factory review-asked <pr-url>...`: the user asked for
+// reviews of these PRs, so the program never posts them. Each must be a
+// factory item's PR; none is marked unless all are. It returns one line per
+// PR.
+func ReviewAsked(ctx context.Context, d Deps, urls []string) ([]string, error) {
+	r, err := readRun(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	var items []*entity
+	for _, url := range urls {
+		ref, err := epic.ParseRef(url)
+		if err != nil {
+			return nil, err
+		}
+		it := r.itemByPR(ref)
+		if it == nil {
+			return nil, fmt.Errorf("%s is not a factory item's PR", url)
+		}
+		items = append(items, it)
+	}
+	var lines []string
+	for _, it := range items {
+		ref := prRef(it)
+		if it.has(reviewAskKey(ref)) {
+			lines = append(lines, fmt.Sprintf("%s: %s was already marked asked", it.id, ref))
+			continue
+		}
+		ev := events.Event{At: r.now, Kind: events.KindDone, Sender: senderUser, Text: "asked by the user", Key: reviewAskKey(ref)}
+		if _, err := store.AppendTo(d.Brain, it.id, ev); err != nil {
+			return lines, err
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s counts as asked; the factory will not post it", it.id, ref))
+	}
+	return lines, nil
 }
 
 // ask checks a user's request against entity id's machine now, then logs

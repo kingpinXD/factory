@@ -44,7 +44,8 @@ func reviewPostedKey(intent string) string {
 func reviewDMKey(intent string) string { return "review-dm:" + intent }
 
 // Keys on each item: its PR was posted, or the user was asked by DM. #32
-// logged review-ask, and review-dm:<refs> with the refs joined by commas.
+// logged review-ask, and review-dm:<refs> with the refs joined by commas;
+// factory review-asked logs review-ask from the user.
 func reviewAskKey(ref epic.Ref) string    { return "review-ask:" + ref.String() }
 func reviewPostKey(ref epic.Ref) string   { return "review-post:" + ref.String() }
 func reviewItemDMKey(ref epic.Ref) string { return "review-dm:" + ref.String() }
@@ -288,13 +289,17 @@ func (r *run) reviewTitle(ep *entity) (string, error) {
 const maxTitle = 60
 
 // reviewStatus says, for factory status, where the item's review request
-// stands: posted, and when; asked by DM, and when; or wanted.
+// stands, and since when: posted, asked of the user by DM, or asked for by
+// the user (factory review-asked); else whether it is wanted.
 func (r *run) reviewStatus(it *entity) (string, time.Time) {
 	if ev, ok := it.byKey(reviewPostKey(prRef(it))); ok {
 		return "review requested in #" + r.b.Values.ReviewChannelName, ev.At
 	}
 	if ev, ok := reviewDMed(it); ok {
 		return "asked you by DM", ev.At
+	}
+	if ev, ok := it.byKey(reviewAskKey(prRef(it))); ok && ev.Sender == senderUser {
+		return "asked by you", ev.At
 	}
 	if it.st.WantsReview {
 		return "wants a review", time.Time{}

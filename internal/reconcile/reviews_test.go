@@ -412,6 +412,21 @@ func TestAPRAskedForByAnEarlierFactoryIsNotPostedAgain(t *testing.T) {
 	}
 }
 
+// The user asked for a review of #5 by hand: the manager posts only #9.
+func TestAPRTheUserMarkedAskedIsNotPosted(t *testing.T) {
+	w := bothInReview(t)
+	if _, err := ReviewAsked(t.Context(), w.deps(), []string{prURL}); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	if want := []post{{"C09QMJQ71FW", "do the thing\n - " + prURL9}}; !slices.Equal(w.posts, want) {
+		t.Errorf("posts = %q, want %q", w.posts, want)
+	}
+	if p := w.openPR(item); p.Review != "asked by you" || !p.ReviewAt.Equal(t0) {
+		t.Errorf("e1-w1's open PR = %+v, want asked by you at t0", p)
+	}
+}
+
 func TestTheBabysitterOfAPostedPRIsToldButNotWokenByIt(t *testing.T) {
 	w := awaitingReview(t, oneItem("[]"))
 	w.tick(false)

@@ -81,6 +81,9 @@ func (r *run) watchPR(it *entity, me string) error {
 	it.st.Unanswered = len(unanswered(rd.threads, me))
 	for _, ev := range triggers(*it.pr, rd, me, r.baseRed(it)) {
 		ev.At = r.now
+		if ev.Request == triggerRed {
+			ev.Key = redKey(it, it.pr.HeadRefOid)
+		}
 		if _, err := r.append(it, ev); err != nil {
 			return err
 		}
@@ -140,7 +143,7 @@ func triggers(pr gh.PR, rd *prReads, me string, baseRed []string) []events.Event
 	}
 	red := slices.DeleteFunc(failing(rd.checks), func(n string) bool { return slices.Contains(baseRed, n) })
 	if len(red) > 0 {
-		add("red", "red:"+pr.HeadRefOid, fmt.Sprintf("red checks on %s: %s", abbrev(pr.HeadRefOid), strings.Join(red, ", ")))
+		add(triggerRed, "red:"+pr.HeadRefOid, fmt.Sprintf("red checks on %s: %s", abbrev(pr.HeadRefOid), strings.Join(red, ", ")))
 	}
 	if pr.Mergeable == "CONFLICTING" {
 		add("conflict", "conflict:"+pr.HeadRefOid+":"+pr.BaseRefOid,
@@ -281,20 +284,58 @@ func (r *run) renewPRLine(it *entity) error {
 	})
 }
 
+// triggerRed is the request of a red trigger: red checks on the head.
+const triggerRed = "red"
+
+// redKey is the key of the red trigger for the item's head sha: once per
+// head, and once more each time the item comes back to in_review after it,
+// so a return from blocked, rechecking or needs_you wakes the babysitter
+// for a fresh pass.
+func redKey(it *entity, sha string) string {
+	key := "babysit:red:" + sha
+	if red, ok := lastRed(it, sha); ok && red.Seq < reviewEntered(it) {
+		key += ":" + strconv.Itoa(reviewEntered(it))
+	}
+	return key
+}
+
+// lastRed returns the item's newest red trigger for head sha.
+func lastRed(it *entity, sha string) (events.Event, bool) {
+	key := "babysit:red:" + sha
+	for i := len(it.evs) - 1; i >= 0; i-- {
+		if k := it.evs[i].Key; k == key || strings.HasPrefix(k, key+":") {
+			return it.evs[i], true
+		}
+	}
+	return events.Event{}, false
+}
+
+// reviewEntered returns the seq of the item's newest move into in_review;
+// 0 before.
+func reviewEntered(it *entity) int {
+	for i := len(it.evs) - 1; i >= 0; i-- {
+		if ev := it.evs[i]; ev.Kind == events.KindTransition && ev.To == workInReview {
+			return ev.Seq
+		}
+	}
+	return 0
+}
+
 // redAfterPass: a babysitter pass ended after the item's head commit went
-// red, and the checks a merge waits for are still red on that commit, not
-// only where its base is red too.
+// red and after the item last entered in_review, and the checks a merge
+// waits for are still red on that commit, not only where its base is red
+// too. An item back from blocked or a re-check gets a fresh pass first.
 func (r *run) redAfterPass(it *entity) (string, bool) {
 	if it.pr == nil || !watched(it) {
 		return "", false
 	}
 	sha := it.pr.HeadRefOid
-	red, ok := it.byKey("babysit:red:" + sha)
+	red, ok := lastRed(it, sha)
 	if !ok {
 		return "", false
 	}
 	end, ok := events.NewestEnd(it.evs, babysitStep)
-	if !ok || end.Seq < red.Seq {
+	if !ok || end.Seq < red.Seq || end.Seq < reviewEntered(it) {
 		return "", false
 	}
 	rd, err := r.readMore(it)

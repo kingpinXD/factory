@@ -26,11 +26,8 @@ import (
 // dead-letters the item.
 const merger = "merger"
 
-// Check states, as gh.Checks reports them.
-var (
-	greenChecks = []string{"SUCCESS", "SKIPPED", "NEUTRAL"}
-	redChecks   = []string{"FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
-)
+// holdMayMerge starts the merge hold of a PR that its epic's plan holds.
+const holdMayMerge = "may-merge: "
 
 // holdBehind is the merge hold of a PR that is ready but behind its base
 // branch, which the base requires it to be up to date with.
@@ -80,8 +77,13 @@ func (r *run) mergeReady(it *entity) (bool, string, error) {
 }
 
 // mergeHold says what keeps the item's PR from merging now, or "" when
-// nothing does. GitHub is read beyond the PR only once the rest passes.
-func (r *run) mergeHold(it *entity) (string, error) {
+// nothing does.
+func (r *run) mergeHold(it *entity) (string, error) { return r.hold(it, false) }
+
+// hold says what keeps the item's PR from merging now, the approval left
+// out when skipApproval is set, or "" when nothing does. GitHub is read
+// beyond the PR only once the rest passes.
+func (r *run) hold(it *entity, skipApproval bool) (string, error) {
 	pr := it.pr
 	quiet := time.Duration(r.b.Values.MergeQuiet)
 	switch {
@@ -101,12 +103,12 @@ func (r *run) mergeHold(it *entity) (string, error) {
 	if changed, _, err := r.scopeChanged(it); changed || err != nil {
 		return "a re-check marked its issue updated", err
 	}
-	if !approved(*pr) {
-		reg, err := repos.ByFullName(r.d.Brain, it.work.Repo)
-		if err != nil && !errors.Is(err, repos.ErrNotFound) {
+	if !skipApproval && !approved(*pr) {
+		needs, err := r.needsApproval(it)
+		if err != nil {
 			return "", err
 		}
-		if !reg.MergeWithoutApproval {
+		if needs {
 			return "it is not approved", nil
 		}
 	}
@@ -120,16 +122,29 @@ func (r *run) mergeHold(it *entity) (string, error) {
 	if len(rd.checks) == 0 {
 		return "no checks ran on " + abbrev(pr.HeadRefOid), nil
 	}
-	if !allGreen(gating(rd.checks)) {
+	if gated := gating(rd.checks); !allGreen(gated) {
+		if redOnBase(failing(gated), r.baseRed(it)) {
+			return r.waitingOnRepair(it), nil
+		}
 		return "its required checks are not green on " + abbrev(pr.HeadRefOid), nil
 	}
 	if ok, why, err := r.mayMerge(it); !ok || err != nil {
-		return "may-merge: " + why, err
+		return holdMayMerge + why, err
 	}
 	if pr.MergeStateStatus == "BEHIND" {
 		return holdBehind, nil
 	}
 	return "", nil
+}
+
+// needsApproval reports whether the item's repo merges only approved PRs:
+// its registry file lacks `Merge without approval: yes`, or it has none.
+func (r *run) needsApproval(it *entity) (bool, error) {
+	reg, err := repos.ByFullName(r.d.Brain, it.work.Repo)
+	if err != nil && !errors.Is(err, repos.ErrNotFound) {
+		return false, err
+	}
+	return !reg.MergeWithoutApproval, nil
 }
 
 // reviewStates returns each reviewer's state from their latest review that
@@ -185,14 +200,14 @@ func gating(checks []gh.Check) []gh.Check {
 }
 
 func allGreen(checks []gh.Check) bool {
-	return !slices.ContainsFunc(checks, func(c gh.Check) bool { return !slices.Contains(greenChecks, c.State) })
+	return !slices.ContainsFunc(checks, func(c gh.Check) bool { return !slices.Contains(gh.GreenStates, c.State) })
 }
 
 // failing returns the names of the checks that failed.
 func failing(checks []gh.Check) []string {
 	var names []string
 	for _, c := range checks {
-		if slices.Contains(redChecks, c.State) {
+		if slices.Contains(gh.RedStates, c.State) {
 			names = append(names, c.Name)
 		}
 	}

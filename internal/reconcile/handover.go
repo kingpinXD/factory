@@ -53,6 +53,10 @@ func (r *run) assign(it *entity) error {
 // started reports whether the item's work has started: it entered starting.
 func started(it *entity) bool { return !itemStartedAt(it).IsZero() }
 
+// skipsOrchestrator reports whether the item adopted a PR and went straight
+// to review: it never started, so no orchestrator works it.
+func skipsOrchestrator(it *entity) bool { return it.work.PR != 0 && !started(it) }
+
 // itemStartedAt returns when the item first entered starting; zero before.
 func itemStartedAt(it *entity) time.Time {
 	for _, ev := range it.evs {
@@ -72,7 +76,8 @@ func assignedByFactory(it *entity) bool {
 // handOver writes the handover of an item's worktree to its babysitter
 // once its PR is recorded and its orchestrator is done with it: the
 // pr-opener ended, the orchestrator started its next item, or the
-// orchestrator's session is dead.
+// orchestrator's session is dead. An adopted PR that skipped the
+// orchestrator is handed over once its worktree is ready, never before.
 func (r *run) handOver(it *entity) error {
 	if it.cur.State != workPROpen || it.st.PR == 0 || handedOver(it) {
 		return nil
@@ -87,6 +92,12 @@ func (r *run) handOver(it *entity) error {
 }
 
 func (r *run) handoverDue(it *entity) string {
+	if skipsOrchestrator(it) {
+		if _, ok := worktreeReady(it); ok {
+			return "the adopted PR's worktree is ready"
+		}
+		return ""
+	}
 	if end, ok := events.NewestEnd(it.evs, prStep); ok && end.Seq > lastHandback(it) {
 		return "the pr-opener ended"
 	}

@@ -178,6 +178,8 @@ type Spec struct {
 	// AutoCompactPct is measured against; the program measures against the
 	// same number.
 	AutoCompactWindow int
+	// MCPConfig, when set, is the MCP config file the session loads.
+	MCPConfig string
 	// Prompt is the first prompt.
 	Prompt string
 }
@@ -205,15 +207,17 @@ func (c Client) Start(ctx context.Context, s Spec) error {
 	if err != nil {
 		return err
 	}
-	_, err = c.run(ctx, dir, "--bg",
+	args := []string{"--bg",
 		"--model", s.Model,
 		"--effort", s.Effort,
 		"--append-system-prompt-file", s.PromptFile,
 		"--settings", settings,
-		"--agents", s.Agents,
-		"--permission-mode", "bypassPermissions",
-		"-n", s.Name,
-		s.Prompt)
+		"--agents", s.Agents}
+	if s.MCPConfig != "" {
+		args = append(args, "--mcp-config", s.MCPConfig)
+	}
+	args = append(args, "--permission-mode", "bypassPermissions", "-n", s.Name, s.Prompt)
+	_, err = c.run(ctx, dir, args...)
 	return err
 }
 

@@ -47,17 +47,18 @@ type Deps struct {
 }
 
 // Account moves the plan-usage account machine and stops every factory
-// session at the pause point (TODO 10). It reports whether work may start or
-// resume now; while it may not, the clocks of held-back work are frozen.
+// session at the pause point (TODO 10). It returns the account's state: work
+// starts or resumes while it is ok, and only repair work while it is near
+// its limit; the clocks of held-back work are frozen.
 type Account interface {
-	Step(ctx context.Context, now time.Time, dryRun bool) (ok bool, err error)
+	Step(ctx context.Context, now time.Time, dryRun bool) (state string, err error)
 }
 
 // NoAccount is an account step that always lets work start. PlanAccount is
 // the real one.
 type NoAccount struct{}
 
-func (NoAccount) Step(context.Context, time.Time, bool) (bool, error) { return true, nil }
+func (NoAccount) Step(context.Context, time.Time, bool) (string, error) { return stateOK, nil }
 
 // maxMoves bounds the moves one entity makes in one tick.
 const maxMoves = 10
@@ -77,7 +78,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	// so a slow tick never delays a stop at the pause point. It runs before
 	// anything is read, so the tick sees the sessions it stopped and the
 	// resumes it asked for.
-	acctOK, acctErr := stepAccount(ctx, d, dryRun)
+	acctState, acctErr := stepAccount(ctx, d, dryRun)
 	if !dryRun {
 		unlock, err := store.Lock(d.Brain, "tick")
 		if err != nil {
@@ -89,22 +90,27 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if err != nil {
 		return err
 	}
-	r.useAccount(acctOK, acctErr)
+	r.useAccount(acctState, acctErr)
 	if err := r.loadBlueprint(); err != nil {
 		return err
 	}
 	r.attachMachines()
 	if r.full {
 		r.reconcileGitHub()
+		r.watchBases()
+		r.startRepairs()
+		r.noteRepairs()
 	}
 	for _, id := range r.order() {
 		r.tickEntity(r.ents[id])
 	}
 	if r.full {
 		r.watchPRs()
+		r.requestReviews()
 	}
 	r.supervise()
 	r.driveSessions()
+	r.noteReviewsGiven()
 	kind := "tick"
 	if r.full {
 		kind = "tick with a full reconcile"
@@ -116,7 +122,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if err := r.save(); err != nil {
 		return err
 	}
-	overall := store.Overall{LastTick: r.now, Tick: r.n, Errors: r.errs}
+	overall := store.Overall{LastTick: r.now, Tick: r.n, Errors: r.errs, Repairs: r.repairs}
 	for _, p := range r.problems {
 		overall.Problems = append(overall.Problems, p.String())
 	}
@@ -165,20 +171,27 @@ type run struct {
 	ents      map[string]*entity
 	indexed   bool // ix changed and must be written
 	accountOK bool
+	// accountState is the account step's answer; accountOK is set while it
+	// is ok.
+	accountState string
 
 	listed        bool
 	sessions      []claude.Session
 	sessionsKnown bool
-	bases         map[string]baseResult
+	bases         map[string]baseRead
 	blockerReads  map[string]blockerRead
 	agents        map[string]agents.Agent
 	errs          []string
 	sup           supervision
+	// repairs are the open repair episodes, carried from the last tick;
+	// closed are those this tick closed.
+	repairs []store.RepairEpisode
+	closed  []store.RepairEpisode
 }
 
-type baseResult struct {
-	green bool
-	err   error
+type baseRead struct {
+	res gh.BaseResult
+	err error
 }
 
 func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
@@ -196,9 +209,10 @@ func newRun(ctx context.Context, d Deps, dryRun bool) (*run, error) {
 		n:     overall.Tick + 1,
 		ix:    ix,
 		ents:  map[string]*entity{},
-		bases: map[string]baseResult{},
+		bases: map[string]baseRead{},
 		sup:   supervision{prev: overall, compactedAt: map[string]time.Time{}},
 	}
+	r.repairs = slices.Clone(overall.Repairs)
 	for _, id := range slices.Sorted(maps.Keys(ix)) {
 		e, err := loadEntity(id, ix[id])
 		if err != nil {
@@ -215,26 +229,27 @@ func (r *run) account() { r.useAccount(stepAccount(r.ctx, r.d, r.dry)) }
 
 // stepAccount runs the account step on its own budget, under the account
 // lock: a second step waits for the first. A dry run takes no lock.
-func stepAccount(ctx context.Context, d Deps, dryRun bool) (bool, error) {
+func stepAccount(ctx context.Context, d Deps, dryRun bool) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.AccountTimeout)
 	defer cancel()
 	if !dryRun {
 		unlock, err := waitLock(ctx, d.Brain, "account")
 		if err != nil {
-			return false, err
+			return "", err
 		}
 		defer unlock()
 	}
 	return d.Account.Step(ctx, d.Now().UTC().Round(0), dryRun)
 }
 
-// useAccount takes the account step's answer. An error counts as not ok:
+// useAccount takes the account step's answer. An error counts as no state:
 // nothing starts while usage is unknown.
-func (r *run) useAccount(ok bool, err error) {
+func (r *run) useAccount(state string, err error) {
 	if err != nil {
 		r.fail("account: %v", err)
+		state = ""
 	}
-	r.accountOK = ok && err == nil
+	r.accountState, r.accountOK = state, state == stateOK
 	r.updateHolds()
 }
 
@@ -366,12 +381,12 @@ func (r *run) advance(e *entity) {
 }
 
 // held reports whether e's clock is held back this tick: work's while the
-// account holds work back, the account's own while the factory is idle.
+// account holds it back, the account's own while the factory is idle.
 func (r *run) held(e *entity) bool {
 	if e.entry.Kind == blueprint.MachineAccount {
 		return r.sup.usage.idle
 	}
-	return !r.accountOK
+	return !r.workAllowed(e)
 }
 
 // step tries each move out of the entity's state, in blueprint order, and

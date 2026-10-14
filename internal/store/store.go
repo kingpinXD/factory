@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/gh"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -117,11 +118,13 @@ type Status struct {
 	Repo  string `json:"repo,omitempty"`
 	Issue int    `json:"issue,omitempty"`
 	// PR is a work item's recorded pull request, as GitHub last showed it:
-	// its number, URL, state (OPEN, CLOSED, MERGED) and head commit.
+	// its number, URL, state (OPEN, CLOSED, MERGED), head commit and head
+	// branch.
 	PR      int    `json:"pr,omitempty"`
 	PRURL   string `json:"pr_url,omitempty"`
 	PRState string `json:"pr_state,omitempty"`
 	HeadSHA string `json:"head_sha,omitempty"`
+	HeadRef string `json:"head_ref,omitempty"`
 	// HeadSeenAt is when the tick first saw HeadSHA: the merge quiet time
 	// runs from it, since a commit's date is not when it was pushed.
 	HeadSeenAt time.Time `json:"head_seen_at,omitzero"`
@@ -131,6 +134,9 @@ type Status struct {
 	// MergeHold says what kept an in_review PR from merging at the last
 	// full reconcile; empty when nothing did or the item is not in review.
 	MergeHold string `json:"merge_hold,omitempty"`
+	// WantsReview is set while an in_review PR waits only on an approval
+	// and other work waits on it, as the last full reconcile saw it.
+	WantsReview bool `json:"wants_review,omitempty"`
 	// ShortID is the short id `claude agents` last listed a session under,
 	// which `claude attach` and `claude logs` take as well as its name.
 	ShortID string `json:"short_id,omitempty"`
@@ -184,15 +190,37 @@ type Overall struct {
 	// PausedRepos are the repo@base branches whose checks were red: no new
 	// item starts in them.
 	PausedRepos []string `json:"paused_repos,omitempty"`
+	// Repairs are the base branches red since a red read, until they read
+	// green again.
+	Repairs []RepairEpisode `json:"repairs,omitempty"`
 	// AutoContinue is set while the user settings turn on
 	// autoContinueAtUsageLimit, which would run past a limit on credits.
 	AutoContinue bool `json:"auto_continue_at_usage_limit,omitempty"`
 }
 
-// Hold is one time the account held work back.
+// RepairEpisode is a base branch red since RedSince. Its repair epics are
+// the epics of kind repair for Repo and Base added since then.
+type RepairEpisode struct {
+	Repo     string    `json:"repo"`
+	Base     string    `json:"base"`
+	RedSince time.Time `json:"red_since"`
+	// RedSHA is the newest red head; Checks the checks that failed on it.
+	RedSHA string         `json:"red_sha"`
+	Checks []gh.BaseCheck `json:"checks"`
+	// Stopped is set once the user stopped a repair epic of the episode: no
+	// more start.
+	Stopped bool `json:"stopped,omitempty"`
+	// WaitingOn is the open PR, owner/repo#n, that the last repair epic
+	// found fixing the base elsewhere: no new repair starts while it is
+	// open.
+	WaitingOn string `json:"waiting_on,omitempty"`
+}
+
+// Hold is one time the account held work back, in one state.
 type Hold struct {
-	From time.Time `json:"from"`
-	To   time.Time `json:"to,omitzero"`
+	From  time.Time `json:"from"`
+	To    time.Time `json:"to,omitzero"`
+	State string    `json:"state,omitempty"`
 }
 
 // ReadOverall reads brain's overall status.json. A missing file is the zero

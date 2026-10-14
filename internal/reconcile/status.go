@@ -23,9 +23,11 @@ type Report struct {
 	Account  AccountStatus `json:"account"`
 	Sessions SessionLoad   `json:"sessions"`
 	Waiting  []Waiting     `json:"waiting_on_user"`
+	Blocked  []Blocked     `json:"blocked"`
 	InReview []RepoReview  `json:"in_review"`
 	Dead     []DeadLetter  `json:"dead_letters"`
 	Paused   []string      `json:"paused_repos"`
+	Repairs  []RepairLoad  `json:"repairs"`
 	Epics    []EpicLoad    `json:"epics"`
 	Agents   []Agent       `json:"agents"`
 	PRs      []OpenPR      `json:"open_prs"`
@@ -48,6 +50,14 @@ type Waiting struct {
 	Why   string    `json:"why"`
 }
 
+// Blocked is a work item in blocked, and why: its session's blocked_by
+// text, or its restarts used up.
+type Blocked struct {
+	ID    string    `json:"id"`
+	Since time.Time `json:"since"`
+	Why   string    `json:"why"`
+}
+
 // RepoReview is a repo's work items in in_review, and the one waiting
 // longest.
 type RepoReview struct {
@@ -62,6 +72,20 @@ type RepoReview struct {
 type DeadLetter struct {
 	ID    string `json:"id"`
 	Error string `json:"error"`
+}
+
+// RepairLoad is a base branch red since RedSince, and its repair: the open
+// repair epic, if any, and how many repair epics counted so far.
+type RepairLoad struct {
+	Repo      string    `json:"repo"`
+	Base      string    `json:"base"`
+	RedSince  time.Time `json:"red_since"`
+	Checks    []string  `json:"checks"`
+	Epic      string    `json:"epic"`
+	EpicState string    `json:"epic_state"`
+	Attempts  int       `json:"attempts"`
+	Stopped   bool      `json:"stopped"`
+	WaitingOn string    `json:"waiting_on"`
 }
 
 // EpicLoad is an open epic's state and its re-checks so far.
@@ -94,6 +118,10 @@ type OpenPR struct {
 	State      string `json:"state"`
 	Unanswered int    `json:"unanswered"`
 	MergeHold  string `json:"merge_hold"`
+	// Review says where a review request for it stands: posted, since
+	// ReviewAt, or wanted.
+	Review   string    `json:"review"`
+	ReviewAt time.Time `json:"review_at,omitzero"`
 }
 
 // Status reads the factory's state for `factory status`.
@@ -113,13 +141,25 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 	rep := Report{
 		At: r.now, LastTick: o.LastTick, Tick: o.Tick, Account: acct,
 		Sessions: SessionLoad{ByRepo: map[string]int{}},
-		Waiting:  []Waiting{}, InReview: []RepoReview{}, Dead: []DeadLetter{}, Epics: []EpicLoad{}, Agents: []Agent{}, PRs: []OpenPR{},
+		Waiting:  []Waiting{}, Blocked: []Blocked{}, InReview: []RepoReview{}, Dead: []DeadLetter{}, Repairs: []RepairLoad{}, Epics: []EpicLoad{}, Agents: []Agent{}, PRs: []OpenPR{},
 		Paused: append([]string{}, o.PausedRepos...), Errors: append([]string{}, o.Errors...), Problems: append([]string{}, o.Problems...),
 	}
 	for _, id := range r.order() {
 		r.report(&rep, r.ents[id])
 	}
+	for _, ep := range o.Repairs {
+		rep.Repairs = append(rep.Repairs, r.repairLoad(ep))
+	}
 	return rep, nil
+}
+
+func (r *run) repairLoad(ep store.RepairEpisode) RepairLoad {
+	rl := RepairLoad{Repo: ep.Repo, Base: ep.Base, RedSince: ep.RedSince, Checks: append([]string{}, baseCheckNames(ep.Checks)...),
+		Attempts: len(r.recentRepairs(episodeBase(ep))), Stopped: ep.Stopped, WaitingOn: ep.WaitingOn}
+	if e := r.openRepair(ep.Repo, ep.Base); e != nil {
+		rl.Epic, rl.EpicState = e.id, e.cur.State
+	}
+	return rl
 }
 
 // report adds what entity e contributes to rep.
@@ -160,6 +200,9 @@ func (r *run) waitingWhy(e *entity, t events.Event) string {
 }
 
 func (r *run) reportWork(rep *Report, it *entity) {
+	if it.cur.State == stateBlocked {
+		rep.Blocked = append(rep.Blocked, Blocked{ID: it.id, Since: it.cur.Since, Why: blockedWhy(it)})
+	}
 	if it.cur.State == workInReview {
 		i := slices.IndexFunc(rep.InReview, func(rr RepoReview) bool { return rr.Repo == it.work.Repo })
 		if i < 0 {
@@ -172,7 +215,9 @@ func (r *run) reportWork(rep *Report, it *entity) {
 		}
 	}
 	if it.st.PRState == prOpen {
-		rep.PRs = append(rep.PRs, OpenPR{ID: it.id, URL: it.st.PRURL, State: it.cur.State, Unanswered: it.st.Unanswered, MergeHold: it.st.MergeHold})
+		pr := OpenPR{ID: it.id, URL: it.st.PRURL, State: it.cur.State, Unanswered: it.st.Unanswered, MergeHold: it.st.MergeHold}
+		pr.Review, pr.ReviewAt = r.reviewStatus(it)
+		rep.PRs = append(rep.PRs, pr)
 	}
 }
 
@@ -227,11 +272,30 @@ func (rep Report) WriteText(w io.Writer) {
 	section(w, "waiting on you", rep.Waiting, func(x Waiting) string {
 		return fmt.Sprintf("%s  %s for %s: %s", x.ID, x.State, age(x.Since), x.Why)
 	})
+	section(w, "blocked", rep.Blocked, func(x Blocked) string {
+		return fmt.Sprintf("%s  blocked: %s, for %s", x.ID, x.Why, age(x.Since))
+	})
 	section(w, "in review", rep.InReview, func(x RepoReview) string {
 		return fmt.Sprintf("%s  %d, oldest %s for %s", x.Repo, x.Count, x.Oldest, age(x.OldestSince))
 	})
 	section(w, "dead-letters", rep.Dead, func(x DeadLetter) string { return fmt.Sprintf("%s  %s", x.ID, x.Error) })
 	section(w, "paused repos", rep.Paused, func(x string) string { return x })
+	section(w, "repairs", rep.Repairs, func(x RepairLoad) string {
+		line := fmt.Sprintf("%s  red for %s (%s), ", repoBase{x.Repo, x.Base}, age(x.RedSince), strings.Join(x.Checks, ", "))
+		if x.Epic == "" {
+			line += "no repair epic open"
+		} else {
+			line += fmt.Sprintf("repair %s %s", x.Epic, x.EpicState)
+		}
+		line += fmt.Sprintf(", attempts %d in 24h", x.Attempts)
+		switch {
+		case x.Stopped:
+			line += ", stopped by you"
+		case x.WaitingOn != "":
+			line += ", waiting on " + x.WaitingOn
+		}
+		return line
+	})
 	section(w, "epics", rep.Epics, func(x EpicLoad) string {
 		return fmt.Sprintf("%s  %s for %s, re-checks %d", x.ID, x.State, age(x.Since), x.Rechecks)
 	})
@@ -254,6 +318,12 @@ func (rep Report) WriteText(w io.Writer) {
 		line := fmt.Sprintf("%s  %s  %s, %d unanswered", x.ID, x.URL, x.State, x.Unanswered)
 		if x.MergeHold != "" {
 			line += ", not merged yet: " + x.MergeHold
+		}
+		if x.Review != "" {
+			line += ", " + x.Review
+		}
+		if !x.ReviewAt.IsZero() {
+			line += fmt.Sprintf(" %s ago", age(x.ReviewAt))
 		}
 		return line
 	})

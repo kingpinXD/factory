@@ -4,6 +4,10 @@ tick: {every: 1m, reconcile_every: 5m}
 values:
   usage: {near_limit: 80, pause: 88, stale_after: 15m}
   context: {window: 200000}
+  red_after: 15m
+  repair_attempts: 2
+  review_channel: C09QMJQ71FW
+  review_channel_name: engineering
 deny:
   models: [fable]
 components:

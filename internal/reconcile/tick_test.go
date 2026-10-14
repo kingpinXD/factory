@@ -179,6 +179,9 @@ func TestOverridesReachTheSpawn(t *testing.T) {
 	if flagValue(planner, "--model") != "sonnet" || flagValue(planner, "--effort") != "low" {
 		t.Errorf("planner started with %q", planner)
 	}
+	if slices.Contains(planner, "--mcp-config") {
+		t.Errorf("planner started with an MCP config, which only the babysitter loads: %q", planner)
+	}
 	var helpers map[string]agents.Agent
 	if err := json.Unmarshal([]byte(flagValue(planner, "--agents")), &helpers); err != nil {
 		t.Fatal(err)
@@ -604,14 +607,14 @@ func TestHoldSurvivesTheStatusRoundTrip(t *testing.T) {
 	w := newWorld(t)
 	oneSet(w)
 	w.item("e1", "e1-s1", "e1-w3", "exploring")
-	w.acct.ok = false
+	w.acct.state = statePaused
 	w.tick(false)
 	w.now = t0.Add(time.Hour)
 	w.tick(false)
 	if st := w.status("e1-w3"); !st.HeldSince.Equal(t0) || st.Held != 0 || !st.Since.Equal(t0) {
 		t.Fatalf("held status = %+v, want held since t0", st)
 	}
-	w.acct.ok = true
+	w.acct.state = stateOK
 	w.now = t0.Add(3 * time.Hour)
 	w.tick(false)
 	if st := w.status("e1-w3"); st.Held != 3*time.Hour || !st.HeldSince.IsZero() || st.State != "exploring" {

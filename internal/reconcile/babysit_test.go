@@ -336,7 +336,7 @@ func TestTriggersLeaveOutWhatTheUserWrote(t *testing.T) {
 		checks:   []gh.Check{{Name: "ci", State: "IN_PROGRESS"}, {Name: "lint", State: "SUCCESS"}},
 	}
 	var keys []string
-	for _, ev := range triggers(pr, rd, "me") {
+	for _, ev := range triggers(pr, rd, "me", nil) {
 		keys = append(keys, ev.Key)
 	}
 	want := []string{"babysit:thread:T3:13", "babysit:review:bob:0001-01-01T00:00:00Z", "babysit:comment:2"}
@@ -379,4 +379,39 @@ func TestABabysitterWaitsForTheHandover(t *testing.T) {
 	w.fullNext()
 	w.tick(false)
 	startArgs(t, w, "factory:e1-w1:babysitter")
+}
+
+// An item back in in_review from blocked or a re-check, on the same red
+// head, gets a fresh pass: the babysitter is woken again, and only a pass
+// that ends red after the return sends it to needs_you.
+func TestAReturnToReviewGetsAFreshPassBeforeNeedsYou(t *testing.T) {
+	for _, away := range []string{stateBlocked, workRechecking} {
+		t.Run(away, func(t *testing.T) {
+			w := watching(t)
+			w.listen(w.babysitter(1, sessionTurnEnded, 5400, listedTurnEnded).PID)
+			pass := "## Outcome\nopen — CI red\n## Comments\nnone\n## CI\nci fails: needs o/r#14\n"
+			w.pulls.checks[head1] = []gh.Check{{Name: "ci", State: "FAILURE", Required: true}}
+			w.tick(false)
+			w.end(item, "babysit.v1.md", pass)
+			w.moveTo(item, away)
+			w.moveTo(item, workInReview)
+			before := len(w.toBabysitter())
+			w.now = w.now.Add(5 * time.Minute)
+			w.fullNext()
+			w.tick(false)
+			if got := w.status(item).State; got != workInReview {
+				t.Fatalf("%s is %s right after its return; want a fresh pass first", item, got)
+			}
+			if got := w.toBabysitter(); len(got) != before+1 || !strings.HasPrefix(last(got).Key, "babysit:red:"+head1+":") {
+				t.Fatalf("requests to the babysitter after the return: %+v; want one new red", got[before:])
+			}
+			w.end(item, "babysit.v2.md", pass)
+			w.now = w.now.Add(5 * time.Minute)
+			w.fullNext()
+			w.tick(false)
+			if got := last(w.kinds(item, events.KindTransition)); got.To != stateNeedsYou || got.TriggerRef != redAfterPassRef+head1 {
+				t.Errorf("last move %s on %q; want needs_you after the fresh pass ended red", got.To, got.TriggerRef)
+			}
+		})
+	}
 }

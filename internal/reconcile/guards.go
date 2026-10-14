@@ -23,6 +23,7 @@ type guard func(r *run, e *entity) (ok bool, ref string, err error)
 // guards are the guards this package implements, by blueprint name.
 var guards = map[string]guard{
 	// work
+	"adopted_pr":           (*run).adoptedPR,
 	"startable":            (*run).startable,
 	"step_started":         (*run).stepStarted,
 	"step_ended":           (*run).stepEnded,
@@ -34,6 +35,8 @@ var guards = map[string]guard{
 	"retry_allowed":        (*run).retryAllowed,
 	"cancel_requested":     requested(RequestStop),
 	"instruction_received": (*run).instructionReceived,
+	"blocked_reported":     (*run).blockedReported,
+	"blockers_released":    (*run).blockersReleased,
 	"pr_recorded":          (*run).prRecorded,
 	"pr_merged":            func(r *run, e *entity) (bool, string, error) { return prState(e, prMerged) },
 	"pr_closed_unmerged":   func(r *run, e *entity) (bool, string, error) { return prState(e, prClosed) },
@@ -45,6 +48,7 @@ var guards = map[string]guard{
 	"item_startable":    (*run).itemStartable,
 	"nothing_startable": (*run).nothingStartable,
 	"handed_back":       (*run).handedBack,
+	"item_released":     (*run).itemReleased,
 	// session
 	"listed_working":  (*run).listedWorking,
 	"turn_ended":      (*run).sessionTurnEnded,
@@ -152,13 +156,22 @@ var steps = map[string]string{
 	"verifying":    verifyStep,
 }
 
-// startable: the account is ok and the item can start now.
+// startable: the account allows the item's work and it can start now.
 func (r *run) startable(e *entity) (bool, string, error) {
-	if !r.accountOK {
+	if !r.workAllowed(e) {
 		return false, "", nil
 	}
 	ok, err := r.canStart(e)
 	return ok, "", err
+}
+
+// adoptedPR: the item adopts a PR and is startable. It goes straight to
+// review: its worktree is made at the PR's head and no orchestrator works it.
+func (r *run) adoptedPR(e *entity) (bool, string, error) {
+	if e.work == nil || e.work.PR == 0 {
+		return false, "", nil
+	}
+	return r.startable(e)
 }
 
 // canStart reports whether a queued item may start: no item of its set is
@@ -196,10 +209,14 @@ func (r *run) canStart(it *entity) (bool, error) {
 func active(it *entity) bool { return it.m.States[it.cur.State].Health == blueprint.HealthEvents }
 
 // ready reports whether an item's own start conditions hold: its gate:
-// start links are released and its repo's base branch is not red.
+// start links are released and its repo's base branch is not red. A repair
+// item starts on a red base: it is there to fix it.
 func (r *run) ready(it *entity) (bool, error) {
 	if ok, err := linksReleased(r, it); !ok || err != nil {
 		return false, err
+	}
+	if r.isRepair(it) {
+		return true, nil
 	}
 	return r.baseGreen(it.work.Repo, it.work.Base)
 }
@@ -378,31 +395,47 @@ func (r *run) retryAllowed(e *entity) (bool, string, error) {
 // instructionReceived: an instruction to the entity in its current state;
 // for a work item, also one to its set since the item was blocked. The
 // planner sends that one during the re-check the block starts, so it can
-// predate the item's return from that re-check.
+// predate the item's return from that re-check. After a blocked_by, the
+// set's instruction counts only when it starts "<item id>:", and work
+// before pr_open also waits for its set (waitsForSet).
 func (r *run) instructionReceived(e *entity) (bool, string, error) {
-	if ev, ok := e.newest(events.KindInstruction, nil); ok {
-		return true, seqRef(ev), nil
+	ref, ok := r.instruction(e)
+	if !ok || e.work == nil {
+		return ok, ref, nil
 	}
-	if e.work == nil || r.ents[e.work.Set] == nil {
-		return false, "", nil
-	}
-	set, since := r.ents[e.work.Set], blockedAt(e)
-	for i := len(set.evs) - 1; i >= 0; i-- {
-		ev := set.evs[i]
-		if ev.Kind == events.KindInstruction && !ev.At.Before(since) {
-			return true, eventRef(set.id, ev), nil
+	if entry, ok := blockEntry(e); ok && blockedByReport(entry) {
+		if wait, err := r.waitsForSet(e); wait || err != nil {
+			return false, "", err
 		}
 	}
-	return false, "", nil
+	return true, ref, nil
 }
 
-// blockedAt returns when the item was last blocked: its newest escalation,
-// not a return to blocked from a re-check or needs_you.
-func blockedAt(it *entity) time.Time {
-	for i := len(it.evs) - 1; i >= 0; i-- {
-		if blockedPastRestarts(it.evs[i]) {
-			return it.evs[i].At
+// instruction returns the ref of the instruction instructionReceived counts.
+func (r *run) instruction(e *entity) (string, bool) {
+	if ev, ok := e.newest(events.KindInstruction, nil); ok {
+		return seqRef(ev), true
+	}
+	if e.work == nil || r.ents[e.work.Set] == nil {
+		return "", false
+	}
+	set, since := r.ents[e.work.Set], blockedAt(e)
+	entry, ok := blockEntry(e)
+	named := ok && blockedByReport(entry)
+	for i := len(set.evs) - 1; i >= 0; i-- {
+		ev := set.evs[i]
+		if ev.Kind == events.KindInstruction && !ev.At.Before(since) && (!named || strings.HasPrefix(ev.Text, e.id+":")) {
+			return eventRef(set.id, ev), true
 		}
+	}
+	return "", false
+}
+
+// blockedAt returns when the item was last blocked: its newest escalation
+// or blocked_by, not a return to blocked from a re-check or needs_you.
+func blockedAt(it *entity) time.Time {
+	if ev, ok := blockEntry(it); ok {
+		return ev.At
 	}
 	return it.cur.Since
 }
@@ -584,14 +617,14 @@ func (r *run) workFinished(e *entity) (bool, string, error) {
 }
 
 // resumeAllowed: the session's owner has work for it and does not wait for
-// the user, and the account is ok or asked for this resume after a pause.
-// The account's status is read again last: another tick's account step may
-// have paused it since this tick's.
+// the user, and the account allows its work or asked for this resume after
+// a pause. The account's status is read again last: another tick's account
+// step may have paused it since this tick's.
 func (r *run) resumeAllowed(e *entity) (bool, string, error) {
 	owner := r.ents[e.session.Task]
 	afterPause := e.req != nil && e.req.Request == RequestResume
-	if owner == nil || owner.cur.State == stateNeedsYou || !r.accountOK && !afterPause {
+	if owner == nil || owner.cur.State == stateNeedsYou || !r.workAllowed(e) && !afterPause {
 		return false, "", nil
 	}
-	return r.needsSession(owner) && r.accountAllows(afterPause), "", nil
+	return r.needsSession(owner) && r.accountAllows(e, afterPause), "", nil
 }

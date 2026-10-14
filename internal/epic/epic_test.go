@@ -123,6 +123,8 @@ func TestEachRuleIsRefusedWithItsMessage(t *testing.T) {
 		{"unknown evidence kind", `evidence: "pr:kingpinXD/factory#10"`, `evidence: "vibes:yes"`,
 			"issue kingpinXD/factory#9: evidence \"vibes:yes\": unknown kind \"vibes\": want pr:<url>, commit:<sha>, duplicate:<number> or children"},
 		{"a duplicate of itself", `evidence: "duplicate:12"`, `evidence: "duplicate:8"`, "issue kingpinXD/factory#8: a duplicate of itself"},
+		{"elsewhere naming a commit", `result: done, evidence: "pr:kingpinXD/factory#10"`, `result: elsewhere, evidence: "commit:abc1234"`,
+			"issue kingpinXD/factory#9: result elsewhere takes evidence pr:, not commit"},
 		{"needs-user result without answers", `why: "your open PR #41", answers: [take over, leave]`, `why: "your open PR #41"`,
 			"issue anuma-ai/sdk#40: result yours waits on the user, so it needs answers"},
 		{"issue without a result", "{ref: kingpinXD/factory#13, result: updated}", "{ref: kingpinXD/factory#13}",
@@ -167,6 +169,62 @@ func TestEachRuleIsRefusedWithItsMessage(t *testing.T) {
 				t.Fatalf("problems = %q\nwant %q", problems, tt.want)
 			}
 		})
+	}
+}
+
+func TestElsewhereMayNameItsPR(t *testing.T) {
+	for _, issue := range []string{`result: elsewhere, evidence: "pr:kingpinXD/factory#10"`, `result: elsewhere`} {
+		text := strings.Replace(validPlan, `result: done, evidence: "pr:kingpinXD/factory#10"`, issue, 1)
+		if problems := mustParse(t, text).Validate(testEnv()); len(problems) > 0 {
+			t.Errorf("%s: problems: %q", issue, problems)
+		}
+	}
+}
+
+// repairPlan is a repair epic's plan for kingpinXD/factory@main: one item,
+// no links.
+const repairPlan = `
+uat: none
+issues:
+  - {ref: kingpinXD/factory#12, result: ready}
+  - {ref: anuma-ai/sdk#42, result: ready}
+items:
+  - {id: factory-12, repo: factory, issue: kingpinXD/factory#12}
+sets:
+  - {id: s1, items: [factory-12]}
+links: []
+`
+
+// TestARepairPlanHoldsOneItemOnItsBaseAndNoLinks: a repair plan's
+// exemptions cover only the fix of its own repo@base.
+func TestARepairPlanHoldsOneItemOnItsBaseAndNoLinks(t *testing.T) {
+	sdkItem := "  - {id: sdk-42, repo: sdk, issue: anuma-ai/sdk#42}\n"
+	for _, tc := range []struct {
+		name, old, new string
+		base           RepoBase
+		want           []string
+	}{
+		{name: "the fix", base: RepoBase{"kingpinXD/factory", "main"}},
+		{"a second item", "sets:", sdkItem + "sets:", RepoBase{"kingpinXD/factory", "main"},
+			[]string{"a repair plan holds one item at most, not 2", "item sdk-42 is on anuma-ai/sdk@main, not the repair's kingpinXD/factory@main", "item sdk-42 is in no set"}},
+		{"an item in another repo", "  - {id: factory-12, repo: factory, issue: kingpinXD/factory#12}\n", sdkItem, RepoBase{"kingpinXD/factory", "main"},
+			[]string{"item sdk-42 is on anuma-ai/sdk@main, not the repair's kingpinXD/factory@main", "item sdk-42 is in no set", "set s1 lists unknown item factory-12"}},
+		{"an item on another base", "", "", RepoBase{"kingpinXD/factory", "dev"},
+			[]string{"item factory-12 is on kingpinXD/factory@main, not the repair's kingpinXD/factory@dev"}},
+		{"a link", "links: []", "links:\n  - {from: e2-sdk-7, to: factory-12, gate: start, when: merged, rollback: none}", RepoBase{"kingpinXD/factory", "main"},
+			[]string{"a repair plan holds no links"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := testEnv()
+			env.Repair = &tc.base
+			got := mustParse(t, strings.Replace(repairPlan, tc.old, tc.new, 1)).Validate(env)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("problems = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if problems := mustParse(t, strings.Replace(repairPlan, "sets:", sdkItem+"sets:", 1)).Validate(testEnv()); !slices.Equal(problems, []string{"item sdk-42 is in no set"}) {
+		t.Errorf("a normal epic: problems = %q", problems)
 	}
 }
 

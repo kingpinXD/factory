@@ -18,11 +18,24 @@ import (
 // not lose, which it retries every tick the entity stays in the state.
 func (r *run) enter(e *entity, t events.Event) error {
 	r.settle(e)
+	if err := r.tellReleased(e, t); err != nil {
+		return err
+	}
+	if err := r.wakeReleased(e, t); err != nil {
+		return err
+	}
 	switch {
 	case e.work != nil && e.cur.State == stateStarting:
 		if _, ok := worktreeReady(e); !ok {
 			return r.queueRepoWork(e, worktreeRequest, repoKey(worktreeRequest, t))
 		}
+	case e.work != nil && e.cur.State == workPROpen && skipsOrchestrator(e):
+		if _, ok := worktreeReady(e); !ok {
+			if err := r.queueRepoWork(e, worktreeRequest, repoKey(worktreeRequest, t)); err != nil {
+				return err
+			}
+		}
+		return r.readPR(e)
 	case e.work != nil && e.cur.State == workMerging:
 		return r.sendMerge(e, t)
 	case e.session != nil && e.cur.State == sessionStarting:
@@ -181,7 +194,8 @@ func eventBySeq(e *entity, ref string) (events.Event, bool) {
 
 // create makes a new entity in its machine's start state: its folder,
 // inputs.yaml and first transition, and its index entry. The index and its
-// status.json are written when the tick finishes.
+// status.json are written when the tick finishes. A folder a tick that died
+// before writing the index made is reused, with what its log holds.
 func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (*entity, error) {
 	if err := store.CheckID(id); err != nil {
 		return nil, err
@@ -206,6 +220,10 @@ func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (
 			return nil, err
 		}
 		if err := store.WriteInputs(entry.Dir, inputs); err != nil {
+			return nil, err
+		}
+		var err error
+		if e.evs, err = events.Read(store.EventsPath(entry.Dir)); err != nil {
 			return nil, err
 		}
 	}

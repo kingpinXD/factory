@@ -9,9 +9,11 @@
     "by_repo": {}
   },
   "waiting_on_user": [],
+  "blocked": [],
   "in_review": [],
   "dead_letters": [],
   "paused_repos": [],
+  "repairs": [],
   "epics": [],
   "agents": [],
   "open_prs": [],

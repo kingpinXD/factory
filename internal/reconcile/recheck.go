@@ -28,6 +28,7 @@ const recipientRecheck = "recheck"
 const (
 	signalStale   = "stale"   // an explorer's issue_stale
 	signalBlocked = "blocked" // an item or set used up its restarts
+	signalBlocker = "blocker" // an item's session sent blocked_by
 	signalMerged  = "merged"  // a non-factory PR merged that links an issue or touches a listed file
 	signalEnded   = "ended"   // a blocker ended without its release
 	signalOverlap = "overlap" // another epic's explore ended with files overlapping an item's
@@ -136,6 +137,14 @@ func (r *run) describe(ep *entity, sig events.Event) string {
 			set = e.work.Set
 		}
 		return fmt.Sprintf("%s used up its restarts (%s); also send %s an instruction", id, covers, set)
+	case signalBlocker:
+		why := ""
+		if it := r.ents[parts[1]]; it != nil {
+			if ev, ok := eventBySeq(it, parts[2]); ok {
+				why = ev.Text
+			}
+		}
+		return fmt.Sprintf("%s is blocked: %s. You may add issues, items, sets and links to unblock it; copy everything else unchanged", parts[1], why)
 	case signalMerged:
 		return fmt.Sprintf("%s merged, and it links or touches %s", strings.Join(parts[1:], ":"), covers)
 	case signalEnded:
@@ -393,6 +402,8 @@ func (r *run) noticeSignals(ep *entity) error {
 				add(signalStale, fmt.Sprintf("stale:%s:%d", it.id, ev.Seq), ref)
 			case blockedPastRestarts(ev):
 				add(signalBlocked, ev.TriggerRef, ref)
+			case blockedByReport(ev):
+				add(signalBlocker, ev.TriggerRef, ref)
 			}
 		}
 	}

@@ -3,9 +3,20 @@
     "repository": {
       "ref": {
         "target": {
-          "oid": "f453fce3417ec3f8de2f83a66ec0edec5a857ee0",
+          "oid": "1747cd4997f9caa0d6b7a1df43530e0b75fd7a82",
           "statusCheckRollup": {
-            "state": "SUCCESS"
+            "state": "SUCCESS",
+            "contexts": {
+              "nodes": [
+                {
+                  "__typename": "CheckRun",
+                  "name": "ci",
+                  "status": "COMPLETED",
+                  "conclusion": "SUCCESS",
+                  "detailsUrl": "https://github.com/kingpinXD/factory/actions/runs/38418484316/job/115369153028"
+                }
+              ]
+            }
           }
         }
       }

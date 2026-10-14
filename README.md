@@ -116,9 +116,21 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
   "waiting_on_user": [                   // entities in needs_you or waiting_user
     {"id": "e1-w2", "state": "needs_you", "since": "…", "why": "the question asked, or why it needs you"}
   ],
+  "blocked": [                           // work items in blocked; the text shows each as "blocked: <why>"
+    {"id": "e1-w3", "since": "…", "why": "the blocked_by text its session sent, or restarts used up"}
+  ],
   "in_review": [{"repo": "o/r", "count": 1, "oldest": "e1-w1", "oldest_since": "…"}],
   "dead_letters": [{"id": "e1-w2", "error": "the error reported too often"}],
-  "paused_repos": ["o/r@main"],          // base branches whose checks were red: nothing new starts there
+  "paused_repos": ["o/r@main"],          // red base branches a queued item waits on: nothing new starts there
+  "repairs": [                           // base branches red since a full reconcile read them red, until they read green
+    {"repo": "o/r", "base": "main", "red_since": "…",
+     "checks": ["govulncheck"],          // the checks that failed on the newest red head
+     "epic": "e2610131",                 // the open repair epic; "" when none is open
+     "epic_state": "checking",           // its state; "" when none is open
+     "attempts": 1,                      // its repair epics in the last 24h, which count toward values.repair_attempts
+     "stopped": false,                   // a repair epic was stopped with factory stop: no more start
+     "waiting_on": ""}                   // the open PR, owner/repo#n, a repair found fixing it elsewhere
+  ],
   "epics": [{"id": "e1", "state": "running", "since": "…", "rechecks": 1}],   // open epics
   "agents": [                            // sessions not finished
     {"name": "factory:e1-s1:orchestrator",   // for claude attach <name> or claude logs <name>
@@ -130,7 +142,9 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
   "open_prs": [                          // work items whose PR is open
     {"id": "e1-w1", "url": "…", "state": "in_review",
      "unanswered": 2,                    // unresolved threads whose last comment is not the user's
-     "merge_hold": "…"}                  // what kept it from merging at the last full reconcile; "" when nothing
+     "merge_hold": "…",                  // what kept it from merging at the last full reconcile; "" when nothing
+     "review": "…",                      // "review requested in #<review_channel_name>", "wants a review", or ""
+     "review_at": "…"}                   // when the review request was posted; left out until then
   ],
   "errors": ["…"],                       // what the last tick went on past
   "problems": ["…"]                      // blueprint problems while the tick runs on the last good copy

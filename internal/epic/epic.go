@@ -72,7 +72,8 @@ type Plan struct {
 type Issue struct {
 	Ref    string `yaml:"ref"`
 	Result string `yaml:"result"`
-	// Evidence is kind:ref for a closing result (see ParseEvidence).
+	// Evidence is kind:ref for a closing result (see ParseEvidence), or
+	// pr:<ref> for elsewhere, the open PR that does the work.
 	Evidence string `yaml:"evidence,omitempty"`
 	Why      string `yaml:"why,omitempty"`
 	// Answers are the choices the user may give a result that waits on them.
@@ -90,6 +91,19 @@ func (i Issue) NeedsUser() bool {
 		return i.Evidence == ""
 	}
 	return false
+}
+
+// AdoptsYours reports whether i is the user's own PR, result yours, and an
+// item of the plan adopts it.
+func (p *Plan) AdoptsYours(i Issue) bool {
+	ref, err := ParseRef(i.Ref)
+	if err != nil || i.Result != ResultYours {
+		return false
+	}
+	return slices.ContainsFunc(p.Items, func(it Item) bool {
+		r, err := ParseRef(it.Issue)
+		return err == nil && it.PR != 0 && r.Is(ref)
+	})
 }
 
 // Item is one work item: one PR in one repo, for one issue.

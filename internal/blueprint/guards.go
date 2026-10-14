@@ -5,7 +5,8 @@ package blueprint
 // implements one check per name.
 var Guards = map[string]string{
 	// work
-	"startable":            "the item's gate: start links are released, its repo's base branch is green and the account is ok",
+	"startable":            "the item's gate: start links are released, its repo's base branch is green and the account is ok; a repair epic's item skips the base check and may start near_limit",
+	"adopted_pr":           "the item adopts a PR and is startable: it goes straight to review, without an orchestrator",
 	"step_started":         "the step's start event is logged",
 	"step_ended":           "the step's end event is logged, and its output file has the hash it names and the step's headings",
 	"verify_passed":        "the verifier's newest verify.v<n>.md is ended (as step_ended) and the first line under its ## Verdict is pass, or pass with notes",
@@ -13,7 +14,9 @@ var Guards = map[string]string{
 	"question_asked":       "the session logged a question for the user",
 	"answered":             "the user's answer is logged",
 	"restarts_exhausted":   "the entity used up its restarts or nudges",
-	"instruction_received": "the planner sent the entity an instruction event",
+	"instruction_received": "the planner sent the entity an instruction event; for a blocked item also its set, after blocked_by only with a text starting \"<item id>:\", and back to work before pr_open only while no other item of its set is being worked",
+	"blocked_reported":     "the item's orchestrator or babysitter sent blocked_by in its current state, and blocked_by has not blocked it twice since it last left needs_you",
+	"blockers_released":    "the item was blocked by blocked_by and the re-check it started ended; a plan applied since it was blocked added a gate: start link into it, and every one is released; before pr_open, no other item of its set is being worked",
 	"pr_recorded":          "a PR on factory/<work-id>, or the adopted PR, is recorded and the worktree is handed over",
 	"merge_ready":          "required checks green on the head SHA, no unresolved thread, no CHANGES_REQUESTED, merge_quiet passed since the program first saw the PR's current head SHA, may-merge is 0, and an approval or `Merge without approval: yes`",
 	"merge_failed":         "the merge call failed",
@@ -26,7 +29,7 @@ var Guards = map[string]string{
 	"recheck_kept":         "the re-check result for the item is ready or updated",
 	"recheck_dropped":      "the re-check result for the item is done, obsolete or duplicate",
 	"recheck_needs_user":   "the re-check result for the item waits on the user or on someone else",
-	"needs_user":           "only the user can settle it: a dead-letter, planner runs used up, or the same SHA red after a babysitter pass",
+	"needs_user":           "only the user can settle it: a dead-letter, planner runs used up, the same SHA red after a babysitter pass, or a third blocked_by",
 	"retry_requested":      "the user ran factory retry on it",
 	"retry_allowed":        "the user ran factory retry on it, and its PR is not closed",
 	// set
@@ -36,6 +39,7 @@ var Guards = map[string]string{
 	"item_startable":    "an open item can start now",
 	"items_finished":    "every item is merged or cancelled",
 	"handed_back":       "an item of the set got its worktree back from its babysitter since the set entered its state",
+	"item_released":     "an item of the set went back to work before pr_open, its blockers released, since the set entered its state",
 	// epic
 	"state_check_ended": "the newest state-check.v<n>.md has its end event, and the epic has no state to return to: the first check, not a re-check",
 	"epic_plan_ended":   "the newest epic.v<n>.yaml has its end event, is valid, and every issue has a result",
@@ -43,7 +47,7 @@ var Guards = map[string]string{
 	"epic_idle":         "no open item of the epic can start, and none is being worked or in review",
 	"all_in_review":     "every open item is in_review or later",
 	"uat_passed":        "the epic has uat: none, or uat/result.md says pass",
-	"recheck_signal":    "a re-check signal: issue_stale, a set blocked past its restarts, a related non-factory merge, factory replan, or factory answer",
+	"recheck_signal":    "a re-check signal: issue_stale, an item's blocked_by, a set blocked past its restarts, a related non-factory merge, factory replan, or factory answer",
 	"recheck_ended":     "the re-check's newest epic.v<n>.yaml has its end event",
 	// session
 	"listed_working":      "claude agents lists the session with a pid, working, and its transcript does not show its turn ended",
@@ -52,7 +56,7 @@ var Guards = map[string]string{
 	"compaction_recorded": "the transcript has a compaction record newer than the stop, and the turn ended",
 	"factory_stopped":     "the factory stopped the session",
 	"no_pid":              "the session has had no pid for supervision.dead_after",
-	"resume_allowed":      "the account is ok and the session's work needs it again",
+	"resume_allowed":      "the account is ok, or near_limit for a repair epic's session, and the session's work needs it again",
 	"work_finished":       "the session's work is over and nothing will wake it",
 	// account
 	"usage_near_limit":        "the newest figure is fresh and at or above usage.near_limit in either window",

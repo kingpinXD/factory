@@ -43,6 +43,15 @@ values:
     auto_compact_at: 60
     compact_failures_dm: 2
   wait_dm: 24h
+  # A base branch an open item works on that stays red red_after gets a repair epic; one that
+  # is still red red_after after a repair epic ended gets another. A repo@base gets at most
+  # repair_attempts repair epics in 24h.
+  red_after: 15m
+  repair_attempts: 2
+  # A babysitter posts a review request in review_channel for PRs that wait only on an
+  # approval while other work waits on them; status and DMs call it #<review_channel_name>.
+  review_channel: C09QMJQ71FW
+  review_channel_name: engineering
 
 deny:
   models: [fable]
@@ -172,6 +181,7 @@ components:
     instructions: components/babysitter.md
     output: {path: "sets/<set-id>/<work-id>/babysit.v<n>.md", headings: ["## Outcome", "## Comments", "## CI"]}
     health: github
+    mcp: default
 
 machines:
   # One PR in one repo, for one issue.
@@ -180,7 +190,7 @@ machines:
     states:
       queued:
         entry: the newest ended epic.yaml lists the item
-        exits: starting once the item is startable
+        exits: pr_open once it is startable and adopts a PR (the babysitter takes it, no orchestrator); otherwise starting once it is startable
         health: waits
       starting:
         entry: the item is startable; the program makes its worktree and starts or nudges its orchestrator
@@ -219,7 +229,7 @@ machines:
         on_timeout: verifying
         health: events
       pr_open:
-        entry: verification ended; the pr-opener opens the PR
+        entry: verification ended; the pr-opener opens the PR. Or the item adopts a PR and skipped its orchestrator; the program makes its worktree at the PR's head
         exits: in_review once the PR is recorded and the worktree handed over; needs_you after 1h
         timeout: 1h
         on_timeout: needs_you
@@ -252,8 +262,8 @@ machines:
         exits: back to the state it left when the answer is logged
         health: waits
       blocked:
-        entry: the item used up its restarts; its set asks the planner for a re-check
-        exits: back to the state it left when the planner sends an instruction
+        entry: the item used up its restarts, or its orchestrator or babysitter sent blocked_by (a third one goes to needs_you instead); its epic re-checks it
+        exits: back to the state it left when the planner sends an instruction (after blocked_by, one to its set must start with the item's id); after blocked_by, also once the re-check ended and every gate:start link a later plan added into it is released. After blocked_by, back to work before pr_open only while no other item of its set is being worked; the orchestrator is told to resume it on a release, the babysitter on any return to review
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -269,6 +279,7 @@ machines:
         health: waits
         end: true
     transitions:
+      - {from: queued, to: pr_open, trigger: tick, guard: adopted_pr}
       - {from: queued, to: starting, trigger: tick, guard: startable}
       - {from: starting, to: exploring, trigger: file, guard: step_started}
       - {from: exploring, to: planning, trigger: file, guard: step_ended}
@@ -296,7 +307,16 @@ machines:
       - {from: plan_review, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: implementing, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: verifying, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: starting, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: exploring, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: planning, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: plan_review, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: implementing, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: verifying, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: pr_open, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: in_review, to: blocked, trigger: file, guard: blocked_reported}
       - {from: blocked, to: previous, trigger: file, guard: instruction_received}
+      - {from: blocked, to: previous, trigger: tick, guard: blockers_released}
       - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
       - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
       - {from: rechecking, to: needs_you, trigger: file, guard: recheck_needs_user}
@@ -327,7 +347,7 @@ machines:
         health: events
       blocked:
         entry: nothing in the set can start (the orchestrator ended its turn), or it used up its restarts (one planner run)
-        exits: running when an item can start (the tick nudges the orchestrator), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
+        exits: running when an item can start (the tick nudges the orchestrator), an item's blockers are released (the orchestrator is told to resume it), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -348,6 +368,7 @@ machines:
       - {from: running, to: blocked, trigger: file, guard: nothing_startable}
       - {from: running, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: blocked, to: running, trigger: tick, guard: item_startable}
+      - {from: blocked, to: running, trigger: tick, guard: item_released}
       - {from: blocked, to: running, trigger: file, guard: instruction_received}
       - {from: blocked, to: running, trigger: file, guard: handed_back}
       - {from: running, to: done, trigger: tick, guard: items_finished}
@@ -374,7 +395,7 @@ machines:
         health: events
       planned:
         entry: the newest epic.yaml is valid and every issue has a result
-        exits: running once a set is claimed; uat when every item is merged or cancelled, as in an epic with no items
+        exits: running once a set is claimed; uat when every item is merged or cancelled, as in an epic with no items, or whose items only adopt PRs (no set is claimed, so it shows planned until they end)
         health: waits
       running:
         entry: a set of the epic is claimed
@@ -478,7 +499,7 @@ machines:
       - {from: dead, to: finished, trigger: tick, guard: work_finished}
 
   # Plan usage, one per machine. While it is not ok, nothing starts or resumes and the
-  # clocks of the work it holds back are frozen.
+  # clocks of the work it holds back are frozen; near_limit holds back all but repair epics.
   account:
     start: ok
     states:
@@ -487,7 +508,7 @@ machines:
         exits: near_limit at near_limit; paused at pause or a limit message; stale when the figure is older than stale_after
         health: waits
       near_limit:
-        entry: a fresh figure at or above near_limit in either window; no new work starts. After a pause, the probe's fresh figure under pause; the recorded sessions resume one per tick, longest chain first
+        entry: a fresh figure at or above near_limit in either window; no new work starts but a repair epic's. After a pause, the probe's fresh figure under pause; the recorded sessions resume one per tick, longest chain first
         exits: ok when both windows are under near_limit; paused; stale
         health: waits
       paused:

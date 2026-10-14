@@ -263,6 +263,50 @@ func TestWorktreeWhenOnlyTheBranchIsLeft(t *testing.T) {
 	}
 }
 
+// TestWorktreeAtPRLeavesTheUsersCheckout: an adopted PR's branch can be the
+// one checked out in the user's clone, with work in progress; the worktree
+// goes on factory/w1 at the PR's head and the clone is left as it was.
+func TestWorktreeAtPRLeavesTheUsersCheckout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(t *testing.T, clone, head string)
+	}{
+		{"first try", func(*testing.T, string, string) {}},
+		{"killed after making the branch", func(t *testing.T, clone, head string) {
+			run(t, "-C", clone, "branch", "factory/w1", head)
+		}},
+		{"branch left at an older head", func(t *testing.T, clone, _ string) {
+			run(t, "-C", clone, "branch", "factory/w1", "origin/main")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clone, _ := userClone(t)
+			head := commit(t, clone, "fix.txt", "the fix\n")
+			run(t, "-C", clone, "push", "-q", "origin", "user-work", "HEAD:refs/pull/7/head")
+			before := stateOf(t, clone)
+			tc.make(t, clone, head)
+
+			path, err := execClient().WorktreeAtPR(context.Background(), clone, 7, "w1")
+			if want := WorktreePath(clone, "w1"); err != nil || path != want {
+				t.Fatalf("WorktreeAtPR = %s, %v; want %s", path, err, want)
+			}
+			assertReady(t, clone, path)
+			if got := run(t, "-C", path, "rev-parse", "HEAD"); got != head {
+				t.Errorf("HEAD = %s, want the PR's head %s", got, head)
+			}
+			if got := run(t, "-C", clone, "rev-parse", "refs/factory/pr-7"); got != head {
+				t.Errorf("refs/factory/pr-7 = %s, want the PR's head %s", got, head)
+			}
+			if after := stateOf(t, clone); after != before {
+				t.Errorf("user clone changed: %+v, was %+v", after, before)
+			}
+			if got := run(t, "-C", clone, "rev-parse", "user-work"); got != head {
+				t.Errorf("user-work = %s, want it left at %s", got, head)
+			}
+		})
+	}
+}
+
 func TestCleanupAfterTheFolderWasDeletedByHand(t *testing.T) {
 	clone, _ := userClone(t)
 	path, err := execClient().Worktree(context.Background(), clone, "main", "w1")

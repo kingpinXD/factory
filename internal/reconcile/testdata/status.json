@@ -38,6 +38,18 @@
       "why": "which API? — answers: v1 | v2"
     }
   ],
+  "blocked": [
+    {
+      "id": "e1-w3",
+      "since": "2026-10-09T13:00:00Z",
+      "why": "needs the retry helper in o/r#14 first"
+    },
+    {
+      "id": "e1-w4",
+      "since": "2026-10-09T14:00:00Z",
+      "why": "restarts used up"
+    }
+  ],
   "in_review": [
     {
       "repo": "o/r",
@@ -55,6 +67,22 @@
   "paused_repos": [
     "o/r@main"
   ],
+  "repairs": [
+    {
+      "repo": "o/r",
+      "base": "main",
+      "red_since": "2026-10-09T13:00:00Z",
+      "checks": [
+        "govulncheck",
+        "lint"
+      ],
+      "epic": "e3",
+      "epic_state": "checking",
+      "attempts": 1,
+      "stopped": false,
+      "waiting_on": ""
+    }
+  ],
   "epics": [
     {
       "id": "e1",
@@ -67,6 +95,12 @@
       "state": "checking",
       "since": "2026-10-09T13:00:00Z",
       "rechecks": 1
+    },
+    {
+      "id": "e3",
+      "state": "checking",
+      "since": "2026-10-09T15:00:00Z",
+      "rechecks": 0
     }
   ],
   "agents": [
@@ -102,7 +136,9 @@
       "url": "https://github.com/o/r/pull/41",
       "state": "in_review",
       "unanswered": 2,
-      "merge_hold": "a reviewer requested changes"
+      "merge_hold": "a reviewer requested changes",
+      "review": "review requested in #engineering",
+      "review_at": "2026-10-09T14:35:00Z"
     }
   ],
   "errors": [

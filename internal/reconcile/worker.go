@@ -116,22 +116,28 @@ func (j repoJob) do(ctx context.Context, g git.Client, timeout time.Duration) ev
 	return res
 }
 
-// worktree makes the item's worktree, only while the item is starting and
-// its worktree was never handed over: git.Worktree remakes a worktree that is
-// not clean, so it must never run on one an agent works in.
+// worktree makes the item's worktree, only while the item is starting, or
+// in pr_open on an adopted PR that skipped the orchestrator, and its
+// worktree was never handed over: git.Worktree remakes a worktree that is
+// not clean, so it must never run on one an agent works in. An adopted PR's
+// worktree is at the PR's head.
 func (j repoJob) worktree(ctx context.Context, g git.Client) (string, error) {
-	it := &entity{evs: j.evs}
+	it := &entity{evs: j.evs, work: &j.in}
 	t, _ := lastTransition(j.evs)
+	adopted := t.To == workPROpen && skipsOrchestrator(it)
 	switch {
 	case handedOver(it):
 		return "", errors.New("the worktree was handed over; it is never made again")
-	case t.To != stateStarting:
-		return "", fmt.Errorf("the item is %s, not starting; its worktree is made only as it starts", t.To)
+	case t.To != stateStarting && !adopted:
+		return "", fmt.Errorf("the item is %s, not starting; its worktree is made only as it starts, or as its adopted PR goes to review", t.To)
 	}
 	if _, err := os.Stat(filepath.Join(j.in.Clone, ".git")); errors.Is(err, os.ErrNotExist) {
 		if err := g.Clone(ctx, j.in.Repo, j.in.Clone); err != nil {
 			return "", err
 		}
+	}
+	if adopted {
+		return g.WorktreeAtPR(ctx, j.in.Clone, j.in.PR, j.id)
 	}
 	return g.Worktree(ctx, j.in.Clone, j.in.Base, j.id)
 }

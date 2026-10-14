@@ -120,16 +120,16 @@ type limitSeen struct {
 // Step moves the account machine and acts on its state. It reads the last
 // good blueprint, without the tick's check and its DMs, so nothing slow
 // comes before a stop at the pause point.
-func (a PlanAccount) Step(ctx context.Context, now time.Time, dryRun bool) (bool, error) {
+func (a PlanAccount) Step(ctx context.Context, now time.Time, dryRun bool) (string, error) {
 	b, err := goodBlueprint(a.Deps.Brain)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	d := a.Deps
 	d.Now = func() time.Time { return now }
 	r, err := newRun(ctx, d, dryRun)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	r.b, r.accountOK = b, true
 	r.attachMachines()
@@ -137,16 +137,16 @@ func (a PlanAccount) Step(ctx context.Context, now time.Time, dryRun bool) (bool
 		r.fail("usage probe: %v", err)
 	}
 	if err := r.readUsage(); err != nil {
-		return false, err
+		return "", err
 	}
 	acct, err := r.loadAccount()
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	before := acct.cur.State
 	r.advance(acct)
 	r.actOnAccount(acct, before, a.Probe)
-	return acct.cur.State == stateOK, r.saveAccount(acct)
+	return acct.cur.State, r.saveAccount(acct)
 }
 
 // goodBlueprint returns the blueprint the last tick ran on, or the brain's
@@ -626,13 +626,21 @@ func (r *run) driveProbe(acct *entity, p Probe) {
 	}
 }
 
-// accountAllows re-reads the account's status.json right before a session
-// starts or resumes: an account step that ran while this tick was slow may
-// have paused the account since this tick's own step. Work starts only
-// while the account is ok; a session stopped for a pause resumes when the
-// account step asked for it, while it is resuming or near its limit. With
-// no account status yet, nothing holds work back.
-func (r *run) accountAllows(afterPause bool) bool {
+// workAllowed reports whether e may work this tick: start, resume, be
+// posted to, supervised and compacted, and run its clocks. Everything may
+// while the account is ok; near its limit, only a repair epic's entities.
+func (r *run) workAllowed(e *entity) bool {
+	return r.accountOK || r.accountState == stateNearLimit && r.isRepair(e)
+}
+
+// accountAllows re-reads the account's status.json right before e, a
+// session, starts or resumes: an account step that ran while this tick was
+// slow may have paused the account since this tick's own step. Work starts
+// only while the account is ok, and repair work also near its limit; a
+// session stopped for a pause resumes when the account step asked for it,
+// while it is resuming or near its limit. With no account status yet,
+// nothing holds work back.
+func (r *run) accountAllows(e *entity, afterPause bool) bool {
 	st, err := readAccountStatus(r.d.Brain)
 	if err != nil {
 		r.fail("%v", err)
@@ -641,7 +649,9 @@ func (r *run) accountAllows(afterPause bool) bool {
 	switch st.State {
 	case "", stateOK:
 		return true
-	case stateResuming, stateNearLimit:
+	case stateNearLimit:
+		return afterPause || r.isRepair(e)
+	case stateResuming:
 		return afterPause
 	}
 	return false

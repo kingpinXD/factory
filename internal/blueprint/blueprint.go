@@ -85,6 +85,18 @@ type Values struct {
 	// WaitDM is how long any wait, such as one for `factory deployed`, lasts
 	// before the user gets one DM about it.
 	WaitDM Duration `yaml:"wait_dm" json:"wait_dm"`
+	// RedAfter is how long a base branch an open item works on stays red
+	// before a repair epic starts, and how long after a repair epic ended
+	// with the base still red the next one starts.
+	RedAfter Duration `yaml:"red_after" json:"red_after"`
+	// RepairAttempts is how many repair epics one repo@base gets in 24h.
+	RepairAttempts int `yaml:"repair_attempts" json:"repair_attempts"`
+	// ReviewChannel is the Slack channel id a babysitter posts review
+	// requests in, for PRs that wait on an approval and hold other work.
+	ReviewChannel string `yaml:"review_channel" json:"review_channel"`
+	// ReviewChannelName is ReviewChannel's name, without #, for status and
+	// DMs.
+	ReviewChannelName string `yaml:"review_channel_name" json:"review_channel_name"`
 }
 
 // Supervision holds the restart, nudge and escalation values.
@@ -171,6 +183,14 @@ type Component struct {
 	Outputs Outputs `yaml:"output,omitempty" json:"output,omitempty"`
 	Health  string  `yaml:"health,omitempty" json:"health,omitempty"`
 	Limits  Limits  `yaml:"limits,omitempty" json:"limits,omitzero"`
+	// MCP, when set, names the MCP config a session loads:
+	// <brain>/connectors/<mcp>.mcp.json.
+	MCP string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
+}
+
+// MCPPath returns the path of the MCP config named name in brain.
+func MCPPath(brain, name string) string {
+	return filepath.Join(brain, "connectors", name+".mcp.json")
 }
 
 // OutputReply, as an output's path, means the helper returns its result in

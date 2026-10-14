@@ -30,6 +30,7 @@ const (
 	KindNudge         = "nudge"
 	KindRestart       = "restart"
 	KindIssueStale    = "issue_stale"
+	KindBlockedBy     = "blocked_by"
 	KindInstruction   = "instruction"
 	KindHandover      = "handover"
 	KindHandback      = "handback"
@@ -45,7 +46,7 @@ const (
 var Kinds = []string{
 	KindTransition, KindRefused, KindRequest, KindIntent, KindDone, KindHeartbeat,
 	KindStart, KindEnd, KindError, KindNudge, KindRestart, KindIssueStale,
-	KindInstruction, KindHandover, KindHandback, KindMessage, KindAck,
+	KindBlockedBy, KindInstruction, KindHandover, KindHandback, KindMessage, KindAck,
 	KindWorktreeReady, KindCheckpointDue, KindCheckpoint, KindCompacted,
 }
 

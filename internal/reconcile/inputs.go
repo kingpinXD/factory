@@ -7,8 +7,12 @@ type EpicInputs struct {
 	ID string `yaml:"id"`
 	// Input is the input as given: an issue URL, a plan file or text.
 	Input string `yaml:"input"`
-	// Kind is what intake made of it: epic, issue, plan or text.
+	// Kind is what intake made of it: epic, issue, plan or text; or repair
+	// for an epic the tick started to fix a red base branch.
 	Kind string `yaml:"kind"`
+	// Repo and Base are a repair epic's red branch: owner/name and branch.
+	Repo string `yaml:"repo,omitempty"`
+	Base string `yaml:"base,omitempty"`
 	// Path is a plan file's absolute path.
 	Path string `yaml:"path,omitempty"`
 	// RepoHint is the repo the input names, if any.

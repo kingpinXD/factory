@@ -11,7 +11,6 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
-	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -214,7 +213,7 @@ func TestAnAnswerTakesAnEpicOutOfNeedsYou(t *testing.T) {
 func TestCancellingAnAdoptedPRInTheMergeQueueDequeuesIt(t *testing.T) {
 	w := newWorld(t)
 	w.registryMerging(true)
-	w.prs[git.Branch(item)] = gh.PR{Number: 5, State: "OPEN", HeadRefName: git.Branch(item), Author: gh.User{Login: "me"}}
+	w.prs["me/five"] = gh.PR{Number: 5, State: "OPEN", HeadRefName: "me/five", BaseRefName: "main", Author: gh.User{Login: "me"}}
 	w.plannedAdopting("e1", strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, pr: 5}", 1), "o/r#14", 5)
 	w.toInReview(20 * time.Minute)
 	w.pulls.queues["o/r@main"] = true
@@ -233,7 +232,7 @@ func TestCancellingAnAdoptedPRInTheMergeQueueDequeuesIt(t *testing.T) {
 	if got := w.called("gh pr close"); len(got) != 0 {
 		t.Errorf("closed the user's PR: %v", got)
 	}
-	if w.prs[git.Branch(item)].State != "OPEN" {
+	if w.prs["me/five"].State != "OPEN" {
 		t.Error("the adopted PR is not open")
 	}
 }

@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -58,9 +60,19 @@ func busyFactory(t *testing.T) *world {
 	w.writeStatus("e1-w1", func(st *store.Status) {
 		st.PR, st.PRURL, st.PRState, st.Unanswered, st.MergeHold = 41, "https://github.com/o/r/pull/41", prOpen, 2, "a reviewer requested changes"
 	})
+	w.append(w.dir("e1-w1"), events.Event{At: w.now.Add(-25 * time.Minute), Kind: events.KindDone, Sender: events.SenderProgram,
+		Text: "review request posted for https://github.com/o/r/pull/41", Key: reviewPostKey(epic.Ref{Repo: "o/r", Number: 41})})
 	failed := w.append(w.dir("e1-w2"), events.Event{At: t0, Kind: events.KindError, Sender: "implementor", Text: "go test ./... fails: no such file"})
 	w.append(w.dir("e1-w2"), events.Event{Kind: events.KindTransition, At: t0.Add(time.Hour), From: "implementing", To: stateNeedsYou,
 		Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: deadLetterRef + seqRef(failed)})
+
+	w.item("e1", "e1-s1", "e1-w3", workImplementing)
+	report := w.append(w.dir("e1-w3"), events.Event{At: t0.Add(time.Hour), Kind: events.KindBlockedBy, Sender: "e1-s1", Text: "needs the retry helper in o/r#14 first"})
+	w.append(w.dir("e1-w3"), events.Event{Kind: events.KindTransition, At: t0.Add(time.Hour), From: workImplementing, To: stateBlocked,
+		Prev: []string{workImplementing}, Trigger: blueprint.TriggerFile, TriggerRef: blockerRef + "e1-w3:" + seqRef(report)})
+	w.item("e1", "e1-s1", "e1-w4", "verifying")
+	w.append(w.dir("e1-w4"), events.Event{Kind: events.KindTransition, At: t0.Add(2 * time.Hour), From: "verifying", To: stateBlocked,
+		Prev: []string{"verifying"}, Trigger: blueprint.TriggerTick, TriggerRef: restartsRef + "e1-w4:6@2026-10-09T13:30:00Z"})
 
 	orch := w.orchestrator("e1-s1", "running", 4200, "working")
 	w.orchestrator("e2-s1", "stopped", 0, "stopped")
@@ -83,8 +95,12 @@ func busyFactory(t *testing.T) *world {
 	put(t, store.StatusPath(accountDir(w.brain)), mustJSON(t, AccountStatus{State: "near_limit", Since: w.now.Add(-30 * time.Minute),
 		Usage: &Figure{SessionID: "sid-1", WrittenAt: w.now.Add(-2 * time.Minute), FiveHour: Window{Used: 82, ResetsAt: w.now.Add(time.Hour).Unix()},
 			SevenDay: Window{Used: 61, ResetsAt: w.now.Add(72 * time.Hour).Unix()}}}))
+	w.put("e3", blueprint.MachineEpic, "e3", w.epicDir("e3"), epicChecking,
+		&EpicInputs{ID: "e3", Kind: epicKindRepair, Repo: "o/r", Base: "main", Input: "o/r@main is red", AddedAt: w.now.Add(-time.Hour)})
+	red := store.RepairEpisode{Repo: "o/r", Base: "main", RedSince: w.now.Add(-2 * time.Hour), RedSHA: "f453fce",
+		Checks: []gh.BaseCheck{{Name: "govulncheck", URL: "https://ci/1", Red: true}, {Name: "lint", URL: "https://ci/2", Red: true}}}
 	if err := store.WriteOverall(w.brain, store.Overall{LastTick: w.now.Add(-time.Minute), Tick: 42, PausedRepos: []string{"o/r@main"},
-		Errors: []string{"e9: claude agents: exit status 1"}}); err != nil {
+		Repairs: []store.RepairEpisode{red}, Errors: []string{"e9: claude agents: exit status 1"}}); err != nil {
 		t.Fatal(err)
 	}
 	return w

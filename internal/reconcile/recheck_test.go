@@ -264,7 +264,7 @@ links: []
 func TestCancellingAnAdoptedPRLeavesItOpen(t *testing.T) {
 	w := newWorld(t)
 	w.registry()
-	w.prs["me/own"] = gh.PR{Number: 31, URL: "https://github.com/o/r/pull/31", State: "OPEN", HeadRefName: "me/own", AutoMergeRequest: &struct{}{}, Author: gh.User{Login: "me"}}
+	w.prs["me/own"] = gh.PR{Number: 31, URL: "https://github.com/o/r/pull/31", State: "OPEN", HeadRefName: "me/own", BaseRefName: "main", AutoMergeRequest: &struct{}{}, Author: gh.User{Login: "me"}}
 	w.plannedAdopting("e1", strings.Replace(twoItems("[]"), "{id: w1, repo: r, issue: o/r#12}", "{id: w1, repo: r, issue: o/r#12, pr: 31}", 1), "o/r#12", 31)
 	w.tick(false)
 	w.readyWorktree("e1-w1")

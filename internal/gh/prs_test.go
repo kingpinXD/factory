@@ -85,6 +85,15 @@ func TestChecks(t *testing.T) {
 		`{"__typename":"StatusContext","context":"ci/legacy","state":"SUCCESS","createdAt":"2026-10-14T05:09:00Z","isRequired":false},` +
 		`{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-14T05:09:34Z","isRequired":true},` +
 		`{"__typename":"CheckRun","name":"lint","status":"QUEUED","conclusion":null,"startedAt":null,"isRequired":false}]}}}}}}`
+	cancelled := func(buildStatus string) string {
+		conclusion := "null"
+		if buildStatus == "COMPLETED" {
+			conclusion = `"SUCCESS"`
+		}
+		return `{"data":{"repository":{"object":{"statusCheckRollup":{"contexts":{"nodes":[` +
+			`{"__typename":"CheckRun","name":"E2E Status","status":"COMPLETED","conclusion":"CANCELLED","startedAt":"2026-10-14T07:30:00Z"},` +
+			`{"__typename":"CheckRun","name":"build","status":"` + buildStatus + `","conclusion":` + conclusion + `,"startedAt":"2026-10-14T07:20:00Z"}]}}}}}}`
+	}
 	for _, tc := range []struct {
 		name string
 		out  string
@@ -104,6 +113,10 @@ func TestChecks(t *testing.T) {
 			{"Workers Builds: anuma-marketing-site", "SUCCESS", false},
 		}},
 		{"failed runs re-run, not started yet", rerun, []Check{{"test", "QUEUED", true}, {"lint", "QUEUED", false}, {"ci/legacy", "FAILURE", false}}},
+		// ai-memoryless-client#10222: a concurrency group cancelled E2E
+		// Status's only run while other checks still ran.
+		{"a cancelled check while another runs", cancelled("IN_PROGRESS"), []Check{{"E2E Status", "PENDING", false}, {"build", "IN_PROGRESS", false}}},
+		{"a cancelled check once the rest finished", cancelled("COMPLETED"), []Check{{"E2E Status", "CANCELLED", false}, {"build", "SUCCESS", false}}},
 		{"no checks", `{"data":{"repository":{"object":{"statusCheckRollup":null}}}}`, nil},
 		// Required names as GitHub gives them: branchProtectionRule to an
 		// admin, refUpdateRule to a writer, rules for a ruleset.
@@ -171,6 +184,10 @@ func TestBaseState(t *testing.T) {
 			`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"CANCELLED","startedAt":"2026-10-14T05:09:34Z","detailsUrl":"https://ci/1"},`+
 				`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-14T05:09:43Z","detailsUrl":"https://ci/5"}`),
 			BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "govulncheck", URL: "https://ci/5", Success: true}}}, false, true, true},
+		{"a cancelled check while another runs", rollup("PENDING", `{"__typename":"CheckRun","name":"E2E Status","status":"COMPLETED","conclusion":"CANCELLED","detailsUrl":"https://ci/7"},`+build),
+			BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "E2E Status", URL: "https://ci/7"}, {Name: "build", URL: "https://ci/3"}}}, false, true, false},
+		{"a cancelled check once the rest finished", rollup("FAILURE", `{"__typename":"CheckRun","name":"E2E Status","status":"COMPLETED","conclusion":"CANCELLED","detailsUrl":"https://ci/7"},`+lint),
+			BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "E2E Status", URL: "https://ci/7", Red: true}, {Name: "lint", URL: "https://ci/2", Success: true}}}, true, false, false},
 		{"a passed run re-run red", rollup("FAILURE",
 			`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-14T05:12:04Z","detailsUrl":"https://ci/6"},`+
 				`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-14T05:09:43Z","detailsUrl":"https://ci/5"}`),

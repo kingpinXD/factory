@@ -4,6 +4,9 @@ sessions: 2 running (o/r 2)
 waiting on you (2):
   e1-w2  needs_you for 2h0m0s: the same error 3 times (dead-lettered): go test ./... fails: no such file
   e2-w1  waiting_user for 1h0m0s: which API? — answers: v1 | v2
+blocked (2):
+  e1-w3  blocked: needs the retry helper in o/r#14 first, for 2h0m0s
+  e1-w4  blocked: restarts used up, for 1h0m0s
 in review (1):
   o/r  1, oldest e1-w1 for 3h0m0s
 dead-letters (1):

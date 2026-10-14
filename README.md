@@ -116,6 +116,9 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
   "waiting_on_user": [                   // entities in needs_you or waiting_user
     {"id": "e1-w2", "state": "needs_you", "since": "…", "why": "the question asked, or why it needs you"}
   ],
+  "blocked": [                           // work items in blocked; the text shows each as "blocked: <why>"
+    {"id": "e1-w3", "since": "…", "why": "the blocked_by text its session sent, or restarts used up"}
+  ],
   "in_review": [{"repo": "o/r", "count": 1, "oldest": "e1-w1", "oldest_since": "…"}],
   "dead_letters": [{"id": "e1-w2", "error": "the error reported too often"}],
   "paused_repos": ["o/r@main"],          // red base branches a queued item waits on: nothing new starts there

@@ -23,6 +23,7 @@ type Report struct {
 	Account  AccountStatus `json:"account"`
 	Sessions SessionLoad   `json:"sessions"`
 	Waiting  []Waiting     `json:"waiting_on_user"`
+	Blocked  []Blocked     `json:"blocked"`
 	InReview []RepoReview  `json:"in_review"`
 	Dead     []DeadLetter  `json:"dead_letters"`
 	Paused   []string      `json:"paused_repos"`
@@ -45,6 +46,14 @@ type SessionLoad struct {
 type Waiting struct {
 	ID    string    `json:"id"`
 	State string    `json:"state"`
+	Since time.Time `json:"since"`
+	Why   string    `json:"why"`
+}
+
+// Blocked is a work item in blocked, and why: its session's blocked_by
+// text, or its restarts used up.
+type Blocked struct {
+	ID    string    `json:"id"`
 	Since time.Time `json:"since"`
 	Why   string    `json:"why"`
 }
@@ -128,7 +137,7 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 	rep := Report{
 		At: r.now, LastTick: o.LastTick, Tick: o.Tick, Account: acct,
 		Sessions: SessionLoad{ByRepo: map[string]int{}},
-		Waiting:  []Waiting{}, InReview: []RepoReview{}, Dead: []DeadLetter{}, Repairs: []RepairLoad{}, Epics: []EpicLoad{}, Agents: []Agent{}, PRs: []OpenPR{},
+		Waiting:  []Waiting{}, Blocked: []Blocked{}, InReview: []RepoReview{}, Dead: []DeadLetter{}, Repairs: []RepairLoad{}, Epics: []EpicLoad{}, Agents: []Agent{}, PRs: []OpenPR{},
 		Paused: append([]string{}, o.PausedRepos...), Errors: append([]string{}, o.Errors...), Problems: append([]string{}, o.Problems...),
 	}
 	for _, id := range r.order() {
@@ -190,6 +199,9 @@ func (r *run) waitingWhy(e *entity, t events.Event) string {
 }
 
 func (r *run) reportWork(rep *Report, it *entity) {
+	if it.cur.State == stateBlocked {
+		rep.Blocked = append(rep.Blocked, Blocked{ID: it.id, Since: it.cur.Since, Why: blockedWhy(it)})
+	}
 	if it.cur.State == workInReview {
 		i := slices.IndexFunc(rep.InReview, func(rr RepoReview) bool { return rr.Repo == it.work.Repo })
 		if i < 0 {
@@ -256,6 +268,9 @@ func (rep Report) WriteText(w io.Writer) {
 	fmt.Fprintf(w, "sessions: %d running%s\n", rep.Sessions.Running, byRepo(rep.Sessions.ByRepo))
 	section(w, "waiting on you", rep.Waiting, func(x Waiting) string {
 		return fmt.Sprintf("%s  %s for %s: %s", x.ID, x.State, age(x.Since), x.Why)
+	})
+	section(w, "blocked", rep.Blocked, func(x Blocked) string {
+		return fmt.Sprintf("%s  blocked: %s, for %s", x.ID, x.Why, age(x.Since))
 	})
 	section(w, "in review", rep.InReview, func(x RepoReview) string {
 		return fmt.Sprintf("%s  %d, oldest %s for %s", x.Repo, x.Count, x.Oldest, age(x.OldestSince))

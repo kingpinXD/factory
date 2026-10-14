@@ -63,6 +63,14 @@ func busyFactory(t *testing.T) *world {
 	w.append(w.dir("e1-w2"), events.Event{Kind: events.KindTransition, At: t0.Add(time.Hour), From: "implementing", To: stateNeedsYou,
 		Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: deadLetterRef + seqRef(failed)})
 
+	w.item("e1", "e1-s1", "e1-w3", workImplementing)
+	report := w.append(w.dir("e1-w3"), events.Event{At: t0.Add(time.Hour), Kind: events.KindBlockedBy, Sender: "e1-s1", Text: "needs the retry helper in o/r#14 first"})
+	w.append(w.dir("e1-w3"), events.Event{Kind: events.KindTransition, At: t0.Add(time.Hour), From: workImplementing, To: stateBlocked,
+		Prev: []string{workImplementing}, Trigger: blueprint.TriggerFile, TriggerRef: blockerRef + "e1-w3:" + seqRef(report)})
+	w.item("e1", "e1-s1", "e1-w4", "verifying")
+	w.append(w.dir("e1-w4"), events.Event{Kind: events.KindTransition, At: t0.Add(2 * time.Hour), From: "verifying", To: stateBlocked,
+		Prev: []string{"verifying"}, Trigger: blueprint.TriggerTick, TriggerRef: restartsRef + "e1-w4:6@2026-10-09T13:30:00Z"})
+
 	orch := w.orchestrator("e1-s1", "running", 4200, "working")
 	w.orchestrator("e2-s1", "stopped", 0, "stopped")
 	w.writeStatus("e1-s1-orchestrator", func(st *store.Status) { st.Context, st.ContextAt, st.ShortID = 54, w.now, orch.ID })

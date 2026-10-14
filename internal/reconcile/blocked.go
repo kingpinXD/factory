@@ -44,6 +44,18 @@ func blockEntry(it *entity) (events.Event, bool) {
 	return events.Event{}, false
 }
 
+// blockedWhy says why a blocked item is blocked: its session's blocked_by
+// text, or its restarts used up.
+func blockedWhy(it *entity) string {
+	if entry, ok := blockEntry(it); ok && blockedByReport(entry) {
+		seq := entry.TriggerRef[strings.LastIndex(entry.TriggerRef, ":")+1:]
+		if ev, ok := eventBySeq(it, seq); ok {
+			return ev.Text
+		}
+	}
+	return "restarts used up"
+}
+
 // blockersReleased: the item was blocked by a blocked_by, the re-check it
 // started has ended (the item came back to blocked since), its plan has a
 // gate: start link into it, and every one is released. Work before pr_open

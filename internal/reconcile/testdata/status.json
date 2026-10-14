@@ -38,6 +38,18 @@
       "why": "which API? — answers: v1 | v2"
     }
   ],
+  "blocked": [
+    {
+      "id": "e1-w3",
+      "since": "2026-10-09T13:00:00Z",
+      "why": "needs the retry helper in o/r#14 first"
+    },
+    {
+      "id": "e1-w4",
+      "since": "2026-10-09T14:00:00Z",
+      "why": "restarts used up"
+    }
+  ],
   "in_review": [
     {
       "repo": "o/r",

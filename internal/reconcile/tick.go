@@ -106,9 +106,11 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	}
 	if r.full {
 		r.watchPRs()
+		r.requestReviews()
 	}
 	r.supervise()
 	r.driveSessions()
+	r.noteReviewsGiven()
 	kind := "tick"
 	if r.full {
 		kind = "tick with a full reconcile"

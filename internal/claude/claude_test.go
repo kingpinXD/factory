@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -177,6 +178,7 @@ func TestStartWritesSettingsAndRunsFromTheRunFolder(t *testing.T) {
 		GHToken:           "ghs_test",
 		AutoCompactPct:    60,
 		AutoCompactWindow: 200_000,
+		MCPConfig:         "/brain/connectors/default.mcp.json",
 		Prompt:            "factory-task: e1",
 	}
 	if err := c.Start(context.Background(), spec); err != nil {
@@ -191,6 +193,7 @@ func TestStartWritesSettingsAndRunsFromTheRunFolder(t *testing.T) {
 		"--append-system-prompt-file", "/brain/factory/.prompts/orchestrator.md",
 		"--settings", filepath.Join(run, "settings.json"),
 		"--agents", `{"implementor":{"description":"d","prompt":"p"}}`,
+		"--mcp-config", "/brain/connectors/default.mcp.json",
 		"--permission-mode", "bypassPermissions",
 		"-n", "factory:e1:orchestrator", "factory-task: e1"}
 	if !reflect.DeepEqual(calls[0].Argv(), wantArgv) || calls[0].Dir != run {
@@ -230,9 +233,13 @@ func TestStartWritesSettingsAndRunsFromTheRunFolder(t *testing.T) {
 }
 
 func TestStartLeavesUnsetValuesOut(t *testing.T) {
-	c := testClient(t, &proc.Fake{})
+	f := &proc.Fake{}
+	c := testClient(t, f)
 	if err := c.Start(context.Background(), Spec{Name: "factory:e1:planner", Task: "e1", AutoCompactPct: 60}); err != nil {
 		t.Fatal(err)
+	}
+	if argv := f.Calls()[0].Argv(); slices.Contains(argv, "--mcp-config") {
+		t.Errorf("argv %q has --mcp-config with no MCPConfig", argv)
 	}
 	data, err := os.ReadFile(filepath.Join(c.Home, ".factory", "runs", "factory-e1-planner", "settings.json"))
 	if err != nil {

@@ -134,6 +134,9 @@ type Status struct {
 	// MergeHold says what kept an in_review PR from merging at the last
 	// full reconcile; empty when nothing did or the item is not in review.
 	MergeHold string `json:"merge_hold,omitempty"`
+	// WantsReview is set while an in_review PR waits only on an approval
+	// and other work waits on it, as the last full reconcile saw it.
+	WantsReview bool `json:"wants_review,omitempty"`
 	// ShortID is the short id `claude agents` last listed a session under,
 	// which `claude attach` and `claude logs` take as well as its name.
 	ShortID string `json:"short_id,omitempty"`

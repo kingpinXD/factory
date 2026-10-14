@@ -6,6 +6,7 @@ values:
   context: {window: 200000}
   red_after: 15m
   repair_attempts: 2
+  review_channel: C09QMJQ71FW
 deny:
   models: [fable]
 components:

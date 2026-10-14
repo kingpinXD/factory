@@ -63,5 +63,6 @@
   "reviewDecision": "",
   "reviews": [],
   "state": "MERGED",
+  "title": "chore: go skeleton, CI and make install",
   "url": "https://github.com/kingpinXD/factory/pull/1"
 }

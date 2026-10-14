@@ -49,6 +49,9 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 	if b.Values.RepairAttempts < 1 {
 		v.add("repair", "values.repair_attempts is %d; want at least 1", b.Values.RepairAttempts)
 	}
+	if b.Values.ReviewChannel == "" {
+		v.add("review", "values.review_channel is empty; want the Slack channel id review requests are posted in")
+	}
 	return v.problems
 }
 
@@ -257,6 +260,7 @@ func (v *validator) components(brain string, b *Blueprint) {
 			v.add("tools", "component %q runs_as %s and lists tools; only a helper's tools are used, through agents.json", cn, c.RunsAs)
 		}
 		v.outputs(cn, c)
+		v.mcp(brain, cn, c)
 		needsModel := c.RunsAs != RunsAsCode && !c.Placeholder
 		switch {
 		case c.Instructions != "":
@@ -309,6 +313,20 @@ func (v *validator) outputs(cn string, c Component) {
 			}
 		case !slices.Contains(outputExts, filepath.Ext(o.Path)):
 			v.add("output", "component %q: output %s is not a .md or .yaml file, or reply", cn, o.Path)
+		}
+	}
+}
+
+// mcp checks a component's MCP config: only a session loads one, and its
+// file must exist.
+func (v *validator) mcp(brain, cn string, c Component) {
+	switch {
+	case c.MCP == "":
+	case c.RunsAs != RunsAsSession:
+		v.add("mcp", "component %q runs_as %s and names mcp %q; only a session loads an MCP config", cn, c.RunsAs, c.MCP)
+	default:
+		if _, err := os.Stat(MCPPath(brain, c.MCP)); err != nil {
+			v.add("mcp", "component %q: mcp %q needs %s, which does not exist", cn, c.MCP, MCPPath(brain, c.MCP))
 		}
 	}
 }

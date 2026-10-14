@@ -136,7 +136,9 @@
       "url": "https://github.com/o/r/pull/41",
       "state": "in_review",
       "unanswered": 2,
-      "merge_hold": "a reviewer requested changes"
+      "merge_hold": "a reviewer requested changes",
+      "review": "review requested in C09QMJQ71FW",
+      "review_at": "2026-10-09T14:35:00Z"
     }
   ],
   "errors": [

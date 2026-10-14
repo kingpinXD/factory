@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/store"
@@ -59,6 +60,8 @@ func busyFactory(t *testing.T) *world {
 	w.writeStatus("e1-w1", func(st *store.Status) {
 		st.PR, st.PRURL, st.PRState, st.Unanswered, st.MergeHold = 41, "https://github.com/o/r/pull/41", prOpen, 2, "a reviewer requested changes"
 	})
+	w.append(w.dir("e1-w1"), events.Event{At: w.now.Add(-25 * time.Minute), Kind: events.KindDone, Sender: events.SenderProgram,
+		Text: "review request posted for https://github.com/o/r/pull/41", Key: reviewPostKey(epic.Ref{Repo: "o/r", Number: 41})})
 	failed := w.append(w.dir("e1-w2"), events.Event{At: t0, Kind: events.KindError, Sender: "implementor", Text: "go test ./... fails: no such file"})
 	w.append(w.dir("e1-w2"), events.Event{Kind: events.KindTransition, At: t0.Add(time.Hour), From: "implementing", To: stateNeedsYou,
 		Prev: []string{"implementing"}, Trigger: "tick", TriggerRef: deadLetterRef + seqRef(failed)})

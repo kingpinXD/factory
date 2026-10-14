@@ -14,6 +14,7 @@ type PR struct {
 	ID               string    `json:"id"`
 	Number           int       `json:"number"`
 	URL              string    `json:"url"`
+	Title            string    `json:"title"`
 	State            string    `json:"state"` // OPEN | CLOSED | MERGED
 	IsDraft          bool      `json:"isDraft"`
 	HeadRefName      string    `json:"headRefName"`
@@ -50,7 +51,7 @@ type File struct {
 	Path string `json:"path"`
 }
 
-const prFields = "id,number,url,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus," +
+const prFields = "id,number,url,title,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,mergeable,mergeStateStatus," +
 	"reviewDecision,reviews,files,mergedAt,autoMergeRequest,isCrossRepository,headRepositoryOwner,author,createdAt"
 
 // PR reads pull request n.

@@ -142,7 +142,9 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
   "open_prs": [                          // work items whose PR is open
     {"id": "e1-w1", "url": "…", "state": "in_review",
      "unanswered": 2,                    // unresolved threads whose last comment is not the user's
-     "merge_hold": "…"}                  // what kept it from merging at the last full reconcile; "" when nothing
+     "merge_hold": "…",                  // what kept it from merging at the last full reconcile; "" when nothing
+     "review": "…",                      // "review requested in <channel>", "wants a review", or ""
+     "review_at": "…"}                   // when the review request was posted; left out until then
   ],
   "errors": ["…"],                       // what the last tick went on past
   "problems": ["…"]                      // blueprint problems while the tick runs on the last good copy

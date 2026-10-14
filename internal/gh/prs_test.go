@@ -20,7 +20,7 @@ func TestPRParsesTheRecordedPRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != "PR_kwDOVC8X4s8AAAABHmhGTQ" || p.Number != 1 || p.State != "MERGED" || p.IsDraft ||
+	if p.ID != "PR_kwDOVC8X4s8AAAABHmhGTQ" || p.Number != 1 || p.Title != "chore: go skeleton, CI and make install" || p.State != "MERGED" || p.IsDraft ||
 		p.HeadRefName != "chore/skeleton" || p.HeadRefOid != "d36c77e415a813c4d1b4579ef256b037cb5f1247" ||
 		p.BaseRefName != "main" || p.BaseRefOid != "b143cb314d1f21f3d1d08908523b603924f7a89b" ||
 		p.Mergeable != "UNKNOWN" || p.MergeStateStatus != "UNKNOWN" || p.ReviewDecision != "" || len(p.Reviews) != 0 ||

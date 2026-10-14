@@ -118,6 +118,10 @@ type OpenPR struct {
 	State      string `json:"state"`
 	Unanswered int    `json:"unanswered"`
 	MergeHold  string `json:"merge_hold"`
+	// Review says where a review request for it stands: posted, since
+	// ReviewAt, or wanted.
+	Review   string    `json:"review"`
+	ReviewAt time.Time `json:"review_at,omitzero"`
 }
 
 // Status reads the factory's state for `factory status`.
@@ -214,7 +218,9 @@ func (r *run) reportWork(rep *Report, it *entity) {
 		}
 	}
 	if it.st.PRState == prOpen {
-		rep.PRs = append(rep.PRs, OpenPR{ID: it.id, URL: it.st.PRURL, State: it.cur.State, Unanswered: it.st.Unanswered, MergeHold: it.st.MergeHold})
+		pr := OpenPR{ID: it.id, URL: it.st.PRURL, State: it.cur.State, Unanswered: it.st.Unanswered, MergeHold: it.st.MergeHold}
+		pr.Review, pr.ReviewAt = r.reviewStatus(it)
+		rep.PRs = append(rep.PRs, pr)
 	}
 }
 
@@ -315,6 +321,12 @@ func (rep Report) WriteText(w io.Writer) {
 		line := fmt.Sprintf("%s  %s  %s, %d unanswered", x.ID, x.URL, x.State, x.Unanswered)
 		if x.MergeHold != "" {
 			line += ", not merged yet: " + x.MergeHold
+		}
+		if x.Review != "" {
+			line += ", " + x.Review
+		}
+		if !x.ReviewAt.IsZero() {
+			line += fmt.Sprintf(" %s ago", age(x.ReviewAt))
 		}
 		return line
 	})

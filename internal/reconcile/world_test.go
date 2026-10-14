@@ -86,7 +86,7 @@ func put(t *testing.T, path, content string) {
 }
 
 // newWorld makes a brain with the shipped blueprint, an instructions file
-// for each of its components, the rules, a tiers table and the factory
+// and MCP config for each of its components, the rules, a tiers table and the factory
 // settings, and a world around it with no sessions and no PRs.
 func newWorld(t *testing.T) *world {
 	t.Helper()
@@ -108,6 +108,9 @@ func newWorld(t *testing.T) *world {
 		}
 		if c.Instructions != "" {
 			put(t, filepath.Join(brain, "factory", c.Instructions), body)
+		}
+		if c.MCP != "" {
+			put(t, blueprint.MCPPath(brain, c.MCP), `{"mcpServers":{}}`)
 		}
 	}
 	put(t, filepath.Join(brain, "factory", blueprint.RulesFile), "# Factory rules v1\n")

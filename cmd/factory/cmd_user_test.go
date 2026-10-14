@@ -81,6 +81,13 @@ func writeShipped(t *testing.T, brain string) []byte {
 			}
 			writeFile(t, path, body)
 		}
+		if c.MCP != "" {
+			path := blueprint.MCPPath(brain, c.MCP)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, path, `{"mcpServers":{}}`)
+		}
 	}
 	writeFile(t, filepath.Join(brain, "factory", "components", "_rules.md"), "# Factory rules\n")
 	writeFile(t, filepath.Join(brain, "AGENTS.md"), "## Model tiers\n\n| Tier | Claude |\n| --- | --- |\n| ultra low | haiku |\n| low | sonnet |\n| medium | opus |\n")

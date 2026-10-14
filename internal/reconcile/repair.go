@@ -123,11 +123,13 @@ func greenAgain(ep store.RepairEpisode, res gh.BaseResult) bool {
 	return true
 }
 
-// closeEpisode ends ep, and stops its open repair epic unless the repair's
-// fix is merging or merged.
+// closeEpisode ends ep, tells the work it held, and stops its open repair
+// epic unless the repair's fix is merging or merged.
 func (r *run) closeEpisode(ep store.RepairEpisode) {
 	r.repairs = slices.DeleteFunc(r.repairs, func(o store.RepairEpisode) bool { return episodeBase(o) == episodeBase(ep) })
+	r.closed = append(r.closed, ep)
 	r.say("%s: green again; repair episode closed", episodeBase(ep))
+	r.releaseHeld(ep)
 	rep := r.openRepair(ep.Repo, ep.Base)
 	if rep == nil {
 		return
@@ -148,6 +150,117 @@ func (r *run) closeEpisode(ep store.RepairEpisode) {
 	if _, err := r.append(rep, stop); err != nil {
 		r.fail("%s: %v", rep.id, err)
 	}
+}
+
+// noteRepairs tells each orchestrator working on an item in a red
+// repo@base, once per episode, to leave the base's red checks to the repair.
+func (r *run) noteRepairs() {
+	for _, id := range r.order() {
+		it := r.ents[id]
+		if it.work == nil || !active(it) {
+			continue
+		}
+		ep, ok := r.episodeOf(it)
+		if !ok {
+			continue
+		}
+		text := fmt.Sprintf("%s are red on %s too; %s owns them; do not fix them in this item",
+			checkNames(ep.Checks), episodeBase(*ep), repairOwner(r.repairID(ep.Repo, ep.Base)))
+		if err := r.tell(it, "repair-note:"+episodeKey(*ep), text); err != nil {
+			r.fail("%s: %v", it.id, err)
+		}
+	}
+}
+
+// releaseHeld tells each orchestrator that got ep's note that its base is
+// green again, and brings each PR in review that only ep's checks hold up
+// to date with the base, once per base commit.
+func (r *run) releaseHeld(ep store.RepairEpisode) {
+	b := episodeBase(ep)
+	for _, id := range r.order() {
+		it := r.ents[id]
+		if it.work == nil || (repoBase{it.work.Repo, it.work.Base}) != b || r.isRepair(it) {
+			continue
+		}
+		if set := r.ents[it.work.Set]; set != nil && set.has("repair-note:"+episodeKey(ep)) {
+			text := fmt.Sprintf("%s is green again; merge origin/%s before your next push", b, ep.Base)
+			if err := r.tell(it, "repair-green:"+episodeKey(ep), text); err != nil {
+				r.fail("%s: %v", it.id, err)
+			}
+		}
+		if err := r.updateHeldByBase(it, baseCheckNames(ep.Checks)); err != nil {
+			r.fail("%s: %v", it.id, err)
+		}
+	}
+}
+
+// updateHeldByBase updates the branch of a watched PR in review whose red
+// required checks are all among names.
+func (r *run) updateHeldByBase(it *entity, names []string) error {
+	if it.cur.State != workInReview || it.pr == nil || !watched(it) {
+		return nil
+	}
+	rd, err := r.readMore(it)
+	if err != nil || !redOnBase(failing(gating(rd.checks)), names) {
+		return err
+	}
+	return r.updateBehind(it)
+}
+
+// episodeOf returns the open episode of the repo@base of it, a work item
+// outside any repair epic.
+func (r *run) episodeOf(it *entity) (*store.RepairEpisode, bool) {
+	if r.isRepair(it) {
+		return nil, false
+	}
+	return r.openEpisode(it.work.Repo, it.work.Base)
+}
+
+// baseRed returns the checks red on the base of it, a work item, that a
+// repair owns: those of its repo@base's open episode, or of one closed this
+// tick, until its PR is read again on the green base. A repair's own item
+// owns its checks itself and gets none.
+func (r *run) baseRed(it *entity) []string {
+	if r.isRepair(it) {
+		return nil
+	}
+	var names []string
+	for _, ep := range slices.Concat(r.repairs, r.closed) {
+		if ep.Repo == it.work.Repo && ep.Base == it.work.Base {
+			names = append(names, baseCheckNames(ep.Checks)...)
+		}
+	}
+	return names
+}
+
+// redOnBase reports whether there are red checks and the base has each.
+func redOnBase(red, baseRed []string) bool {
+	return len(red) > 0 && !slices.ContainsFunc(red, func(n string) bool { return !slices.Contains(baseRed, n) })
+}
+
+// repairID returns the id of repo@base's open repair epic, "" for none.
+func (r *run) repairID(repo, base string) string {
+	if rep := r.openRepair(repo, base); rep != nil {
+		return rep.id
+	}
+	return ""
+}
+
+// repairOwner names what owns a base's red checks: repair epic id, or the
+// repair still to start.
+func repairOwner(id string) string {
+	if id == "" {
+		return "the factory's repair"
+	}
+	return "repair " + id
+}
+
+// waitingOnRepair is the merge hold of a PR red only where its base is.
+func (r *run) waitingOnRepair(it *entity) string {
+	if id := r.repairID(it.work.Repo, it.work.Base); id != "" {
+		return "waiting on repair " + id
+	}
+	return "waiting on " + repoBase{it.work.Repo, it.work.Base}.String()
 }
 
 // refreshWaitingOn sets ep.WaitingOn to the PR its newest repair epic, now
@@ -341,10 +454,12 @@ func (r *run) isRepair(e *entity) bool {
 	return ep != nil && isRepairEpic(ep)
 }
 
-func checkNames(checks []gh.BaseCheck) string {
+func checkNames(checks []gh.BaseCheck) string { return strings.Join(baseCheckNames(checks), ", ") }
+
+func baseCheckNames(checks []gh.BaseCheck) []string {
 	var names []string
 	for _, c := range checks {
 		names = append(names, c.Name)
 	}
-	return strings.Join(names, ", ")
+	return names
 }

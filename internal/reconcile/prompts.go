@@ -123,6 +123,10 @@ type babysitterWake struct {
 	Reasons []string
 	// DMed are the logins already DMed about this PR, from its done events.
 	DMed []string
+	// BaseRed are the checks red on the base too, owned by repair epic
+	// Repair, "" before it starts.
+	BaseRed []string
+	Repair  string
 }
 
 // babysitterPrompt starts or wakes a babysitter on one PR.
@@ -134,6 +138,9 @@ func babysitterPrompt(w babysitterWake) string {
 	fmt.Fprintf(&b, "item folder: %s\n", w.ItemDir)
 	fmt.Fprintf(&b, "your pass report: %s\n", filepath.Join(w.ItemDir, "babysit.v<n>.md"))
 	fmt.Fprintf(&b, "woken by: %s\n", strings.Join(w.Reasons, "; "))
+	if len(w.BaseRed) > 0 {
+		fmt.Fprintf(&b, "red on the base too: %s red on %s; %s owns them\n", strings.Join(w.BaseRed, ", "), w.Base, repairOwner(w.Repair))
+	}
 	dmed := "nobody yet"
 	if len(w.DMed) > 0 {
 		dmed = strings.Join(w.DMed, ", ")

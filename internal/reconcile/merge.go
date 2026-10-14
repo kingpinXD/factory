@@ -115,6 +115,9 @@ func (r *run) mergeHold(it *entity) (string, error) {
 		return "no checks ran on " + abbrev(pr.HeadRefOid), nil
 	}
 	if !allGreen(gating(rd.checks)) {
+		if redOnBase(failing(gating(rd.checks)), r.baseRed(it)) {
+			return r.waitingOnRepair(it), nil
+		}
 		return "its required checks are not green on " + abbrev(pr.HeadRefOid), nil
 	}
 	if ok, why, err := r.mayMerge(it); !ok || err != nil {

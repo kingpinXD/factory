@@ -336,7 +336,7 @@ func TestTriggersLeaveOutWhatTheUserWrote(t *testing.T) {
 		checks:   []gh.Check{{Name: "ci", State: "IN_PROGRESS"}, {Name: "lint", State: "SUCCESS"}},
 	}
 	var keys []string
-	for _, ev := range triggers(pr, rd, "me") {
+	for _, ev := range triggers(pr, rd, "me", nil) {
 		keys = append(keys, ev.Key)
 	}
 	want := []string{"babysit:thread:T3:13", "babysit:review:bob:0001-01-01T00:00:00Z", "babysit:comment:2"}

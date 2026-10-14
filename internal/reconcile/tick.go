@@ -99,6 +99,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 		r.reconcileGitHub()
 		r.watchBases()
 		r.startRepairs()
+		r.noteRepairs()
 	}
 	for _, id := range r.order() {
 		r.tickEntity(r.ents[id])
@@ -180,8 +181,10 @@ type run struct {
 	agents        map[string]agents.Agent
 	errs          []string
 	sup           supervision
-	// repairs are the open repair episodes, carried from the last tick.
+	// repairs are the open repair episodes, carried from the last tick;
+	// closed are those this tick closed.
 	repairs []store.RepairEpisode
+	closed  []store.RepairEpisode
 }
 
 type baseRead struct {

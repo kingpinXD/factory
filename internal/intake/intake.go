@@ -142,6 +142,16 @@ func ExpandHome(path string) string {
 	return filepath.Join(home, rest)
 }
 
+// IssueRef returns the repo and number of the GitHub issue that input, an
+// issue URL or owner/repo#n, names; ok is false for anything else.
+func IssueRef(input string) (repo string, number int, ok bool) {
+	g, ok := parseGitHubURL(strings.TrimSpace(input))
+	if !ok || g.section != "issues" || g.number == 0 {
+		return "", 0, false
+	}
+	return g.repo, g.number, true
+}
+
 type githubURL struct {
 	repo    string // owner/repo
 	section string // the path segment after the repo: "issues", "pull", ...

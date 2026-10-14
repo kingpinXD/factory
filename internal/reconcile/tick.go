@@ -31,6 +31,8 @@ type Deps struct {
 	GitHub gh.Client
 	Claude claude.Client
 	Notify notify.Notifier
+	// Post posts the review requests in review_channel as the user.
+	Post notify.Poster
 	// Account is the tick's first step.
 	Account Account
 	// GHToken, when set, is every new session's GH_TOKEN.
@@ -110,7 +112,6 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	}
 	r.supervise()
 	r.driveSessions()
-	r.noteReviewsGiven()
 	kind := "tick"
 	if r.full {
 		kind = "tick with a full reconcile"

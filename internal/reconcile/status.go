@@ -118,8 +118,8 @@ type OpenPR struct {
 	State      string `json:"state"`
 	Unanswered int    `json:"unanswered"`
 	MergeHold  string `json:"merge_hold"`
-	// Review says where a review request for it stands: posted, since
-	// ReviewAt, or wanted.
+	// Review says where a review request for it stands: posted or asked of
+	// the user by DM, since ReviewAt, or wanted.
 	Review   string    `json:"review"`
 	ReviewAt time.Time `json:"review_at,omitzero"`
 }

@@ -11,7 +11,7 @@ import (
 )
 
 var plannedCommands = []string{
-	"add", "tick", "status", "answer", "retry", "stop", "replan", "check",
+	"add", "tick", "status", "answer", "retry", "stop", "review-asked", "replan", "check",
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
 	"version",

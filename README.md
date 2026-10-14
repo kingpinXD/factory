@@ -34,6 +34,9 @@ factory retry <id>
 # Asks the next tick to cancel <id> and the work under it: their PRs close and their worktrees and local branches are removed. An adopted PR stays open and keeps its work.
 factory stop <id> --reason "<why>"
 
+# Records that you asked for reviews of these factory PRs yourself, so the factory never posts a review request for them; status shows them as "asked by you". Running it again adds nothing; a PR that is not a factory item's is refused.
+factory review-asked <pr-url>...
+
 # Asks the next tick to re-check every issue of an epic, with the note for its planner.
 factory replan <epic-id> "<note>"
 
@@ -143,8 +146,8 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
     {"id": "e1-w1", "url": "…", "state": "in_review",
      "unanswered": 2,                    // unresolved threads whose last comment is not the user's
      "merge_hold": "…",                  // what kept it from merging at the last full reconcile; "" when nothing
-     "review": "…",                      // "review requested in #<review_channel_name>", "wants a review", or ""
-     "review_at": "…"}                   // when the review request was posted; left out until then
+     "review": "…",                      // "review requested in #<review_channel_name>", "asked you by DM", "asked by you", "wants a review", or ""
+     "review_at": "…"}                   // when the review request was posted, DMed or marked asked; left out until then
   ],
   "errors": ["…"],                       // what the last tick went on past
   "problems": ["…"]                      // blueprint problems while the tick runs on the last good copy

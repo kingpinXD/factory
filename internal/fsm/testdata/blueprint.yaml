@@ -48,8 +48,9 @@ values:
   # repair_attempts repair epics in 24h.
   red_after: 15m
   repair_attempts: 2
-  # A babysitter posts a review request in review_channel for PRs that wait only on an
-  # approval while other work waits on them; status and DMs call it #<review_channel_name>.
+  # The program posts a review request in review_channel, as the user, for PRs that wait only
+  # on an approval while other work or their epic waits on them; status and DMs call it
+  # #<review_channel_name>.
   review_channel: C09QMJQ71FW
   review_channel_name: engineering
 
@@ -181,7 +182,6 @@ components:
     instructions: components/babysitter.md
     output: {path: "sets/<set-id>/<work-id>/babysit.v<n>.md", headings: ["## Outcome", "## Comments", "## CI"]}
     health: github
-    mcp: default
 
 machines:
   # One PR in one repo, for one issue.

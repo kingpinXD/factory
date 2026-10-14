@@ -24,6 +24,7 @@ func TestUserCommandsUsage(t *testing.T) {
 		{"stop", "e1", "--reason", "why", "extra"},
 		{"retry"},
 		{"retry", "e1", "e2"},
+		{"review-asked"},
 	} {
 		code, _, stderr := cli(t, args...)
 		if code != 2 || !strings.Contains(stderr, "usage:") {
@@ -81,13 +82,6 @@ func writeShipped(t *testing.T, brain string) []byte {
 			}
 			writeFile(t, path, body)
 		}
-		if c.MCP != "" {
-			path := blueprint.MCPPath(brain, c.MCP)
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			writeFile(t, path, `{"mcpServers":{}}`)
-		}
 	}
 	writeFile(t, filepath.Join(brain, "factory", "components", "_rules.md"), "# Factory rules\n")
 	writeFile(t, filepath.Join(brain, "AGENTS.md"), "## Model tiers\n\n| Tier | Claude |\n| --- | --- |\n| ultra low | haiku |\n| low | sonnet |\n| medium | opus |\n")
@@ -112,6 +106,33 @@ func TestStopAndRetryExitCodes(t *testing.T) {
 	}
 	if code, _, stderr := cli(t, "stop", "nope", "--reason", "x"); code != 1 || !strings.Contains(stderr, `unknown id "nope"`) {
 		t.Errorf("unknown id = %d %q", code, stderr)
+	}
+}
+
+func TestReviewAskedMarksTheItemOnce(t *testing.T) {
+	dir := workBrain(t)
+	if err := store.WriteStatus(dir, store.Status{PR: 5, PRURL: "https://github.com/o/r/pull/5", PRState: "OPEN"}); err != nil {
+		t.Fatal(err)
+	}
+	fakeDeps(t)
+	code, stdout, stderr := cli(t, "review-asked", "https://github.com/o/r/pull/5")
+	if code != 0 || stdout != "e1-w1: o/r#5 counts as asked; the factory will not post it\n" {
+		t.Fatalf("review-asked = %d %q %q", code, stdout, stderr)
+	}
+	evs := logOf(t, dir)
+	if ev := evs[len(evs)-1]; ev.Kind != events.KindDone || ev.Sender != "user" || ev.Text != "asked by the user" || ev.Key != "review-ask:o/r#5" {
+		t.Errorf("logged %+v", ev)
+	}
+	code, stdout, _ = cli(t, "review-asked", "https://github.com/o/r/pull/5")
+	if code != 0 || stdout != "e1-w1: o/r#5 was already marked asked\n" || len(logOf(t, dir)) != len(evs) {
+		t.Errorf("second review-asked = %d %q with %d events, want nothing added", code, stdout, len(logOf(t, dir)))
+	}
+	code, _, stderr = cli(t, "review-asked", "https://github.com/o/r/pull/5", "https://github.com/o/other/pull/7")
+	if code != 1 || stderr != "factory review-asked: https://github.com/o/other/pull/7 is not a factory item's PR\n" {
+		t.Errorf("non-factory PR = %d %q, want 1 and the error", code, stderr)
+	}
+	if code, _, stderr := cli(t, "review-asked", "not a url"); code != 1 || !strings.Contains(stderr, "not owner/repo#n") {
+		t.Errorf("bad URL = %d %q", code, stderr)
 	}
 }
 

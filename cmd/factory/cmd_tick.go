@@ -46,6 +46,7 @@ var newDeps = func(out io.Writer) (reconcile.Deps, error) {
 		GitHub:         gh.Client{Runner: proc.Exec{}},
 		Claude:         cl,
 		Notify:         notify.Slack{Brain: brain},
+		Post:           notify.Slack{Brain: brain},
 		GHToken:        os.Getenv("GH_TOKEN"),
 		CallTimeout:    callTimeout,
 		AccountTimeout: accountTimeout,

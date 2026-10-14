@@ -1,15 +1,18 @@
 package reconcile
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
+	"github.com/kingpinXD/factory/internal/notify"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -67,9 +70,9 @@ func (w *world) reviewing(id string, n int, url, head string) {
 	w.pulls.checks[head] = []gh.Check{{Name: "ci", State: "SUCCESS", Required: true}}
 }
 
-// reviewRequests returns the review requests on id's log.
-func (w *world) reviewRequests(id string) []events.Event {
-	return slices.DeleteFunc(w.kinds(id, events.KindRequest), func(ev events.Event) bool { return ev.Request != requestReview })
+// threeItemsWith is threeItems with links instead of its own.
+func threeItemsWith(links string) string {
+	return threeItems[:strings.Index(threeItems, "links:")] + "links: " + links + "\n"
 }
 
 // keyed reports whether id's log holds an event with key.
@@ -77,88 +80,109 @@ func (w *world) keyed(id, key string) bool {
 	return slices.ContainsFunc(w.log(id), func(ev events.Event) bool { return ev.Key == key })
 }
 
-func TestAPRThatHoldsWorkAndWaitsOnlyOnApprovalGetsOneReviewRequest(t *testing.T) {
-	w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
+// forget drops the events of id's log whose key starts with prefix, as a
+// tick that died before logging them would have left it.
+func (w *world) forget(id, prefix string) {
+	w.t.Helper()
+	var b strings.Builder
+	for _, ev := range w.log(id) {
+		if strings.HasPrefix(ev.Key, prefix) {
+			continue
+		}
+		line, err := json.Marshal(ev)
+		if err != nil {
+			w.t.Fatal(err)
+		}
+		b.Write(append(line, '\n'))
+	}
+	put(w.t, store.EventsPath(w.dir(id)), b.String())
+}
+
+// openPR returns factory status's line for id's open PR.
+func (w *world) openPR(id string) OpenPR {
+	w.t.Helper()
+	rep, err := Status(w.t.Context(), w.deps())
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	i := slices.IndexFunc(rep.PRs, func(p OpenPR) bool { return p.ID == id })
+	if i < 0 {
+		w.t.Fatalf("no open PR for %s in %+v", id, rep.PRs)
+	}
+	return rep.PRs[i]
+}
+
+// bothInReview is e1 with two items and no links, each with a PR held only
+// by the approval: e1-w1's #5 and e1-w2's #9.
+func bothInReview(t *testing.T) *world {
+	w := awaitingReview(t, twoItems("[]"))
+	w.reviewing("e1-w2", 9, prURL9, head9)
+	w.fullNext()
+	return w
+}
+
+const postedBoth = "do the thing\n - " + prURL + "\n - " + prURL9
+
+func TestAnEpicWaitingOnlyOnReviewsPostsOneRequestForAllItsPRs(t *testing.T) {
+	w := bothInReview(t)
+	w.moveTo("e1", "merging")
 	w.tick(false)
-	reqs := w.reviewRequests(item)
-	want := `post a review request in C09QMJQ71FW for: https://github.com/o/r/pull/5 "fix: retry the upload"`
-	if len(reqs) != 1 || reqs[0].Text != want || reqs[0].Recipient != recipientBabysitter {
-		t.Fatalf("review requests = %+v, want one: %s", reqs, want)
-	}
-	if st := w.status(item); !st.WantsReview || st.MergeHold != "it is not approved" {
-		t.Errorf("wants_review %v, hold %q", st.WantsReview, st.MergeHold)
-	}
-	args := startArgs(t, w, "factory:e1-w1:babysitter")
-	if !strings.Contains(args[len(args)-1], "woken by: "+want) {
-		t.Errorf("babysitter prompt lacks the request:\n%s", args[len(args)-1])
-	}
-	if got := flagValue(args, "--mcp-config"); got != blueprint.MCPPath(w.brain, "default") {
-		t.Errorf("--mcp-config = %q, want the default connectors config", got)
+	if want := []post{{"C09QMJQ71FW", postedBoth}}; !slices.Equal(w.posts, want) {
+		t.Fatalf("posts = %q, want %q", w.posts, want)
 	}
 	for i := range 10 {
 		w.fullTickAt(time.Duration(i+1) * 5 * time.Minute)
 	}
-	if got := w.reviewRequests(item); len(got) != 1 {
-		t.Errorf("review requests after ten more ticks = %d, want 1", len(got))
+	if len(w.posts) != 1 {
+		t.Errorf("posts after ten more ticks = %q, want the first only", w.posts)
 	}
-	if got := w.status(item).WantsReview; !got {
-		t.Errorf("wants_review went false while it waits")
-	}
-	w.noErrors()
-}
-
-func TestOneReviewRequestPerEpicListsEveryPRThatHoldsWork(t *testing.T) {
-	w := awaitingReview(t, threeItems)
-	w.reviewing("e1-w2", 9, prURL9, head9)
-	w.fullNext()
-	w.tick(false)
-	reqs := w.reviewRequests(item)
-	want := `post a review request in C09QMJQ71FW for: https://github.com/o/r/pull/5 "fix: retry the upload", https://github.com/o/r/pull/9 "feat: e1-w2"`
-	if len(reqs) != 1 || reqs[0].Text != want || reqs[0].Key != "review-request:o/r#5,o/r#9" {
-		t.Fatalf("review requests on e1-w1 = %+v, want one listing both", reqs)
-	}
-	if got := w.reviewRequests("e1-w2"); len(got) != 0 {
-		t.Errorf("review requests on e1-w2 = %+v, want none: e1-w1 carries it", got)
-	}
-	for _, id := range []string{item, "e1-w2"} {
+	for id, key := range map[string]string{item: "review-post:o/r#5", "e1-w2": "review-post:o/r#9"} {
+		if !w.keyed(id, key) {
+			t.Errorf("%s lacks %s", id, key)
+		}
 		if !w.status(id).WantsReview {
 			t.Errorf("%s does not want a review", id)
 		}
 	}
-	if !w.keyed("e1-w2", "review-ask:o/r#9") {
-		t.Errorf("e1-w2 is not marked asked for")
+	if p := w.openPR("e1-w2"); p.Review != "review requested in #engineering" || !p.ReviewAt.Equal(t0) {
+		t.Errorf("e1-w2's open PR = %+v, want its review requested at t0", p)
 	}
+	if len(w.dms) != 0 {
+		t.Errorf("DMs = %q, want none", w.dms)
+	}
+	w.noErrors()
 }
 
-// Without the per-item review-ask mark, the second request lists #5 again.
-func TestAPRAskedForOnceIsNeverListedAgain(t *testing.T) {
-	w := awaitingReview(t, threeItems)
+// e1-w2 dropped back to implementing after e1 reached merging: the epic
+// stays in merging, but no longer waits only on reviews.
+func TestAnEpicWithAnItemBackToWorkDoesNotWaitOnReviews(t *testing.T) {
+	w := bothInReview(t)
+	w.moveTo("e1", "merging")
+	w.moveTo("e1-w2", workImplementing)
 	w.tick(false)
-	if got := w.reviewRequests(item); len(got) != 1 || got[0].Key != "review-request:o/r#5" {
-		t.Fatalf("review requests on e1-w1 = %+v, want one for #5", got)
+	if got := w.status("e1").State; got != "merging" {
+		t.Fatalf("e1 is %s, want still merging", got)
 	}
-	w.reviewing("e1-w2", 9, prURL9, head9)
-	w.fullTickAt(5 * time.Minute)
-	if got := w.reviewRequests(item); len(got) != 1 {
-		t.Errorf("review requests on e1-w1 = %+v, want still one", got)
-	}
-	if got := w.reviewRequests("e1-w2"); len(got) != 1 || got[0].Key != "review-request:o/r#9" {
-		t.Errorf("review requests on e1-w2 = %+v, want one for #9 alone", got)
+	if len(w.posts) != 0 {
+		t.Errorf("posts = %q, want none: e1-w2 is being worked", w.posts)
 	}
 }
 
 func TestNoReviewRequestUnlessOnlyTheApprovalHoldsWork(t *testing.T) {
 	blocking := twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]")
 	holdsAndHeld := twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}, {from: o/r#20, to: w1, gate: merge, when: merged, rollback: none}]")
+	// w3 has no link and is still queued, so the epic waits on more than
+	// reviews.
+	linkAndOther := threeItemsWith("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]")
 	alice := gh.User{Login: "alice"}
 	for _, tc := range []struct {
-		name  string
-		plan  string
-		setup func(w *world)
-		asked bool
+		name   string
+		plan   string
+		setup  func(w *world)
+		posted bool
 	}{
-		{name: "only the approval holds it", asked: true},
-		{name: "may-merge holds it too", asked: true, plan: holdsAndHeld},
+		{name: "only the approval holds it", posted: true},
+		{name: "may-merge holds it too", posted: true, plan: holdsAndHeld},
 		{name: "red checks", setup: func(w *world) {
 			w.pulls.checks[head1] = []gh.Check{{Name: "ci", State: "FAILURE", Required: true}}
 		}},
@@ -174,13 +198,9 @@ func TestNoReviewRequestUnlessOnlyTheApprovalHoldsWork(t *testing.T) {
 			w.baseIs("FAILURE", "aaa1111", red("govulncheck"))
 			w.pulls.checks[head1] = []gh.Check{{Name: "govulncheck", State: "FAILURE", Required: true}}
 		}},
-		{name: "approved", setup: func(w *world) {
-			w.pr(func(pr *gh.PR) {
-				pr.Reviews = []gh.Review{{Author: alice, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
-			})
-		}},
+		{name: "approved", setup: func(w *world) { w.approve(item) }},
 		{name: "nothing waits on it", plan: twoItems("[]")},
-		{name: "a link into an item that ended", setup: func(w *world) { w.moveTo("e1-w2", workCancelled) }},
+		{name: "a link into an item that ended", plan: linkAndOther, setup: func(w *world) { w.moveTo("e1-w2", workCancelled) }},
 		{name: "a repo that merges without approval, held by may-merge", plan: holdsAndHeld, setup: func(w *world) { w.registryMerging(true) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -193,156 +213,235 @@ func TestNoReviewRequestUnlessOnlyTheApprovalHoldsWork(t *testing.T) {
 				tc.setup(w)
 			}
 			w.tick(false)
-			got := w.reviewRequests(item)
-			if asked := len(got) == 1; asked != tc.asked || len(got) > 1 {
-				t.Errorf("review requests = %+v, want asked %v; hold %q", got, tc.asked, w.status(item).MergeHold)
+			want := []post{}
+			if tc.posted {
+				want = []post{{"C09QMJQ71FW", "do the thing\n - " + prURL}}
 			}
-			if got := w.status(item).WantsReview; got != tc.asked {
-				t.Errorf("wants_review = %v, want %v", got, tc.asked)
+			if !slices.Equal(w.posts, want) {
+				t.Errorf("posts = %q, want %q; hold %q", w.posts, want, w.status(item).MergeHold)
+			}
+			if got := w.status(item).WantsReview; got != tc.posted {
+				t.Errorf("wants_review = %v, want %v", got, tc.posted)
 			}
 		})
 	}
 }
 
-func TestARepairPRWaitingOnApprovalGetsAReviewRequestWithNoLink(t *testing.T) {
+func TestARepairPRWaitingOnApprovalIsPostedUnderTheRepairsTitle(t *testing.T) {
 	w := awaitingReview(t, oneItem("[]"))
 	if err := store.WriteInputs(w.dir("e1"), &EpicInputs{ID: "e1", Kind: epicKindRepair, Repo: "o/r", Base: "main", Input: "o/r@main is red", AddedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
 	w.tick(false)
-	if got := w.reviewRequests(item); len(got) != 1 {
-		t.Errorf("review requests = %+v, want one for the repair's PR", got)
+	if want := []post{{"C09QMJQ71FW", "Fix for red o/r@main\n - " + prURL}}; !slices.Equal(w.posts, want) {
+		t.Errorf("posts = %q, want %q", w.posts, want)
 	}
 }
 
-// passOf logs a babysitter pass on e1-w1: its start, the dones, its end.
-func (w *world) passOf(n int, dones ...string) {
-	w.t.Helper()
-	w.append(w.dir(item), events.Event{Kind: events.KindStart, Sender: item})
-	for _, text := range dones {
-		w.append(w.dir(item), events.Event{Kind: events.KindDone, Sender: item, Text: text})
-	}
-	w.end(item, "babysit.v"+string(rune('0'+n))+".md", "## Outcome\nopen — waiting for merge\n## Comments\nnone\n## CI\ngreen\n")
-}
-
-const slackDone = "slack post 1791933491.139759 https://github.com/o/r/pull/5 https://github.com/o/r/pull/9"
-
-func TestAPostedReviewRequestMarksEveryPRItNames(t *testing.T) {
-	w := awaitingReview(t, threeItems)
-	w.reviewing("e1-w2", 9, prURL9, head9)
-	w.fullNext()
-	w.tick(false)
-	w.passOf(1, slackDone)
-	w.fullTickAt(5 * time.Minute)
-	for _, key := range []string{"review-post:o/r#5"} {
-		if !w.keyed(item, key) {
-			t.Errorf("e1-w1 lacks %s", key)
-		}
-	}
-	if !w.keyed("e1-w2", "review-post:o/r#9") {
-		t.Errorf("e1-w2 lacks review-post:o/r#9")
-	}
-	if dms := w.dmsWith("review request"); len(dms) != 0 {
-		t.Errorf("DMs %q, want none", dms)
-	}
-	rep, err := Status(t.Context(), w.deps())
-	if err != nil {
+func TestAnIssueEpicIsPostedUnderItsIssueTitle(t *testing.T) {
+	w := awaitingReview(t, oneItem("[]"))
+	w.hub.issue("o/r", 40).Title = "Retry failed uploads"
+	if err := store.WriteInputs(w.dir("e1"), &EpicInputs{ID: "e1", Kind: "issue", Input: "https://github.com/o/r/issues/40", AddedAt: t0}); err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.IndexFunc(rep.PRs, func(p OpenPR) bool { return p.ID == "e1-w2" }); i < 0 || rep.PRs[i].Review != "review requested in #engineering" || rep.PRs[i].ReviewAt.IsZero() {
-		t.Errorf("open PRs = %+v, want e1-w2's review posted", rep.PRs)
+	w.tick(false)
+	if want := []post{{"C09QMJQ71FW", "Retry failed uploads\n - " + prURL}}; !slices.Equal(w.posts, want) {
+		t.Errorf("posts = %q, want %q", w.posts, want)
 	}
 }
 
-func TestAPassThatEndsWithoutPostingDMsTheUserOnce(t *testing.T) {
-	w := awaitingReview(t, threeItems)
+func TestAReviewPostSlackRefusedDMsTheMessageOnce(t *testing.T) {
+	w := bothInReview(t)
+	w.postErr = fmt.Errorf("slack-post.sh: %w", notify.ErrNotPosted)
+	w.tick(false)
+	for i := range 3 {
+		w.fullTickAt(time.Duration(i+1) * 5 * time.Minute)
+	}
+	if len(w.posts) != 1 {
+		t.Errorf("posts = %q, want one try", w.posts)
+	}
+	want := "factory: the review request could not be posted in #engineering; post it yourself:\n" + postedBoth
+	if !slices.Equal(w.dms, []string{want}) {
+		t.Errorf("DMs = %q, want one:\n%s", w.dms, want)
+	}
+	if p := w.openPR(item); p.Review != "asked you by DM" {
+		t.Errorf("e1-w1's review = %q, want asked you by DM", p.Review)
+	}
+}
+
+func TestAReviewPostThatMayHaveLandedIsNotRetried(t *testing.T) {
+	w := bothInReview(t)
+	w.postErr = fmt.Errorf("slack-post.sh: %w", notify.ErrMaybePosted)
+	w.tick(false)
+	for i := range 3 {
+		w.fullTickAt(time.Duration(i+1) * 5 * time.Minute)
+	}
+	if len(w.posts) != 1 {
+		t.Errorf("posts = %q, want one try", w.posts)
+	}
+	want := "factory: a review request for " + prURL + ", " + prURL9 + " may not have gone out; check #engineering"
+	if !slices.Equal(w.dms, []string{want}) {
+		t.Errorf("DMs = %q, want one:\n%s", w.dms, want)
+	}
+}
+
+// threeReviewing is bothInReview with a third PR, e1-w3's #11, whose
+// checks are red: it does not want a review until they turn green.
+func threeReviewing(t *testing.T) *world {
+	w := awaitingReview(t, threeItemsWith("[]"))
 	w.reviewing("e1-w2", 9, prURL9, head9)
+	w.reviewing("e1-w3", 11, prURL11, head11)
+	w.pulls.checks[head11] = []gh.Check{{Name: "ci", State: "FAILURE", Required: true}}
+	w.fullNext()
+	return w
+}
+
+const (
+	head11  = "1111111eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	prURL11 = "https://github.com/o/r/pull/11"
+)
+
+// A tick that posted and died before logging it: the next one does not
+// post again, and tells the user to check.
+func TestATickThatDiedAfterPostingDoesNotPostAgain(t *testing.T) {
+	w := threeReviewing(t)
+	w.tick(false)
+	if len(w.posts) != 1 {
+		t.Fatalf("posts = %q, want one", w.posts)
+	}
+	w.forget("e1", "review-post-done:")
+	w.forget(item, "review-post:")
+	w.forget("e1-w2", "review-post:")
+	w.fullTickAt(5 * time.Minute)
+	w.fullTickAt(10 * time.Minute)
+	if len(w.posts) != 1 {
+		t.Errorf("posts = %q, want still one", w.posts)
+	}
+	want := "factory: a review request for " + prURL + ", " + prURL9 + " may not have gone out; check #engineering"
+	if !slices.Equal(w.dms, []string{want}) {
+		t.Errorf("DMs = %q, want one:\n%s", w.dms, want)
+	}
+	w.pulls.checks[head11] = []gh.Check{{Name: "ci", State: "SUCCESS", Required: true}}
+	w.fullTickAt(15 * time.Minute)
+	if want := []post{{"C09QMJQ71FW", "do the thing\n - " + prURL11}}; len(w.posts) != 2 || w.posts[1] != want[0] {
+		t.Errorf("posts = %q, want #11 posted alone second", w.posts)
+	}
+}
+
+// With the DMs failing too, nothing marks the items: the intent alone keeps
+// them from a second post.
+func TestADanglingIntentWhoseDMFailsStillBlocksASecondPost(t *testing.T) {
+	w := bothInReview(t)
+	w.tick(false)
+	w.forget("e1", "review-post-done:")
+	w.forget(item, "review-post:")
+	w.forget("e1-w2", "review-post:")
+	w.dmErr = errors.New("slack-dm.sh: exit status 1")
+	w.fullTickAt(5 * time.Minute)
+	w.fullTickAt(10 * time.Minute)
+	if len(w.posts) != 1 {
+		t.Errorf("posts = %q, want still one", w.posts)
+	}
+}
+
+// A tick that logged the post and died before marking the items: the next
+// one marks them and posts nothing.
+func TestATickThatDiedBeforeMarkingTheItemsMarksThemNext(t *testing.T) {
+	w := threeReviewing(t)
+	w.tick(false)
+	w.forget(item, "review-post:")
+	w.forget("e1-w2", "review-post:")
+	w.fullTickAt(5 * time.Minute)
+	if len(w.posts) != 1 || len(w.dms) != 0 {
+		t.Errorf("posts = %q, DMs %q, want one post and no DM", w.posts, w.dms)
+	}
+	for id, key := range map[string]string{item: "review-post:o/r#5", "e1-w2": "review-post:o/r#9"} {
+		if !w.keyed(id, key) {
+			t.Errorf("%s lacks %s", id, key)
+		}
+	}
+	w.pulls.checks[head11] = []gh.Check{{Name: "ci", State: "SUCCESS", Required: true}}
+	w.fullTickAt(10 * time.Minute)
+	if want := (post{"C09QMJQ71FW", "do the thing\n - " + prURL11}); len(w.posts) != 2 || w.posts[1] != want {
+		t.Errorf("posts = %q, want #11 posted alone second", w.posts)
+	}
+}
+
+// #103's URL is a prefix of #1031's: an intent naming #1031 does not ask
+// for #103.
+func TestAnIntentAsksOnlyForThePRsItNamesWhole(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	url103, url1031 := "https://github.com/o/r/pull/103", "https://github.com/o/r/pull/1031"
+	w.reviewing(item, 103, url103, head1)
+	w.reviewing("e1-w2", 1031, url1031, head9)
+	w.append(w.dir("e1"), events.Event{Kind: events.KindIntent, Sender: events.SenderProgram, Text: url1031, Key: "review-post-intent:e1:1"})
+	w.append(w.dir("e1"), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Text: "1791933491.000001 " + url1031, Key: "review-post-done:e1:1"})
 	w.fullNext()
 	w.tick(false)
-	w.passOf(1)
-	w.fullTickAt(5 * time.Minute)
-	dms := w.dmsWith("did not post the review request")
-	want := "factory: e1-w1's babysitter did not post the review request; post it in #engineering yourself:\n - " + prURL + "\n - " + prURL9
-	if len(dms) != 1 || dms[0] != want {
-		t.Fatalf("DMs = %q, want one:\n%s", w.dms, want)
-	}
-	for i := range 5 {
-		w.fullTickAt(time.Duration(i+2) * 5 * time.Minute)
-	}
-	if dms := w.dmsWith("did not post the review request"); len(dms) != 1 {
-		t.Errorf("DMs = %q, want still one", dms)
-	}
-	if got := len(w.reviewRequests(item)) + len(w.reviewRequests("e1-w2")); got != 1 {
-		t.Errorf("%d review requests, want the first only", got)
+	if want := []post{{"C09QMJQ71FW", "do the thing\n - " + url103}}; !slices.Equal(w.posts, want) {
+		t.Errorf("posts = %q, want %q", w.posts, want)
 	}
 }
 
-// A pass under way when the request reaches the babysitter may end
-// without reading it; only a pass that began after it counts.
-func TestARequestPostedMidPassWaitsForTheNextPass(t *testing.T) {
-	w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
-	posted := w.listen(w.babysitter(1, sessionRunning, 5300, listedWorking).PID)
-	w.append(w.dir(item), events.Event{Kind: events.KindStart, Sender: item})
-	w.tick(false)
-	if got := posted(); len(got) != 1 || !strings.Contains(got[0], "post a review request in C09QMJQ71FW") {
-		t.Fatalf("posts to the live babysitter = %q, want the request", got)
-	}
-	w.end(item, "babysit.v1.md", "## Outcome\nopen — waiting for merge\n## Comments\nnone\n## CI\ngreen\n")
-	w.fullTickAt(5 * time.Minute)
-	if dms := w.dmsWith("review request"); len(dms) != 0 {
-		t.Fatalf("DMs = %q after the pass the request reached mid-way, want none", dms)
-	}
-	w.passOf(2, "slack post 1791933491.139759 "+prURL)
-	w.fullTickAt(10 * time.Minute)
-	w.fullTickAt(15 * time.Minute)
-	if dms := w.dmsWith("review request"); len(dms) != 0 {
-		t.Errorf("DMs = %q, want none ever", dms)
-	}
-	if !w.keyed(item, "review-post:o/r#5") {
-		t.Errorf("e1-w1 is not marked posted")
-	}
-}
-
-// A pass the request never reached cannot answer it: here the account
-// holds the babysitter's work back, so the request is not posted to it yet.
-func TestARequestNotYetGivenToTheBabysitterSendsNoDM(t *testing.T) {
-	w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
-	posted := w.listen(w.babysitter(1, sessionRunning, 5300, listedWorking).PID)
-	w.accountIs(stateNearLimit)
-	w.tick(false)
-	if got := w.reviewRequests(item); len(got) != 1 {
-		t.Fatalf("review requests = %+v, want one", got)
-	}
-	w.passOf(1)
-	w.fullTickAt(5 * time.Minute)
-	if got := posted(); len(got) != 0 {
-		t.Fatalf("posts = %q, want none while the account holds work back", got)
-	}
-	if dms := w.dmsWith("review request"); len(dms) != 0 {
-		t.Errorf("DMs = %q for a pass the request never reached", dms)
-	}
-
-	// The account frees up and the request reaches the babysitter; the pass
-	// before that still does not count.
-	w.accountIs(stateOK)
-	w.fullTickAt(10 * time.Minute)
-	if got := posted(); len(got) != 1 || !strings.Contains(got[0], "post a review request") {
-		t.Fatalf("posts = %q, want the request", got)
-	}
-	w.fullTickAt(15 * time.Minute)
-	if dms := w.dmsWith("review request"); len(dms) != 0 {
-		t.Errorf("DMs = %q for a pass that ended before the request reached it", dms)
+// #32 asked a babysitter to post, logging review-ask on each PR's item, then
+// DMed the user when it did not, logging review-dm:<refs> on the carrier.
+func TestAPRAskedForByAnEarlierFactoryIsNotPostedAgain(t *testing.T) {
+	for _, tc := range []struct {
+		keys   []string
+		review string
+	}{
+		{[]string{"review-ask:o/r#5", "review-dm:o/r#5"}, "asked you by DM"},
+		{[]string{"review-ask:o/r#5"}, "wants a review"},
+		{[]string{"review-dm:o/r#5,o/r#9"}, "asked you by DM"},
+	} {
+		t.Run(strings.Join(tc.keys, " "), func(t *testing.T) {
+			w := awaitingReview(t, oneItem("[]"))
+			for _, key := range tc.keys {
+				w.append(w.dir(item), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Text: key, Key: key})
+			}
+			w.tick(false)
+			if len(w.posts) != 0 {
+				t.Errorf("posts = %q, want none", w.posts)
+			}
+			if p := w.openPR(item); p.Review != tc.review {
+				t.Errorf("review = %q, want %s", p.Review, tc.review)
+			}
+		})
 	}
 }
 
-func TestACarrierThatLeavesReviewUnpostedDMsTheUserOnce(t *testing.T) {
-	w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
+// The user asked for a review of #5 by hand: the manager posts only #9.
+func TestAPRTheUserMarkedAskedIsNotPosted(t *testing.T) {
+	w := bothInReview(t)
+	if _, err := ReviewAsked(t.Context(), w.deps(), []string{prURL}); err != nil {
+		t.Fatal(err)
+	}
 	w.tick(false)
-	w.moveTo(item, stateNeedsYou)
+	if want := []post{{"C09QMJQ71FW", "do the thing\n - " + prURL9}}; !slices.Equal(w.posts, want) {
+		t.Errorf("posts = %q, want %q", w.posts, want)
+	}
+	if p := w.openPR(item); p.Review != "asked by you" || !p.ReviewAt.Equal(t0) {
+		t.Errorf("e1-w1's open PR = %+v, want asked by you at t0", p)
+	}
+}
+
+func TestTheBabysitterOfAPostedPRIsToldButNotWokenByIt(t *testing.T) {
+	w := awaitingReview(t, oneItem("[]"))
+	w.tick(false)
+	if len(w.posts) != 1 {
+		t.Fatalf("posts = %q, want one", w.posts)
+	}
 	w.fullTickAt(5 * time.Minute)
-	w.fullTickAt(10 * time.Minute)
-	if dms := w.dmsWith("did not post the review request"); len(dms) != 1 {
-		t.Errorf("DMs = %q, want one", w.dms)
+	if slices.ContainsFunc(w.calls(), func(c string) bool { return strings.Contains(c, "factory:e1-w1:babysitter") }) {
+		t.Fatalf("a babysitter started for the post: %q", w.calls())
+	}
+	w.pulls.comments[5] = []gh.Comment{{ID: 31, Author: "carol", URL: prURL + "#issuecomment-31"}}
+	w.fullTickAt(25 * time.Minute)
+	args := startArgs(t, w, "factory:e1-w1:babysitter")
+	if want := "waiting on approval; review requested in #engineering 25m0s ago\n"; !strings.Contains(args[len(args)-1], want) {
+		t.Errorf("babysitter prompt lacks %q:\n%s", want, args[len(args)-1])
 	}
 }
 
@@ -371,50 +470,4 @@ func (w *world) approve(id string) {
 	pr := w.prs[git.Branch(id)]
 	pr.Reviews = []gh.Review{{Author: gh.User{Login: "alice"}, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
 	w.prs[git.Branch(id)] = pr
-}
-
-// The DM lists only the PRs that still wait on a review: open and not
-// approved.
-func TestTheReviewDMListsOnlyPRsThatStillWait(t *testing.T) {
-	w := awaitingReview(t, threeItems)
-	w.reviewing("e1-w2", 9, prURL9, head9)
-	w.fullNext()
-	w.tick(false)
-	w.approve("e1-w2")
-	w.passOf(1)
-	w.fullTickAt(5 * time.Minute)
-	want := "factory: e1-w1's babysitter did not post the review request; post it in #engineering yourself:\n - " + prURL
-	if dms := w.dmsWith("did not post the review request"); !slices.Equal(dms, []string{want}) {
-		t.Errorf("DMs = %q, want one:\n%s", w.dms, want)
-	}
-}
-
-func TestNoReviewDMOnceEveryPRWasApproved(t *testing.T) {
-	w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
-	w.tick(false)
-	w.approve(item)
-	w.passOf(1)
-	for i := range 3 {
-		w.fullTickAt(time.Duration(i+1) * 5 * time.Minute)
-	}
-	if dms := w.dmsWith("review request"); len(dms) != 0 {
-		t.Errorf("DMs = %q, want none: nothing waits on a review", dms)
-	}
-}
-
-// A carrier in a re-check or blocked comes back to review; its babysitter
-// has not failed yet.
-func TestACarrierInARecheckOrBlockedSendsNoDMYet(t *testing.T) {
-	for _, state := range []string{workRechecking, stateBlocked} {
-		t.Run(state, func(t *testing.T) {
-			w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
-			w.tick(false)
-			w.moveTo(item, state)
-			w.fullTickAt(5 * time.Minute)
-			w.fullTickAt(10 * time.Minute)
-			if dms := w.dmsWith("did not post the review request"); len(dms) != 0 {
-				t.Errorf("DMs = %q with the carrier %s, want none", dms, state)
-			}
-		})
-	}
 }

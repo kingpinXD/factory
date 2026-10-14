@@ -363,15 +363,19 @@ func (r *run) startWaits(it *entity) bool {
 	if p == nil || err != nil {
 		return err != nil
 	}
-	ok, err := p.Startable(planID(it), func(l epic.Link) (epic.Release, error) {
-		if ref, err := epic.ParseRef(l.From); err == nil && r.blockerItem(ep, l.From) == nil {
-			if _, read := r.blockerReads[blockerKey(ref)]; !read {
-				return epic.Waiting, nil
-			}
-		}
-		return r.release(ep, l)
-	})
+	ok, err := p.Startable(planID(it), func(l epic.Link) (epic.Release, error) { return r.readRelease(ep, l) })
 	return !ok || err != nil
+}
+
+// readRelease is release as far as this tick read the blockers: one on
+// GitHub not read yet waits.
+func (r *run) readRelease(ep *entity, l epic.Link) (epic.Release, error) {
+	if ref, err := epic.ParseRef(l.From); err == nil && r.blockerItem(ep, l.From) == nil {
+		if _, read := r.blockerReads[blockerKey(ref)]; !read {
+			return epic.Waiting, nil
+		}
+	}
+	return r.release(ep, l)
 }
 
 // baseReadRed reports whether this tick read the item's base red; a repair
@@ -411,8 +415,12 @@ func (r *run) digestWaits() {
 	}
 	lines := []string{"factory: long waits:"}
 	for _, it := range waits {
-		lines = append(lines, fmt.Sprintf(" - %s (%s) in %s for %s, waiting on %s", it.id, issueRef(it), it.cur.State,
-			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(r.mover(it), "no one")))
+		line := fmt.Sprintf(" - %s (%s) in %s for %s, waiting on %s", it.id, issueRef(it), it.cur.State,
+			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(r.mover(it), "no one"))
+		if from := r.deployedWait(it); from != "" {
+			line += fmt.Sprintf("; once %s is deployed, run: factory deployed <its PR URL>", from)
+		}
+		lines = append(lines, line)
 	}
 	r.dm(ep, waitDigestPrefix+strconv.Itoa(r.n), strings.Join(lines, "\n"))
 }
@@ -433,4 +441,19 @@ func (r *run) lastDigest() time.Time {
 		}
 	}
 	return last
+}
+
+// deployedWait returns the blocker of a when: deployed link the item waits
+// on, as far as this tick read the blockers, or "".
+func (r *run) deployedWait(it *entity) string {
+	ep, p, err := r.itemPlan(it)
+	if p == nil || err != nil {
+		return ""
+	}
+	for _, l := range p.LinksTo(planID(it)) {
+		if rel, err := r.readRelease(ep, l); l.When == epic.WhenDeployed && rel == epic.Waiting && err == nil {
+			return l.From
+		}
+	}
+	return ""
 }

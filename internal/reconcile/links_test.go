@@ -167,18 +167,26 @@ func TestACancelledCrossEpicBlockerAsksTheUser(t *testing.T) {
 }
 
 func TestAnItemWaitingADayOnALinkIsInTheDigest(t *testing.T) {
-	w := newWorld(t)
-	w.registry()
-	w.planned("e1", twoItems("\n  - {from: w1, to: w2, gate: start, when: merged, rollback: none}"))
-	w.tick(false)
-	w.fullTickAt(23 * time.Hour)
-	if got := w.digests(); len(got) != 0 {
-		t.Fatalf("digests after 23h = %q", got)
-	}
-	w.fullTickAt(25 * time.Hour)
-	got := w.digests()
-	if want := " - e1-w2 (o/r#13) in queued for 25h0m0s, waiting on a gate: start link into it"; len(got) != 1 || !strings.Contains(got[0], want) {
-		t.Errorf("digests = %q, want one with %q", got, want)
+	const line = " - e1-w2 (o/r#13) in queued for 25h0m0s, waiting on a gate: start link into it"
+	for when, want := range map[string]string{
+		epic.WhenMerged:   line + "\n",
+		epic.WhenDeployed: line + "; once w1 is deployed, run: factory deployed <its PR URL>",
+	} {
+		t.Run(when, func(t *testing.T) {
+			w := newWorld(t)
+			w.registry()
+			w.planned("e1", twoItems("\n  - {from: w1, to: w2, gate: start, when: "+when+", rollback: none}"))
+			w.tick(false)
+			w.fullTickAt(23 * time.Hour)
+			if got := w.digests(); len(got) != 0 {
+				t.Fatalf("digests after 23h = %q", got)
+			}
+			w.fullTickAt(25 * time.Hour)
+			got := w.digests()
+			if len(got) != 1 || !strings.Contains(got[0]+"\n", want) {
+				t.Errorf("digests = %q, want one with %q", got, want)
+			}
+		})
 	}
 }
 

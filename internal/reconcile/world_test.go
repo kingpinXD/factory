@@ -57,6 +57,12 @@ type world struct {
 	red   map[string]bool
 	bases map[string]fakeBase
 	dms   []string
+	// posts are the channel posts asked for, failed ones too; postErr, when
+	// set, is what each one fails with.
+	posts   []post
+	postErr error
+	// dmErr, when set, is what each DM fails with.
+	dmErr error
 	// hub is GitHub's issues, links and merged PRs (epic_test.go).
 	hub *hub
 	// pulls is GitHub's review threads, comments, checks and merge queues,
@@ -71,8 +77,23 @@ func (a *fakeAccount) Step(context.Context, time.Time, bool) (string, error) { r
 func (w *world) DM(_ context.Context, text string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.dmErr != nil {
+		return w.dmErr
+	}
 	w.dms = append(w.dms, text)
 	return nil
+}
+
+type post struct{ channel, text string }
+
+func (w *world) Post(_ context.Context, channel, text string) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.posts = append(w.posts, post{channel, text})
+	if w.postErr != nil {
+		return "", w.postErr
+	}
+	return fmt.Sprintf("1791933491.%06d", len(w.posts)), nil
 }
 
 func put(t *testing.T, path, content string) {
@@ -86,7 +107,7 @@ func put(t *testing.T, path, content string) {
 }
 
 // newWorld makes a brain with the shipped blueprint, an instructions file
-// and MCP config for each of its components, the rules, a tiers table and the factory
+// for each of its components, the rules, a tiers table and the factory
 // settings, and a world around it with no sessions and no PRs.
 func newWorld(t *testing.T) *world {
 	t.Helper()
@@ -108,9 +129,6 @@ func newWorld(t *testing.T) *world {
 		}
 		if c.Instructions != "" {
 			put(t, filepath.Join(brain, "factory", c.Instructions), body)
-		}
-		if c.MCP != "" {
-			put(t, blueprint.MCPPath(brain, c.MCP), `{"mcpServers":{}}`)
 		}
 	}
 	put(t, filepath.Join(brain, "factory", blueprint.RulesFile), "# Factory rules v1\n")
@@ -138,6 +156,7 @@ func (w *world) deps() Deps {
 		Claude: claude.Client{Runner: w.fake, Bin: claudeBin, Home: w.home, Brain: w.brain,
 			FactoryBin: "/bin/factory", SocketDir: w.socks, PollEvery: time.Millisecond},
 		Notify:         w,
+		Post:           w,
 		Account:        w.acct,
 		GHToken:        "ghs_test",
 		CallTimeout:    5 * time.Second,

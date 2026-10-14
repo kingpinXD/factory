@@ -413,10 +413,6 @@ func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (claude.Sp
 	if err != nil {
 		return claude.Spec{}, err
 	}
-	mcp := ""
-	if c.MCP != "" {
-		mcp = blueprint.MCPPath(r.d.Brain, c.MCP)
-	}
 	return claude.Spec{
 		Name:              sess.Name,
 		Model:             model,
@@ -427,7 +423,6 @@ func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (claude.Sp
 		GHToken:           r.d.GHToken,
 		AutoCompactPct:    r.b.Values.Context.AutoCompactAt,
 		AutoCompactWindow: r.b.Values.Context.Window,
-		MCPConfig:         mcp,
 		Prompt:            prompt,
 	}, nil
 }

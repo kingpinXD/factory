@@ -109,16 +109,6 @@ func TestValidateFixturePasses(t *testing.T) {
 	}
 }
 
-func TestValidateMCPPasses(t *testing.T) {
-	brain := testBrain(t, testAgents)
-	put(t, MCPPath(brain, "default"), `{"mcpServers":{}}`)
-	b := fixture(t)
-	setComponent(b, "planner", func(c *Component) { c.MCP = "default" })
-	if got := b.Validate(brain, nil); len(got) != 0 {
-		t.Fatalf("problems = %v, want none", got)
-	}
-}
-
 func TestValidateContextWindowLimitsPass(t *testing.T) {
 	brain := testBrain(t, testAgents)
 	for _, w := range []int{200_000, 1_000_000} {
@@ -434,17 +424,6 @@ func TestValidateRules(t *testing.T) {
 			name:   "review_channel_name missing",
 			breaks: func(b *Blueprint) { b.Values.ReviewChannelName = "" },
 			rule:   "review", msg: "values.review_channel_name is empty; want the name of review_channel, without #, for status and DMs",
-		},
-		{
-			name:   "an mcp config that does not exist",
-			breaks: func(b *Blueprint) { setComponent(b, "planner", func(c *Component) { c.MCP = "default" }) },
-			rule:   "mcp", msg: `component "planner": mcp "default" needs <brain>/connectors/default.mcp.json, which does not exist`,
-		},
-		{
-			name:   "an mcp config on code",
-			brain:  func(t *testing.T, brain string) { put(t, MCPPath(brain, "default"), "{}") },
-			breaks: func(b *Blueprint) { setComponent(b, "manager", func(c *Component) { c.MCP = "default" }) },
-			rule:   "mcp", msg: `component "manager" runs_as code and names mcp "default"; only a session loads an MCP config`,
 		},
 		{
 			name: "a live entity's state was removed",

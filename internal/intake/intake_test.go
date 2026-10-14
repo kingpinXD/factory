@@ -185,3 +185,24 @@ func TestRepoHintWithoutARegistry(t *testing.T) {
 		t.Errorf("RepoHint = %q, want empty", got)
 	}
 }
+
+func TestIssueRef(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		repo  string
+		n     int
+		ok    bool
+	}{
+		{"https://github.com/o/r/issues/40", "o/r", 40, true},
+		{"github.com/o/r/issues/40", "o/r", 40, true},
+		{" o/r#40 ", "o/r", 40, true},
+		{"https://github.com/o/r/pull/40", "", 0, false},
+		{"https://github.com/o/r", "", 0, false},
+		{"fix the flag", "", 0, false},
+	} {
+		repo, n, ok := IssueRef(tt.input)
+		if repo != tt.repo || n != tt.n || ok != tt.ok {
+			t.Errorf("IssueRef(%q) = %q, %d, %v", tt.input, repo, n, ok)
+		}
+	}
+}

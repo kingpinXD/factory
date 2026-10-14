@@ -179,9 +179,6 @@ func TestOverridesReachTheSpawn(t *testing.T) {
 	if flagValue(planner, "--model") != "sonnet" || flagValue(planner, "--effort") != "low" {
 		t.Errorf("planner started with %q", planner)
 	}
-	if slices.Contains(planner, "--mcp-config") {
-		t.Errorf("planner started with an MCP config, which only the babysitter loads: %q", planner)
-	}
 	var helpers map[string]agents.Agent
 	if err := json.Unmarshal([]byte(flagValue(planner, "--agents")), &helpers); err != nil {
 		t.Fatal(err)

@@ -91,8 +91,9 @@ type Values struct {
 	RedAfter Duration `yaml:"red_after" json:"red_after"`
 	// RepairAttempts is how many repair epics one repo@base gets in 24h.
 	RepairAttempts int `yaml:"repair_attempts" json:"repair_attempts"`
-	// ReviewChannel is the Slack channel id a babysitter posts review
-	// requests in, for PRs that wait on an approval and hold other work.
+	// ReviewChannel is the Slack channel id the program posts review
+	// requests in, as the user, for PRs that wait only on an approval while
+	// other work or their epic waits on them.
 	ReviewChannel string `yaml:"review_channel" json:"review_channel"`
 	// ReviewChannelName is ReviewChannel's name, without #, for status and
 	// DMs.
@@ -183,14 +184,6 @@ type Component struct {
 	Outputs Outputs `yaml:"output,omitempty" json:"output,omitempty"`
 	Health  string  `yaml:"health,omitempty" json:"health,omitempty"`
 	Limits  Limits  `yaml:"limits,omitempty" json:"limits,omitzero"`
-	// MCP, when set, names the MCP config a session loads:
-	// <brain>/connectors/<mcp>.mcp.json.
-	MCP string `yaml:"mcp,omitempty" json:"mcp,omitempty"`
-}
-
-// MCPPath returns the path of the MCP config named name in brain.
-func MCPPath(brain, name string) string {
-	return filepath.Join(brain, "connectors", name+".mcp.json")
 }
 
 // OutputReply, as an output's path, means the helper returns its result in

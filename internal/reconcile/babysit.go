@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
@@ -247,6 +248,9 @@ func (r *run) babysitterPromptFor(it *entity, ds []delivery) string {
 		WorkID: it.id, PRURL: it.st.PRURL, Repo: it.work.Repo, Issue: issueRef(it).String(),
 		Branch: branch, Base: it.work.Base, Worktree: ready.Text, ItemDir: it.entry.Dir,
 		Reasons: reasons, DMed: dmedLogins(it),
+	}
+	if ev, ok := it.byKey(reviewPostKey(prRef(it))); ok {
+		wake.Review = fmt.Sprintf("review requested in #%s %s ago", r.b.Values.ReviewChannelName, r.now.Sub(ev.At).Round(time.Minute))
 	}
 	if ep, ok := r.episodeOf(it); ok {
 		wake.BaseRed, wake.Repair = baseCheckNames(ep.Checks), r.repairID(ep.Repo, ep.Base)

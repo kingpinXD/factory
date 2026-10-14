@@ -127,6 +127,9 @@ type babysitterWake struct {
 	// Repair, "" before it starts.
 	BaseRed []string
 	Repair  string
+	// Review, when set, says the PR waits on approval and where and how long
+	// ago a review was requested.
+	Review string
 }
 
 // babysitterPrompt starts or wakes a babysitter on one PR.
@@ -140,6 +143,9 @@ func babysitterPrompt(w babysitterWake) string {
 	fmt.Fprintf(&b, "woken by: %s\n", strings.Join(w.Reasons, "; "))
 	if len(w.BaseRed) > 0 {
 		fmt.Fprintf(&b, "red on the base too: %s red on %s; %s owns them\n", strings.Join(w.BaseRed, ", "), w.Base, repairOwner(w.Repair))
+	}
+	if w.Review != "" {
+		fmt.Fprintf(&b, "waiting on approval; %s\n", w.Review)
 	}
 	dmed := "nobody yet"
 	if len(w.DMed) > 0 {

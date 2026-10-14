@@ -347,6 +347,32 @@ func TestACancelledRunReRunGreenIsNotRed(t *testing.T) {
 	}
 }
 
+// ai-memoryless-client#10222: a concurrency group cancelled a check's only
+// run while the other checks still ran.
+func TestACancelledCheckWaitsForTheOthers(t *testing.T) {
+	w := watching(t)
+	w.babysitter(1, sessionTurnEnded, 5400, listedTurnEnded)
+	w.pulls.checks[head1] = []gh.Check{{Name: "build", State: "IN_PROGRESS"}, {Name: "E2E Status", State: "CANCELLED"}}
+	w.tick(false)
+	w.end(item, "babysit.v1.md", "## Outcome\nopen — CI running\n## Comments\nnone\n## CI\nrunning\n")
+	w.now = w.now.Add(5 * time.Minute)
+	w.fullNext()
+	w.tick(false)
+	if got := w.toBabysitter(); len(got) != 0 {
+		t.Errorf("requests to the babysitter = %+v, want none", got)
+	}
+	if got := w.status(item).State; got == stateNeedsYou || len(w.dms) != 0 {
+		t.Errorf("state %s, DMs %q; want it not sent to the user", got, w.dms)
+	}
+	w.pulls.checks[head1] = []gh.Check{{Name: "build", State: "SUCCESS"}, {Name: "E2E Status", State: "CANCELLED"}}
+	w.now = w.now.Add(5 * time.Minute)
+	w.fullNext()
+	w.tick(false)
+	if got := w.toBabysitter(); len(got) != 1 || got[0].Request != triggerRed {
+		t.Errorf("requests to the babysitter = %+v, want one red once the rest finished", got)
+	}
+}
+
 func TestTriggersLeaveOutWhatTheUserWrote(t *testing.T) {
 	me := gh.User{Login: "me"}
 	pr := gh.PR{HeadRefOid: head1, BaseRefOid: base1, Mergeable: "MERGEABLE", Reviews: []gh.Review{

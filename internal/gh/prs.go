@@ -147,7 +147,8 @@ func (n checkNode) run() checkRun {
 
 // newest returns the newest run of each check, where its first run is
 // listed. A run that has not started is newer than any that has; of two
-// that started at once, the one listed later is.
+// that started at once, the one listed later is. A cancelled run counts as
+// pending while another check still runs (cancelledAsPending).
 func (r *checkRollup) newest() []checkRun {
 	if r == nil {
 		return nil
@@ -161,6 +162,21 @@ func (r *checkRollup) newest() []checkRun {
 			runs = append(runs, run)
 		case run.At.IsZero() || !runs[i].At.IsZero() && !run.At.Before(runs[i].At):
 			runs[i] = run
+		}
+	}
+	return cancelledAsPending(runs)
+}
+
+// cancelledAsPending marks each cancelled run PENDING while another check's
+// run is pending: a concurrency group cancels a run for a newer one, which
+// GitHub may list only later.
+func cancelledAsPending(runs []checkRun) []checkRun {
+	pending := slices.ContainsFunc(runs, func(run checkRun) bool {
+		return !slices.Contains(GreenStates, run.State) && !slices.Contains(RedStates, run.State)
+	})
+	for i := range runs {
+		if pending && runs[i].State == "CANCELLED" {
+			runs[i].State = "PENDING"
 		}
 	}
 	return runs

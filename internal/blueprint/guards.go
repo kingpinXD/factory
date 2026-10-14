@@ -6,6 +6,7 @@ package blueprint
 var Guards = map[string]string{
 	// work
 	"startable":            "the item's gate: start links are released, its repo's base branch is green and the account is ok; a repair epic's item skips the base check and may start near_limit",
+	"adopted_pr":           "the item adopts a PR and is startable: it goes straight to review, without an orchestrator",
 	"step_started":         "the step's start event is logged",
 	"step_ended":           "the step's end event is logged, and its output file has the hash it names and the step's headings",
 	"verify_passed":        "the verifier's newest verify.v<n>.md is ended (as step_ended) and the first line under its ## Verdict is pass, or pass with notes",

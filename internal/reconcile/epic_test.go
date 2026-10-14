@@ -585,7 +585,7 @@ links: []
 }
 
 // A plan adopts a PR only after the user answered take over for its issue,
-// and only the user's own PR in the item's repo.
+// and only the user's own open PR in the item's repo.
 func TestAPlanAdoptsOnlyTheUsersPRAfterTakeOver(t *testing.T) {
 	const plan = `uat: none
 issues:
@@ -601,6 +601,7 @@ links: []
 		answer  string
 		author  string
 		fork    bool
+		closed  bool
 		notAPR  bool
 		refusal string
 	}{
@@ -609,6 +610,7 @@ links: []
 		{name: "a colleague's PR", answer: "take over", author: "alice", refusal: "item w1 adopts o/r#7, which alice opened, not the user"},
 		{name: "a PR from a fork", answer: "take over", author: "me", fork: true, refusal: "item w1 adopts o/r#7, which is from a fork"},
 		{name: "an issue, not a PR", answer: "take over", author: "me", notAPR: true, refusal: "item w1 adopts o/r#7: no such PR in r"},
+		{name: "a closed PR", answer: "take over", author: "me", closed: true, refusal: "item w1 adopts o/r#7, which is closed, not open"},
 		{name: "the user's own PR after take over", answer: "take over", author: "me"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -616,6 +618,11 @@ links: []
 			w.registry()
 			w.prs["their/branch"] = gh.PR{ID: "PR_7", Number: 7, URL: "https://github.com/o/r/pull/7", State: "OPEN", HeadRefName: "their/branch",
 				HeadRefOid: head2, BaseRefName: "main", Author: gh.User{Login: tc.author}, IsCrossRepository: tc.fork}
+			if tc.closed {
+				pr := w.prs["their/branch"]
+				pr.State = prClosed
+				w.prs["their/branch"] = pr
+			}
 			if !tc.notAPR {
 				w.hub.issue("o/r", 7).PullRequest = &struct{}{}
 			}

@@ -504,6 +504,7 @@ func TestQueryItemsState(t *testing.T) {
 	renamed := strings.Replace(string(shipped), "start: queued", "start: ready", 1)
 	renamed = strings.Replace(renamed, "      queued:\n", "      ready:\n", 1)
 	renamed = strings.Replace(renamed, "{from: queued, to: starting", "{from: ready, to: starting", 1)
+	renamed = strings.Replace(renamed, "{from: queued, to: pr_open", "{from: ready, to: pr_open", 1)
 	writeFile(t, bp, renamed)
 	writeFile(t, blueprint.GoodPath(brain), string(shipped))
 	if code, stdout, stderr := query("--state", "queued"); code != 0 || stdout != ebW1+"\n1 items\n" || stderr != "" {

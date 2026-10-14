@@ -93,6 +93,19 @@ func (i Issue) NeedsUser() bool {
 	return false
 }
 
+// AdoptsYours reports whether i is the user's own PR, result yours, and an
+// item of the plan adopts it.
+func (p *Plan) AdoptsYours(i Issue) bool {
+	ref, err := ParseRef(i.Ref)
+	if err != nil || i.Result != ResultYours {
+		return false
+	}
+	return slices.ContainsFunc(p.Items, func(it Item) bool {
+		r, err := ParseRef(it.Issue)
+		return err == nil && it.PR != 0 && r.Is(ref)
+	})
+}
+
 // Item is one work item: one PR in one repo, for one issue.
 type Item struct {
 	ID string `yaml:"id"`

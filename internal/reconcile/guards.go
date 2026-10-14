@@ -23,6 +23,7 @@ type guard func(r *run, e *entity) (ok bool, ref string, err error)
 // guards are the guards this package implements, by blueprint name.
 var guards = map[string]guard{
 	// work
+	"adopted_pr":           (*run).adoptedPR,
 	"startable":            (*run).startable,
 	"step_started":         (*run).stepStarted,
 	"step_ended":           (*run).stepEnded,
@@ -159,6 +160,15 @@ func (r *run) startable(e *entity) (bool, string, error) {
 	}
 	ok, err := r.canStart(e)
 	return ok, "", err
+}
+
+// adoptedPR: the item adopts a PR and is startable. It goes straight to
+// review: its worktree is made at the PR's head and no orchestrator works it.
+func (r *run) adoptedPR(e *entity) (bool, string, error) {
+	if e.work == nil || e.work.PR == 0 {
+		return false, "", nil
+	}
+	return r.startable(e)
 }
 
 // canStart reports whether a queued item may start: no item of its set is

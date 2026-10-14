@@ -25,6 +25,9 @@ type Env struct {
 	// TookOver reports whether the user answered "take over" for issue, which
 	// lets an item adopt the PR it names.
 	TookOver func(issue Ref) bool
+	// Repair is set for a repair epic: it adopts the user's own PR without
+	// a "take over", and a yours issue whose PR it adopts needs no answers.
+	Repair bool
 	// UATRunner is set once the uat-runner is built, not a placeholder.
 	UATRunner bool
 }
@@ -97,7 +100,7 @@ func (v *validator) issues() {
 		default:
 			v.evidence(ref, i)
 		}
-		if i.NeedsUser() && len(i.Answers) == 0 {
+		if i.NeedsUser() && len(i.Answers) == 0 && !(v.env.Repair && v.p.AdoptsYours(i)) {
 			v.add("issue %s: result %s waits on the user, so it needs answers", ref, i.Result)
 		}
 	}
@@ -216,7 +219,7 @@ func (v *validator) itemIssue(it Item) {
 	case slices.Contains(closing, issue.Result):
 		v.add("item %s is for %s, whose result is %s", it.ID, ref, issue.Result)
 	}
-	if it.PR != 0 && (v.env.TookOver == nil || !v.env.TookOver(ref)) {
+	if it.PR != 0 && !v.env.Repair && (v.env.TookOver == nil || !v.env.TookOver(ref)) {
 		v.add("item %s adopts PR #%d, but the user has not answered \"take over\" for %s", it.ID, it.PR, ref)
 	}
 }

@@ -234,8 +234,8 @@ func (r *run) babysitterPromptFor(it *entity, ds []delivery) string {
 		reasons = append(reasons, fmt.Sprintf("%d unanswered review thread%s", n, map[bool]string{true: "s"}[n > 1]))
 	}
 	branch := git.Branch(it.id)
-	if it.work.PR != 0 && it.pr != nil {
-		branch = it.pr.HeadRefName
+	if it.work.PR != 0 && it.st.HeadRef != "" {
+		branch = it.st.HeadRef
 	}
 	ready, _ := worktreeReady(it)
 	return babysitterPrompt(babysitterWake{

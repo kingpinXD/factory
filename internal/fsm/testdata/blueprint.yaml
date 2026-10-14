@@ -184,7 +184,7 @@ machines:
     states:
       queued:
         entry: the newest ended epic.yaml lists the item
-        exits: starting once the item is startable
+        exits: pr_open once it is startable and adopts a PR (the babysitter takes it, no orchestrator); otherwise starting once it is startable
         health: waits
       starting:
         entry: the item is startable; the program makes its worktree and starts or nudges its orchestrator
@@ -223,7 +223,7 @@ machines:
         on_timeout: verifying
         health: events
       pr_open:
-        entry: verification ended; the pr-opener opens the PR
+        entry: verification ended; the pr-opener opens the PR. Or the item adopts a PR and skipped its orchestrator; the program makes its worktree at the PR's head
         exits: in_review once the PR is recorded and the worktree handed over; needs_you after 1h
         timeout: 1h
         on_timeout: needs_you
@@ -273,6 +273,7 @@ machines:
         health: waits
         end: true
     transitions:
+      - {from: queued, to: pr_open, trigger: tick, guard: adopted_pr}
       - {from: queued, to: starting, trigger: tick, guard: startable}
       - {from: starting, to: exploring, trigger: file, guard: step_started}
       - {from: exploring, to: planning, trigger: file, guard: step_ended}
@@ -378,7 +379,7 @@ machines:
         health: events
       planned:
         entry: the newest epic.yaml is valid and every issue has a result
-        exits: running once a set is claimed; uat when every item is merged or cancelled, as in an epic with no items
+        exits: running once a set is claimed; uat when every item is merged or cancelled, as in an epic with no items, or whose items only adopt PRs (no set is claimed, so it shows planned until they end)
         health: waits
       running:
         entry: a set of the epic is claimed

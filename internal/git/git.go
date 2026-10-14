@@ -42,6 +42,20 @@ func (c Client) git(ctx context.Context, args ...string) ([]byte, error) {
 // Worktree only before the worktree is handed to an agent. A branch left
 // without its worktree is checked out again as it is.
 func (c Client) Worktree(ctx context.Context, clone, base, workID string) (string, error) {
+	return c.worktree(ctx, clone, workID, base, "origin/"+base)
+}
+
+// WorktreeAtPR makes a work item's worktree for the adopted pull request pr,
+// on a new branch at the PR's head, fetched as refs/pull/<pr>/head: no
+// branch of the clone is checked out or moved, so the PR's own branch may be
+// checked out in it. Otherwise it is as Worktree.
+func (c Client) WorktreeAtPR(ctx context.Context, clone string, pr int, workID string) (string, error) {
+	return c.worktree(ctx, clone, workID, fmt.Sprintf("refs/pull/%d/head", pr), "FETCH_HEAD")
+}
+
+// worktree makes the worktree as Worktree says: a new branch at start, once
+// ref is fetched from origin.
+func (c Client) worktree(ctx context.Context, clone, workID, ref, start string) (string, error) {
 	if err := checkWork(clone, workID); err != nil {
 		return "", err
 	}
@@ -64,14 +78,14 @@ func (c Client) Worktree(ctx context.Context, clone, base, workID string) (strin
 	if err := c.discard(ctx, clone, path, registered); err != nil {
 		return "", err
 	}
-	if _, err := c.git(ctx, "-C", clone, "fetch", "origin", base); err != nil {
+	if _, err := c.git(ctx, "-C", clone, "fetch", "origin", ref); err != nil {
 		return "", err
 	}
 	tip, err := c.tip(ctx, clone, branch)
 	if err != nil {
 		return "", err
 	}
-	add := []string{"-C", clone, "worktree", "add", path, "-b", branch, "origin/" + base}
+	add := []string{"-C", clone, "worktree", "add", path, "-b", branch, start}
 	if tip != "" {
 		add = []string{"-C", clone, "worktree", "add", path, branch}
 	}

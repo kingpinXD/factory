@@ -52,7 +52,7 @@ func (r *run) record(e *entity, pr gh.PR) {
 	if e.st.HeadSHA != pr.HeadRefOid {
 		e.st.HeadSeenAt = r.now
 	}
-	e.st.PR, e.st.PRURL, e.st.PRState, e.st.HeadSHA = pr.Number, pr.URL, pr.State, pr.HeadRefOid
+	e.st.PR, e.st.PRURL, e.st.PRState, e.st.HeadSHA, e.st.HeadRef = pr.Number, pr.URL, pr.State, pr.HeadRefOid, pr.HeadRefName
 }
 
 // baseGreen reports whether repo's base branch is not red.

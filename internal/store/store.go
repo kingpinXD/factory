@@ -118,11 +118,13 @@ type Status struct {
 	Repo  string `json:"repo,omitempty"`
 	Issue int    `json:"issue,omitempty"`
 	// PR is a work item's recorded pull request, as GitHub last showed it:
-	// its number, URL, state (OPEN, CLOSED, MERGED) and head commit.
+	// its number, URL, state (OPEN, CLOSED, MERGED), head commit and head
+	// branch.
 	PR      int    `json:"pr,omitempty"`
 	PRURL   string `json:"pr_url,omitempty"`
 	PRState string `json:"pr_state,omitempty"`
 	HeadSHA string `json:"head_sha,omitempty"`
+	HeadRef string `json:"head_ref,omitempty"`
 	// HeadSeenAt is when the tick first saw HeadSHA: the merge quiet time
 	// runs from it, since a commit's date is not when it was pushed.
 	HeadSeenAt time.Time `json:"head_seen_at,omitzero"`

@@ -23,6 +23,13 @@ func (r *run) enter(e *entity, t events.Event) error {
 		if _, ok := worktreeReady(e); !ok {
 			return r.queueRepoWork(e, worktreeRequest, repoKey(worktreeRequest, t))
 		}
+	case e.work != nil && e.cur.State == workPROpen && skipsOrchestrator(e):
+		if _, ok := worktreeReady(e); !ok {
+			if err := r.queueRepoWork(e, worktreeRequest, repoKey(worktreeRequest, t)); err != nil {
+				return err
+			}
+		}
+		return r.readPR(e)
 	case e.work != nil && e.cur.State == workMerging:
 		return r.sendMerge(e, t)
 	case e.session != nil && e.cur.State == sessionStarting:

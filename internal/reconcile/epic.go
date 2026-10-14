@@ -175,6 +175,7 @@ func (r *run) planProblems(ep *entity, end events.Event) ([]string, error) {
 			return it != nil && it.work != nil && it.cur.State == workCancelled
 		},
 		TookOver:  func(issue epic.Ref) bool { return tookOver(ep, issue) },
+		Repair:    isRepairEpic(ep),
 		UATRunner: !r.b.Components["uat-runner"].Placeholder,
 	})
 	if len(problems) > 0 {
@@ -187,8 +188,8 @@ func (r *run) planProblems(ep *entity, end events.Event) ([]string, error) {
 	return r.adoptionProblems(p)
 }
 
-// adoptionProblems reads each PR the plan adopts on GitHub: it must be a PR
-// in its item's repo, not from a fork, and opened by the user.
+// adoptionProblems reads each PR the plan adopts on GitHub: it must be an
+// open PR in its item's repo, not from a fork, and opened by the user.
 func (r *run) adoptionProblems(p *epic.Plan) ([]string, error) {
 	var problems []string
 	me := ""
@@ -220,6 +221,8 @@ func (r *run) adoptionProblems(p *epic.Plan) ([]string, error) {
 			problems = append(problems, fmt.Sprintf("item %s adopts %s, which is from a fork", it.ID, ref))
 		case pr.Author.Login != me:
 			problems = append(problems, fmt.Sprintf("item %s adopts %s, which %s opened, not the user", it.ID, ref, pr.Author.Login))
+		case pr.State != prOpen:
+			problems = append(problems, fmt.Sprintf("item %s adopts %s, which is %s, not open", it.ID, ref, strings.ToLower(pr.State)))
 		}
 	}
 	return problems, nil
@@ -459,6 +462,7 @@ func (r *run) ensureItem(ep *entity, setID, setDir string, it epic.Item) error {
 // dmResults sends the user one DM per issue whose result waits on them,
 // with its allowed answers, or that a person or someone else must move. A
 // re-check that copies the result, with its why reworded, sends none again.
+// A repair epic adopts the user's own PR without asking: that sends none.
 func (r *run) dmResults(ep *entity) error {
 	p, _, err := r.appliedPlan(ep)
 	if p == nil || err != nil {
@@ -467,7 +471,7 @@ func (r *run) dmResults(ep *entity) error {
 	var errs []error
 	for _, i := range p.Issues {
 		text := resultDM(ep.id, i)
-		if text == "" {
+		if text == "" || isRepairEpic(ep) && p.AdoptsYours(i) {
 			continue
 		}
 		key := fmt.Sprintf("dm-result:%s:%s", i.Ref, i.Result)

@@ -244,9 +244,10 @@ func (r *run) needsSession(owner *entity) bool {
 
 // openingPR reports whether the orchestrator is opening the item's PR: the
 // item is in pr_open and nothing hands its worktree over yet. With its PR
-// recorded and its orchestrator dead, the handover is due instead.
+// recorded and its orchestrator dead, the handover is due instead. An
+// adopted PR that skipped the orchestrator is opened already.
 func (r *run) openingPR(it *entity) bool {
-	return it.cur.State == workPROpen && !handedOver(it) && (it.st.PR == 0 || r.handoverDue(it) == "")
+	return it.cur.State == workPROpen && !handedOver(it) && !skipsOrchestrator(it) && (it.st.PR == 0 || r.handoverDue(it) == "")
 }
 
 // driveSessions starts the sessions entities need and posts new work to

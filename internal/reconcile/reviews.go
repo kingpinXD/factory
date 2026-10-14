@@ -329,7 +329,9 @@ func (r *run) reviewStatus(it *entity) (string, time.Time) {
 // counts them, but its author gets one reminder: per epic, one post in
 // review_channel, with its own intent, done and item mark. An intent naming
 // the PR is enough to never post it again: a reminder that may have landed
-// is not repeated.
+// is not repeated. A reminder Slack refused DMs the user the message to
+// post by hand; an intent with neither a done nor a DM DMs the user to
+// check.
 
 // reminderIntentPrefix starts the key of the intent of an epic's reminder,
 // review-reminder-intent:<epic>:<tick>; its text is the URLs it posts.
@@ -349,9 +351,7 @@ func (r *run) remindReviews() {
 		e := r.ents[id]
 		if e.epic != nil {
 			for _, intent := range intents(e, reminderIntentPrefix) {
-				if e.has(reminderDoneKey(intent.Key)) {
-					r.markPRs(intent, reviewReminderKey, r.reminderMark())
-				}
+				r.settleReminder(e, intent)
 			}
 		}
 		if e.work != nil && r.wantsReminder(e) {
@@ -391,21 +391,39 @@ func (r *run) postReminder(ep *entity, items []*entity) {
 		return
 	}
 	var ts string
+	text := "Still waiting on a review:\n - " + strings.Join(urls, "\n - ")
 	err = r.act("post a review reminder for "+strings.Join(urls, ", "), func(ctx context.Context) error {
 		var err error
-		ts, err = r.d.Post.Post(ctx, r.b.Values.ReviewChannel, "Still waiting on a review:\n - "+strings.Join(urls, "\n - "))
+		ts, err = r.d.Post.Post(ctx, r.b.Values.ReviewChannel, text)
 		return err
 	})
 	if r.dry {
 		return
 	}
-	if err != nil {
+	switch {
+	case err == nil:
+		r.logged(r.append(ep, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram,
+			Text: ts + " " + intent.Text, Key: reminderDoneKey(intent.Key)}))
+	case errors.Is(err, notify.ErrNotPosted):
 		r.fail("%s: %v", ep.id, err)
+		r.dm(ep, reviewDMKey(intent.Key), fmt.Sprintf("factory: the review reminder could not be posted in #%s; post it yourself:\n%s",
+			r.b.Values.ReviewChannelName, text))
+	default:
+		r.fail("%s: %v", ep.id, err)
+	}
+	r.settleReminder(ep, intent)
+}
+
+// settleReminder marks the items of a reminder's intent reminded once its
+// done is logged. An intent with neither a done nor a DM may have been
+// posted: the user is DMed to check.
+func (r *run) settleReminder(ep *entity, intent events.Event) {
+	if ep.has(reminderDoneKey(intent.Key)) {
+		r.markPRs(intent, reviewReminderKey, r.reminderMark())
 		return
 	}
-	r.logged(r.append(ep, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram,
-		Text: ts + " " + intent.Text, Key: reminderDoneKey(intent.Key)}))
-	r.markPRs(intent, reviewReminderKey, r.reminderMark())
+	r.dm(ep, reviewDMKey(intent.Key), fmt.Sprintf("factory: a review reminder for %s may not have gone out; check #%s",
+		strings.Join(strings.Fields(intent.Text), ", "), r.b.Values.ReviewChannelName))
 }
 
 func (r *run) reminderMark() string {

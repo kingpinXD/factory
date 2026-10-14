@@ -539,6 +539,38 @@ func TestATickThatDiedAfterRemindingDoesNotRemindAgain(t *testing.T) {
 	if len(w.posts) != 2 {
 		t.Errorf("posts = %q, want still two", w.posts)
 	}
+	want := "factory: a review reminder for " + prURL + " may not have gone out; check #engineering"
+	if got := w.dmsWith("review reminder"); !slices.Equal(got, []string{want}) {
+		t.Errorf("DMs = %q, want one:\n%s", got, want)
+	}
+}
+
+// A reminder Slack refused DMs the user the message once; one that may have
+// landed DMs the user to check. Neither is posted again.
+func TestAFailedReminderDMsTheUserOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		dm   string
+	}{
+		{name: "refused", err: notify.ErrNotPosted, dm: "factory: the review reminder could not be posted in #engineering; post it yourself:\n" + reminded},
+		{name: "may have landed", err: notify.ErrMaybePosted, dm: "factory: a review reminder for " + prURL + " may not have gone out; check #engineering"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := awaitingReview(t, oneItem("[]"))
+			w.tick(false)
+			w.postErr = fmt.Errorf("slack-post.sh: %w", tc.err)
+			for i := range 3 {
+				w.fullTickAt(25*time.Hour + time.Duration(i)*5*time.Minute)
+			}
+			if len(w.posts) != 2 {
+				t.Errorf("posts = %q, want the request and one reminder try", w.posts)
+			}
+			if got := w.dmsWith("review reminder"); !slices.Equal(got, []string{tc.dm}) {
+				t.Errorf("DMs = %q, want one:\n%s", got, tc.dm)
+			}
+		})
+	}
 }
 
 // e1-w1 was posted a day ago; e1-w2's checks just turned green. One tick

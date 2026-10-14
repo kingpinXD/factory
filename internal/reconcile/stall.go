@@ -24,15 +24,15 @@ import (
 // before an escalation, after which it stays for the user.
 //
 // Then it looks for work that waits on no one. An open item in queued,
-// in_review, blocked or rechecking that no one has moved for stall_after is
-// stalled: its epic re-checks it and the user gets one DM. The other work
-// states have their own timeout, and needs_you and waiting_user are the
-// user's. An item stalled again after planner_runs_per_problem of those
-// re-checks waits for the user.
+// blocked or rechecking that full reconciles found no one to move for
+// stall_after is stalled: its epic re-checks it and the user gets one DM.
+// The other work states have their own timeout or merge on their own, and
+// needs_you and waiting_user are the user's. An item stalled again after
+// planner_runs_per_problem of those re-checks waits for the user.
 //
-// Last, the user gets one digest of the work that waited in its state
-// longer than wait_dm, and a PR no one reviewed for wait_dm after its
-// review request gets one reminder post.
+// Last, the user gets a digest of the work that waited in its state longer
+// than wait_dm on the user or on something outside, and a PR no one
+// reviewed for wait_dm after its review request gets one reminder post.
 
 // Key prefixes of a release request, by the move into needs_you it
 // releases, and of its DM, by the request.
@@ -66,8 +66,8 @@ func (r *run) releaseEscalations() {
 		sha, red := strings.CutPrefix(it.enteredBy.TriggerRef, redAfterPassRef)
 		switch {
 		case !red:
-			if ok, _, _ := r.prRecorded(it); ok {
-				r.releaseItem(it, fmt.Sprintf("its PR %s is recorded and handed to its babysitter", it.st.PRURL))
+			if it.st.PR != 0 {
+				r.releaseItem(it, fmt.Sprintf("its PR %s is recorded", it.st.PRURL))
 			}
 		case it.pr == nil: // its PR was not read this reconcile
 		case it.pr.HeadRefOid != sha:
@@ -143,9 +143,9 @@ func (r *run) releaseItem(it *entity, why string) {
 	r.say("%s: cause gone: %s", it.id, why)
 }
 
-// dmReleases DMs the user once for each release, so the DM that said the
-// item needs them is not left standing. It runs on every full reconcile, so
-// a DM that failed is sent on a later one.
+// dmReleases DMs the user once for each release a move applied, so the DM
+// that said the item needs them is not left standing. It runs on every full
+// reconcile, so a DM that failed is sent on a later one.
 func (r *run) dmReleases() {
 	for _, id := range r.order() {
 		it := r.ents[id]
@@ -153,7 +153,7 @@ func (r *run) dmReleases() {
 			continue
 		}
 		for _, ev := range it.evs {
-			if isRelease(ev) {
+			if isRelease(ev) && usedRef(it, seqRef(ev)) {
 				r.dm(it, autoReleaseDMPrefix+seqRef(ev), fmt.Sprintf("factory: %s released: %s.", it.id, ev.Text))
 			}
 		}
@@ -169,35 +169,57 @@ func releasedNote(e *entity, t events.Event) string {
 	return fmt.Sprintf("; it was released automatically %d times in 24h and the cause came back, so it stays for you", releasesPerDay)
 }
 
-// stallPrefix starts the key of a stall signal and its DM:
-// stall:<item>:<seq of the item's move into the state it stalled in>.
-const stallPrefix = signalStall + ":"
+// stallPrefix starts the key of a stall signal, and stallDMPrefix of its
+// DM: stall:<item>:<seq of the item's move into the state it stalled in>.
+// Both are logged on the item's epic, so they never count as the item
+// moving.
+const (
+	stallPrefix   = signalStall + ":"
+	stallDMPrefix = "stall-dm:"
+)
 
 // stallsRef starts the ref of a move to needs_you of an item that stalled
 // again after its stall re-checks: stalls:<item>:<seq of its state entry>.
 const stallsRef = "stalls:"
 
+// stallsCappedPrefix starts the key of the DM about an item in a re-check
+// that stalled again after its stall re-checks, logged on its epic:
+// stalls-capped:<item>:<seq of its state entry>.
+const stallsCappedPrefix = "stalls-capped:"
+
 // stallStates are the work states in which an item stalls.
-var stallStates = []string{workQueued, workInReview, stateBlocked, workRechecking}
+var stallStates = []string{workQueued, stateBlocked, workRechecking}
 
 func init() { needsUserReasons = append(needsUserReasons, (*run).stallsUsedUp) }
 
 // findStalls re-checks each stalled item once in its state: a DM, then a
 // stall signal to its epic. An item that used up its stall re-checks is
-// left to stallsUsedUp.
+// left to stallsUsedUp, or, in a re-check, gets one DM.
 func (r *run) findStalls() {
 	for _, id := range r.order() {
 		it := r.ents[id]
+		r.noteMover(it)
 		age, stalled := r.stalledFor(it)
-		if !stalled || r.stallSignals(it) >= r.b.Values.Supervision.PlannerRunsPerProblem {
+		if !stalled {
 			continue
 		}
-		ep, key := r.ents[it.entry.Epic], fmt.Sprintf("%s%s:%d", stallPrefix, it.id, it.entered)
-		if ep == nil || ep.has(key) {
+		ep, occurrence := r.ents[it.entry.Epic], fmt.Sprintf("%s:%d", it.id, it.entered)
+		if ep == nil {
 			continue
 		}
 		age = age.Round(time.Minute)
-		r.dm(it, key, fmt.Sprintf("factory: %s (%s) stalled in %s: no one has moved it for %s. %s re-checks it.", it.id, issueRef(it), it.cur.State, age, ep.id))
+		if n := r.b.Values.Supervision.PlannerRunsPerProblem; r.stallSignals(it) >= n {
+			if it.cur.State == workRechecking {
+				r.dm(ep, stallsCappedPrefix+occurrence, fmt.Sprintf("factory: %s (%s) stalled in %s after %d stall re-checks: no one has moved it for %s. It waits for you.",
+					it.id, issueRef(it), it.cur.State, n, age))
+			}
+			continue
+		}
+		key := stallPrefix + occurrence
+		if ep.has(key) || !r.dm(ep, stallDMPrefix+occurrence, fmt.Sprintf("factory: %s (%s) stalled in %s: no one has moved it for %s. %s re-checks it.",
+			it.id, issueRef(it), it.cur.State, age, ep.id)) {
+			continue
+		}
 		sig := events.Event{At: r.now, Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientRecheck,
 			Request: signalStall, Text: issueRef(it).String(), Key: key}
 		if _, err := r.append(ep, sig); err != nil {
@@ -208,14 +230,26 @@ func (r *run) findStalls() {
 	}
 }
 
+// noteMover keeps when a full reconcile first found no one to move the
+// item in a state it stalls in, and forgets it once one finds someone.
+func (r *run) noteMover(it *entity) {
+	switch {
+	case it.work == nil || !slices.Contains(stallStates, it.cur.State) || r.mover(it) != "":
+		it.st.NoMoverSince = time.Time{}
+	case it.st.NoMoverSince.IsZero():
+		it.st.NoMoverSince = r.now
+	}
+}
+
 // stalledFor returns how long no one has moved the item, and whether it is
-// stalled: in a state it stalls in, with no mover, for stall_after.
+// stalled: in a state it stalls in, with no mover now and at every full
+// reconcile since one first found none, for stall_after.
 func (r *run) stalledFor(it *entity) (time.Duration, bool) {
-	if it.work == nil || !slices.Contains(stallStates, it.cur.State) {
+	if it.work == nil || !slices.Contains(stallStates, it.cur.State) || it.st.NoMoverSince.IsZero() || r.mover(it) != "" {
 		return 0, false
 	}
-	age := r.elapsed(it, quietSince(it, it.cur.Since, r.now))
-	return age, age >= time.Duration(r.b.Values.StallAfter) && r.mover(it) == ""
+	age := r.elapsed(it, quietSince(it, later(it.cur.Since, it.st.NoMoverSince), r.now))
+	return age, age >= time.Duration(r.b.Values.StallAfter)
 }
 
 // quietSince returns the later of since and the item's newest event stamped
@@ -230,7 +264,8 @@ func quietSince(it *entity, since, until time.Time) time.Time {
 }
 
 // stallSignals counts the item's stall signals since it last left
-// needs_you.
+// needs_you; the move out of needs_you is the entry of the state the first
+// one stalls in.
 func (r *run) stallSignals(it *entity) int {
 	ep := r.ents[it.entry.Epic]
 	if ep == nil {
@@ -240,15 +275,16 @@ func (r *run) stallSignals(it *entity) int {
 	return len(countedSince(ep, 0, func(ev events.Event) bool {
 		seq, ok := strings.CutPrefix(ev.Key, stallPrefix+it.id+":")
 		n, err := strconv.Atoi(seq)
-		return ev.Kind == events.KindRequest && ok && err == nil && n > left
+		return ev.Kind == events.KindRequest && ok && err == nil && n >= left
 	}))
 }
 
-// stallsUsedUp: the item is stalled now, after as many stall re-checks as
-// the planner may run for one problem since it last left needs_you. An item
-// in a re-check stays there: a retry could not take it back to one.
+// stallsUsedUp: on a full reconcile, which reads what the mover looks at,
+// the item is stalled now, after as many stall re-checks as the planner may
+// run for one problem since it last left needs_you. An item in a re-check
+// stays there: a retry could not take it back to one.
 func (r *run) stallsUsedUp(it *entity) (string, bool) {
-	if it.work == nil || it.cur.State == workRechecking || r.stallSignals(it) < r.b.Values.Supervision.PlannerRunsPerProblem {
+	if !r.full || it.work == nil || it.cur.State == workRechecking || r.stallSignals(it) < r.b.Values.Supervision.PlannerRunsPerProblem {
 		return "", false
 	}
 	if _, stalled := r.stalledFor(it); !stalled {
@@ -257,6 +293,16 @@ func (r *run) stallsUsedUp(it *entity) (string, bool) {
 	return fmt.Sprintf("%s%s:%d", stallsRef, it.id, it.entered), true
 }
 
+// Movers, or their start or end, that only the user or something outside
+// the factory moves past: the long-wait digest lists items waiting on them.
+const (
+	moverYou       = "you"
+	moverAccount   = "the account"
+	moverLink      = "a gate: start link into it"
+	moverMergeHold = "its merge hold: "
+	moverRedBase   = ", red"
+)
+
 // mover names who moves the work item next from where it waits, or "" for
 // no one. It reads only what this tick read already: a session's listing,
 // the merge hold watchPRs kept, the blockers and bases read so far.
@@ -264,9 +310,9 @@ func (r *run) mover(it *entity) string {
 	ep := r.ents[it.entry.Epic]
 	switch {
 	case it.cur.State == stateNeedsYou, it.cur.State == stateWaitingUser, ep != nil && ep.cur.State == stateNeedsYou:
-		return "you"
+		return moverYou
 	case !r.workAllowed(it):
-		return "the account"
+		return moverAccount
 	case r.working(r.babysitterOf(it)) || r.babysitterNeeded(it):
 		return "its babysitter"
 	case ep != nil && r.recheckComing(ep, it):
@@ -277,14 +323,14 @@ func (r *run) mover(it *entity) string {
 		return r.queuedMover(it)
 	case workInReview:
 		if it.st.MergeHold != "" {
-			return "its merge hold: " + it.st.MergeHold
+			return moverMergeHold + it.st.MergeHold
 		}
 		if it.pr == nil || watched(it) && it.reads == nil {
 			return "its PR, not read this reconcile"
 		}
 	case stateBlocked:
 		if r.startWaits(it) {
-			return "a gate: start link into it"
+			return moverLink
 		}
 		if wait, _ := r.waitsForSet(it); wait {
 			return "an item of its set being worked"
@@ -294,14 +340,14 @@ func (r *run) mover(it *entity) string {
 }
 
 // queuedMover names who moves a queued item: a gate: start link into it;
-// its red base; its set, while no orchestrator holds it; an item of its set
-// being worked, or an earlier one ready to start first.
+// its base, red or unread; its set, while no orchestrator holds it; an item
+// of its set being worked, or an earlier one ready to start first.
 func (r *run) queuedMover(it *entity) string {
-	switch {
-	case r.startWaits(it):
-		return "a gate: start link into it"
-	case r.baseReadRed(it):
-		return fmt.Sprintf("its base %s, red", repoBase{it.work.Repo, it.work.Base})
+	if r.startWaits(it) {
+		return moverLink
+	}
+	if base := r.baseWait(it); base != "" {
+		return base
 	}
 	if set := r.ents[it.work.Set]; set != nil && (set.cur.State == set.m.Start || set.cur.State == setClaimed) {
 		return fmt.Sprintf("its set %s, still %s", set.id, set.cur.State)
@@ -316,7 +362,7 @@ func (r *run) queuedMover(it *entity) string {
 		if s == it {
 			break
 		}
-		if s.cur.State == s.m.Start && !r.startWaits(s) && !r.baseReadRed(s) {
+		if s.cur.State == s.m.Start && !r.startWaits(s) && r.baseWait(s) == "" {
 			return s.id + ", ready to start first"
 		}
 	}
@@ -378,27 +424,53 @@ func (r *run) readRelease(ep *entity, l epic.Link) (epic.Release, error) {
 	return r.release(ep, l)
 }
 
-// baseReadRed reports whether this tick read the item's base red; a repair
-// item starts on it.
-func (r *run) baseReadRed(it *entity) bool {
-	read, ok := r.bases[repoBase{it.work.Repo, it.work.Base}.String()]
-	return ok && read.err == nil && read.res.Red() && !r.isRepair(it)
+// baseWait names the item's base when this tick read it red or could not
+// read it, else ""; a repair item starts on a red base.
+func (r *run) baseWait(it *entity) string {
+	k := repoBase{it.work.Repo, it.work.Base}
+	read, ok := r.bases[k.String()]
+	switch {
+	case !ok || r.isRepair(it):
+		return ""
+	case read.err != nil:
+		return fmt.Sprintf("its base %s, unread", k)
+	case read.res.Red():
+		return fmt.Sprintf("its base %s%s", k, moverRedBase)
+	}
+	return ""
 }
 
 // waitDigestPrefix starts the key of a long-wait digest DM,
 // wait-digest:<tick>, logged on the epic of the oldest wait.
 const waitDigestPrefix = "wait-digest:"
 
+// digestMinGap is the least time between two digests when a wait newly
+// crossed wait_dm: five waits crossing in one day give at most four DMs.
+const digestMinGap = 6 * time.Hour
+
+// digested reports whether a wait on mover who goes in the digest: the
+// user, the account, a link, a red base or a merge hold moves it, or no one.
+func digested(who string) bool {
+	return slices.Contains([]string{"", moverYou, moverAccount, moverLink}, who) ||
+		strings.HasPrefix(who, moverMergeHold) || strings.HasSuffix(who, moverRedBase)
+}
+
 // digestWaits DMs the user one digest of the open work items that waited in
-// their state longer than wait_dm, with what each waits on: once a wait
-// crossed wait_dm since the last digest, or wait_dm after it while any
-// remain. The last digest is the newest digest done in any epic's log.
+// their state longer than wait_dm on a mover it lists, with what each waits
+// on: once a wait crossed wait_dm since the last digest and that one is
+// digestMinGap old, or wait_dm after it while any remain. The last digest
+// is the newest digest done in any epic's log.
 func (r *run) digestWaits() {
 	limit := time.Duration(r.b.Values.WaitDM)
 	var waits []*entity
+	movers := map[*entity]string{}
 	for _, id := range r.order() {
-		if it := r.ents[id]; it.work != nil && it.open() && r.now.Sub(it.cur.Since) > limit {
-			waits = append(waits, it)
+		it := r.ents[id]
+		if it.work == nil || !it.open() || r.now.Sub(it.cur.Since) <= limit {
+			continue
+		}
+		if who := r.mover(it); digested(who) {
+			waits, movers[it] = append(waits, it), who
 		}
 	}
 	if len(waits) == 0 {
@@ -406,7 +478,8 @@ func (r *run) digestWaits() {
 	}
 	slices.SortStableFunc(waits, func(a, b *entity) int { return a.cur.Since.Compare(b.cur.Since) })
 	last := r.lastDigest()
-	if !waits[len(waits)-1].cur.Since.Add(limit).After(last) && r.now.Sub(last) < limit {
+	newly := waits[len(waits)-1].cur.Since.Add(limit).After(last)
+	if gap := r.now.Sub(last); !(newly && gap >= digestMinGap) && gap < limit {
 		return
 	}
 	ep := r.ents[waits[0].entry.Epic]
@@ -416,7 +489,7 @@ func (r *run) digestWaits() {
 	lines := []string{"factory: long waits:"}
 	for _, it := range waits {
 		line := fmt.Sprintf(" - %s (%s) in %s for %s, waiting on %s", it.id, issueRef(it), it.cur.State,
-			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(r.mover(it), "no one"))
+			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(movers[it], "no one"))
 		if from := r.deployedWait(it); from != "" {
 			line += fmt.Sprintf("; once %s is deployed, run: factory deployed <its PR URL>", from)
 		}

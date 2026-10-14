@@ -193,9 +193,6 @@ func (r *run) waitingWhy(e *entity, t events.Event) string {
 	if hint := r.answerHint(e); hint != "" {
 		return hint
 	}
-	if ev, ok := e.byKey(autoReleaseKey(t)); ok {
-		return "released automatically: " + ev.Text
-	}
 	if why := r.needsYouWhy(e, t); why != "" {
 		return why
 	}

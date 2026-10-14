@@ -881,17 +881,19 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 }
 
 // dm sends the user text once per key, logged in e's log: an intent before
-// the DM and a done after it, as for every outside action.
-func (r *run) dm(e *entity, key, text string) {
+// the DM and a done after it, as for every outside action. It reports
+// whether the DM was sent, now or before.
+func (r *run) dm(e *entity, key, text string) bool {
 	if e.has(key) {
-		return
+		return true
 	}
 	r.logged(r.append(e, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Text: key, Key: key + ":intent"}))
 	if err := r.act("DM the user about "+e.id, func(ctx context.Context) error { return r.d.Notify.DM(ctx, text) }); err != nil {
 		r.fail("%v", err)
-		return
+		return false
 	}
 	r.logged(r.append(e, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: key, Key: key}))
+	return true
 }
 
 // usedRef reports whether a transition of e names ref.

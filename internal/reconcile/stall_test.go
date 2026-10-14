@@ -3,6 +3,7 @@ package reconcile
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
+	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -95,14 +97,18 @@ func TestAnEscalationWhoseChecksTurnedGreenIsReleased(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Waiting) != 1 || rep.Waiting[0].Why != "released automatically: "+why {
-		t.Errorf("waiting on you = %+v", rep.Waiting)
+	if len(rep.Waiting) != 1 || !strings.HasPrefix(rep.Waiting[0].Why, "checks on "+prURL+" stayed red") {
+		t.Errorf("waiting on you = %+v, want the red checks until the release applies", rep.Waiting)
+	}
+	if got := w.dmsWith("released"); len(got) != 0 {
+		t.Errorf("DMs = %q before the release applies, want none", got)
 	}
 	w.now = w.now.Add(time.Minute)
 	w.tick(false)
 	if got := w.status(item).State; got != workInReview {
 		t.Fatalf("%s is %s after the release, want in_review", item, got)
 	}
+	w.fullTick(5 * time.Minute)
 	if got := w.dmsWith("e1-w1 released: " + why); len(got) != 1 {
 		t.Errorf("DMs = %q, want one release DM", w.dms)
 	}
@@ -146,7 +152,8 @@ func TestARedAfterPassIsReleasedOnlyOnceItsCauseIsGone(t *testing.T) {
 }
 
 // prOpenTimedOut puts item e1-w1 in needs_you because pr_open timed out,
-// with its PR 5 open on GitHub and its worktree not handed over yet.
+// with its PR 5 open on GitHub and its worktree not handed over yet; its
+// pr-opener ended late, after the timeout.
 func prOpenTimedOut(t *testing.T) *world {
 	t.Helper()
 	w := newWorld(t)
@@ -159,17 +166,21 @@ func prOpenTimedOut(t *testing.T) *world {
 	w.pulls.checks[head1] = greenCI
 	w.moveTo(item, workPROpen)
 	w.toNeedsYou(item, workPROpen, timeoutRef+"3")
+	w.end(item, "pr.v1.md", "## PR\n"+prURL+"\n")
 	return w
 }
 
-func TestAPROpenTimeoutIsReleasedOnceThePRIsRecordedAndHandedOver(t *testing.T) {
+// The retry takes the item back to pr_open, which hands the PR over itself.
+func TestAPROpenTimeoutIsReleasedOnceItsPRIsRecorded(t *testing.T) {
 	w := prOpenTimedOut(t)
+	pr := w.prs[git.Branch(item)]
+	delete(w.prs, git.Branch(item))
 	if reads := w.fullTick(time.Minute); len(w.releases(item)) != 0 || len(reads) != 0 {
-		t.Fatalf("released %+v with no handover (checks read on %q)", w.releases(item), reads)
+		t.Fatalf("released %+v with no PR (checks read on %q)", w.releases(item), reads)
 	}
-	w.append(w.dir(item), events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: "fixture"})
+	w.prs[git.Branch(item)] = pr
 	reads := w.fullTick(5 * time.Minute)
-	const why = "its PR " + prURL + " is recorded and handed to its babysitter"
+	const why = "its PR " + prURL + " is recorded"
 	if got := w.releases(item); len(got) != 1 || got[0].Text != why || len(reads) != 0 {
 		t.Fatalf("releases = %+v, checks read on %q; want one, %s, and no read", got, reads, why)
 	}
@@ -288,15 +299,23 @@ func TestAFullReconcileReadsTheLeastRecentlyReadEscalationsUpToStallReads(t *tes
 	}
 }
 
-// stuckInReview puts item e1-w1 in in_review with no one to move it: its PR
-// is a draft, so nothing merges it, and its worktree came back from its
-// babysitter, so nothing watches the PR. One full reconcile has run.
-func stuckInReview(t *testing.T) *world {
+// stuckBlocked puts item e1-w1 in blocked with no one to move it: its
+// re-check ended with no link and no instruction, and its planner's turn
+// ended. A full reconcile has found it so, which starts its stall clock.
+func stuckBlocked(t *testing.T) *world {
 	t.Helper()
-	w := watching(t)
-	w.pr(func(pr *gh.PR) { pr.IsDraft = true })
-	w.append(w.dir(item), events.Event{At: w.now, Kind: events.KindHandback, Sender: events.SenderProgram, Text: "fixture"})
-	w.tick(false)
+	w := newWorld(t)
+	w.blockW1(twoItems("[]"), workImplementing)
+	w.recheckAs(twoItems("[]"))
+	w.ackAll("e1")
+	w.ticks(2)
+	if got := w.status(item).State; got != stateBlocked {
+		t.Fatalf("%s is %s, want blocked; moves %v", item, got, w.moves(item))
+	}
+	planner := w.listedSession("factory:e1:planner")
+	w.setState(planner.Name, planner.PID, listedTurnEnded)
+	w.listen(planner.PID)
+	w.fullTick(time.Minute)
 	return w
 }
 
@@ -331,7 +350,7 @@ func (w *world) recheckV(v int, plan string) {
 }
 
 func TestAnItemNoOneMovesIsStalledAfterStallAfter(t *testing.T) {
-	w := stuckInReview(t)
+	w := stuckBlocked(t)
 	w.fullTick(29 * time.Minute)
 	if got := w.stallSignals(); len(got) != 0 || len(w.dmsWith("stalled")) != 0 {
 		t.Fatalf("at 29m: stall signals %+v, DMs %q; want none", got, w.dms)
@@ -339,10 +358,10 @@ func TestAnItemNoOneMovesIsStalledAfterStallAfter(t *testing.T) {
 	key := w.stallKey(item)
 	w.fullTick(2 * time.Minute)
 	got := w.stallSignals()
-	if len(got) != 1 || got[0].Key != key || got[0].Recipient != recipientRecheck || !slices.Equal(signalCovers(got[0]), []string{"o/r#14"}) {
-		t.Fatalf("stall signals = %+v, want one under %s covering o/r#14", got, key)
+	if len(got) != 1 || got[0].Key != key || got[0].Recipient != recipientRecheck || !slices.Equal(signalCovers(got[0]), []string{"o/r#12"}) {
+		t.Fatalf("stall signals = %+v, want one under %s covering o/r#12", got, key)
 	}
-	const dm = "factory: e1-w1 (o/r#14) stalled in in_review: no one has moved it for 31m0s. e1 re-checks it."
+	const dm = "factory: e1-w1 (o/r#12) stalled in blocked: no one has moved it for 31m0s. e1 re-checks it."
 	if got := w.dmsWith("stalled"); !slices.Equal(got, []string{dm}) {
 		t.Errorf("DMs = %q, want %q", got, dm)
 	}
@@ -350,7 +369,7 @@ func TestAnItemNoOneMovesIsStalledAfterStallAfter(t *testing.T) {
 	if got := w.status(item).State; got != workRechecking {
 		t.Errorf("%s is %s after the stall signal, want rechecking", item, got)
 	}
-	if inbox := strings.Join(w.inbox("e1"), "\n"); !strings.Contains(inbox, "e1-w1 stalled in in_review: no one moved it for 31m0s") {
+	if inbox := strings.Join(w.inbox("e1"), "\n"); !strings.Contains(inbox, "e1-w1 stalled in blocked: no one moved it for ") {
 		t.Errorf("planner inbox %q does not say what stalled", inbox)
 	}
 	if got := w.stallSignals(); len(got) != 1 || len(w.dmsWith("stalled")) != 1 {
@@ -359,30 +378,53 @@ func TestAnItemNoOneMovesIsStalledAfterStallAfter(t *testing.T) {
 	w.noErrors()
 }
 
-func TestABlockedItemWhoseRecheckEndedWithNothingIsStalled(t *testing.T) {
+// e1-w2's verify passes and it reaches pr_open in the tick after e1-w1,
+// queued behind it, was moved: for that one full reconcile no one moves
+// e1-w1, though it has waited longer than stall_after. The next tick
+// starts it.
+func TestASiblingHandOffInOneTickIsNotAStall(t *testing.T) {
 	w := newWorld(t)
-	w.blockW1(twoItems("[]"), workImplementing)
-	w.recheckAs(twoItems("[]"))
-	w.ackAll("e1")
-	w.ticks(2)
-	if got := w.status("e1-w1").State; got != stateBlocked {
-		t.Fatalf("e1-w1 is %s, want blocked; moves %v", got, w.moves("e1-w1"))
+	w.registry()
+	w.planned("e1", sameSet)
+	w.moveTo("e1-s1", setRunning)
+	w.moveTo("e1-w2", "verifying")
+	w.fullTick(35 * time.Minute)
+	if got := w.status(item).State; got != workQueued {
+		t.Fatalf("%s is %s, want queued behind e1-w2", item, got)
 	}
-	planner := w.listedSession("factory:e1:planner")
-	w.setState(planner.Name, planner.PID, listedTurnEnded)
-	w.fullTick(28 * time.Minute)
-	if got := w.stallSignals(); len(got) != 0 {
-		t.Fatalf("at 28m: stall signals %+v, want none", got)
+	w.end("e1-w2", "verify.v1.md", "## Verdict\n**Pass**\n## Checks\n## Review\n## Send back\n")
+	w.fullTick(time.Minute)
+	if got := w.status("e1-w2").State; got != workPROpen {
+		t.Fatalf("e1-w2 is %s, want pr_open", got)
 	}
-	key := w.stallKey("e1-w1")
-	w.fullTick(2 * time.Minute)
-	if got := w.stallSignals(); len(got) != 1 || got[0].Key != key {
-		t.Fatalf("stall signals = %+v, want one under %s", got, key)
+	if got := w.stallSignals(); len(got) != 0 || len(w.dmsWith("stalled")) != 0 {
+		t.Errorf("stall signals %+v, DMs %q at the hand-off; want none", got, w.dms)
+	}
+	w.now = w.now.Add(time.Minute)
+	w.tick(false)
+	if got := w.status(item).State; got != "starting" {
+		t.Errorf("%s is %s a tick after the hand-off, want starting", item, got)
 	}
 }
 
-func TestOnlyQueuedInReviewBlockedAndRecheckingWorkIsJudged(t *testing.T) {
-	for _, state := range []string{workImplementing, workPROpen, workMerging, stateWaitingUser, stateNeedsYou} {
+// An in_review item no one watches, its PR a draft and its worktree back
+// from its babysitter, merges once its PR is ready: in_review is not
+// judged.
+func TestAnInReviewItemIsNotJudged(t *testing.T) {
+	w := watching(t)
+	w.pr(func(pr *gh.PR) { pr.IsDraft = true })
+	w.append(w.dir(item), events.Event{At: w.now, Kind: events.KindHandback, Sender: events.SenderProgram, Text: "fixture"})
+	w.tick(false)
+	w.fullTick(time.Minute)
+	w.fullTick(31 * time.Minute)
+	w.fullTick(31 * time.Minute)
+	if got := w.stallSignals(); len(got) != 0 || len(w.dmsWith("stalled")) != 0 {
+		t.Errorf("stall signals %+v, DMs %q; want none", got, w.dms)
+	}
+}
+
+func TestOnlyQueuedBlockedAndRecheckingWorkIsJudged(t *testing.T) {
+	for _, state := range []string{workImplementing, workPROpen, workInReview, workMerging, stateWaitingUser, stateNeedsYou} {
 		t.Run("work "+state, func(t *testing.T) {
 			w := newWorld(t)
 			w.registry()
@@ -492,6 +534,9 @@ func TestEachMoverKeepsAnItemOut(t *testing.T) {
 		{name: "a red base", world: queued(oneItem("[]")), adjust: func(r *run) {
 			r.bases["o/r@main"] = baseRead{res: gh.BaseResult{Checks: []gh.BaseCheck{{Name: "ci", Red: true}}}}
 		}, want: "its base o/r@main, red"},
+		{name: "a base whose read failed", world: queued(oneItem("[]")), adjust: func(r *run) {
+			r.bases["o/r@main"] = baseRead{err: errors.New("gh: timeout")}
+		}, want: "its base o/r@main, unread"},
 		{name: "the account", world: queued(oneItem("[]")), adjust: func(r *run) { r.useAccount(stateNearLimit, nil) }, want: "the account"},
 		{name: "its set not claimed", world: func(w *world) { w.registry(); w.planned("e1", oneItem("[]")) }, want: "its set e1-s1, still queued"},
 		{name: "an item of its set being worked", id: "e1-w2", world: func(w *world) {
@@ -534,28 +579,76 @@ func TestEachMoverKeepsAnItemOut(t *testing.T) {
 	}
 }
 
+// A read the merge check needs that failed is the item's merge hold: the
+// PR waits on GitHub, not on no one.
+func TestAFailedReadIsTheMergeHold(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		quiet time.Duration
+		fail  func(*world)
+		want  string
+	}{
+		{name: "the merge check", quiet: time.Hour, fail: func(w *world) {
+			if err := os.RemoveAll(filepath.Join(w.brain, "repos")); err != nil {
+				t.Fatal(err)
+			}
+		}, want: "a read failed: open "},
+		{name: "who the user is", quiet: time.Minute, fail: func(w *world) {
+			respond := w.fake.Respond
+			w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+				if strings.Join(c.Args, " ") == "api user" {
+					return nil, errors.New("gh: 502")
+				}
+				return respond(c)
+			}
+		}, want: "a read failed: who the user is on GitHub: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.inReviewWith(oneItem("[]"), tc.quiet)
+			tc.fail(w)
+			w.tick(false)
+			if got := w.status(item); got.State != workInReview || !strings.HasPrefix(got.MergeHold, tc.want) {
+				t.Errorf("%s is %s with merge hold %q, want in_review held on %q…", item, got.State, got.MergeHold, tc.want)
+			}
+		})
+	}
+}
+
 func TestFindingStallsCallsNothing(t *testing.T) {
-	w := stuckInReview(t)
+	w := stuckBlocked(t)
 	w.planned("e2", oneItem("\n  - {from: o/r#99, to: w1, gate: start, when: merged, rollback: none}"))
 	w.moveTo("e2-s1", setRunning)
 	w.now = w.now.Add(31 * time.Minute)
-	r := moverRun(t, w, func(r *run) {
-		r.listing()
-		pr := gh.PR{Number: 5, State: "OPEN"}
-		r.ents[item].pr = &pr
-	})
+	r := moverRun(t, w, func(r *run) { r.listing() })
 	before := len(w.fake.Calls())
 	r.findStalls()
 	if got := w.calls()[before:]; len(got) != 0 {
 		t.Errorf("finding stalls called %q", got)
 	}
-	if out := w.out.String(); !strings.Contains(out, "e1-w1: stalled in in_review") || strings.Contains(out, "e2-w1: stalled") {
+	if out := w.out.String(); !strings.Contains(out, "e1-w1: stalled in blocked") || strings.Contains(out, "e2-w1: stalled") {
 		t.Errorf("want e1-w1 stalled and e2-w1 waiting on its link:\n%s", out)
 	}
 }
 
+// A stall whose DM failed logs no signal: both are tried again on the next
+// full reconcile.
+func TestAStallWhoseDMFailedIsRetriedWithItsSignal(t *testing.T) {
+	w := stuckBlocked(t)
+	w.dmErr = errors.New("slack: 500")
+	w.fullTick(31 * time.Minute)
+	if got := w.stallSignals(); len(got) != 0 {
+		t.Fatalf("stall signals %+v with the DM failed, want none", got)
+	}
+	w.dmErr = nil
+	w.fullTick(time.Minute)
+	if got := w.stallSignals(); len(got) != 1 || len(w.dmsWith("stalled in blocked")) != 1 {
+		t.Errorf("stall signals %+v, DMs %q; want one of each", got, w.dms)
+	}
+}
+
 func TestStallsAreCappedThenTheItemWaitsForYou(t *testing.T) {
-	w := stuckInReview(t)
+	w := stuckBlocked(t)
 	for n := 1; n <= 3; n++ {
 		w.fullTick(31 * time.Minute)
 		if got := w.stallSignals(); len(got) != n {
@@ -571,22 +664,22 @@ func TestStallsAreCappedThenTheItemWaitsForYou(t *testing.T) {
 				t.Fatalf("a re-check its planner works on: %s is %s with %d stall signals", item, got, len(w.stallSignals()))
 			}
 		}
-		w.recheckV(n+1, oneItem("[]"))
+		w.recheckV(n+2, twoItems("[]"))
 		w.fullTick(time.Minute)
-		if got := w.status(item).State; got != workInReview {
-			t.Fatalf("stall %d: %s is %s after its re-check, want in_review", n, item, got)
+		if got := w.status(item).State; got != stateBlocked {
+			t.Fatalf("stall %d: %s is %s after its re-check, want blocked", n, item, got)
 		}
 	}
 	w.fullTick(29 * time.Minute)
-	if got := w.status(item).State; got != workInReview {
-		t.Fatalf("%s is %s 29m after its third re-check, want in_review", item, got)
+	if got := w.status(item).State; got != stateBlocked {
+		t.Fatalf("%s is %s 29m after its third re-check, want blocked", item, got)
 	}
 	w.fullTick(2 * time.Minute)
 	moved := last(w.kinds(item, events.KindTransition))
 	if moved.To != stateNeedsYou || !strings.HasPrefix(moved.TriggerRef, stallsRef+item+":") {
 		t.Fatalf("%s moved to %s on %q; want needs_you on stalls:", item, moved.To, moved.TriggerRef)
 	}
-	const why = "no one moved it in in_review for 30m0s after 3 stall re-checks"
+	const why = "no one moved it in blocked for 30m0s after 3 stall re-checks"
 	if got := w.dmsWith(why); len(got) != 1 {
 		t.Errorf("DMs = %q, want one that says %q", w.dms, why)
 	}
@@ -596,24 +689,77 @@ func TestStallsAreCappedThenTheItemWaitsForYou(t *testing.T) {
 	}
 }
 
-// A capped item in a re-check that ended without moving it gets no more
-// stall signals, and stays: from needs_you, a retry could not take it back.
-func TestAStalledItemInARecheckStaysThereAtTheCap(t *testing.T) {
+// capped puts item e1-w1 in state with three stall re-checks behind it,
+// each taken by a re-check, and no one to move it since now.
+func capped(t *testing.T, state string) *world {
+	t.Helper()
 	w := newWorld(t)
 	w.registry()
 	w.planned("e1", oneItem("[]"))
 	w.ackAll("e1")
 	w.moveTo("e1-s1", setRunning)
-	w.append(w.dir(item), events.Event{Kind: events.KindTransition, At: w.now, From: workQueued, To: workRechecking, Prev: []string{workQueued},
+	w.append(w.dir(item), events.Event{Kind: events.KindTransition, At: w.now, From: workQueued, To: state, Prev: []string{workQueued},
 		Trigger: "file", TriggerRef: "recheck:e1:999"})
 	for n := 1; n <= 3; n++ {
 		sig := w.append(w.dir("e1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientRecheck,
 			Request: signalStall, Text: "o/r#14", Key: fmt.Sprintf("%s%s:%d", stallPrefix, item, 100+n)})
 		w.append(w.dir("e1"), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Key: consumedKey(sig)})
 	}
+	w.writeStatus(item, func(st *store.Status) { st.NoMoverSince = w.now })
+	return w
+}
+
+// A capped item in a re-check that ended without moving it gets no more
+// stall signals, and stays: from needs_you, a retry could not take it back.
+// The user gets one DM.
+func TestAStalledItemInARecheckStaysThereAtTheCap(t *testing.T) {
+	w := capped(t, workRechecking)
 	w.fullTick(31 * time.Minute)
 	if got := w.status(item).State; got != workRechecking || len(w.stallSignals()) != 3 {
 		t.Errorf("%s is %s with %d stall signals; want rechecking with 3", item, got, len(w.stallSignals()))
+	}
+	const dm = "factory: e1-w1 (o/r#14) stalled in rechecking after 3 stall re-checks: no one has moved it for 31m0s. It waits for you."
+	if got := w.dmsWith("stalled"); !slices.Equal(got, []string{dm}) {
+		t.Errorf("DMs = %q, want %q", got, dm)
+	}
+	w.fullTick(31 * time.Minute)
+	if got := w.dmsWith("stalled"); len(got) != 1 {
+		t.Errorf("DMs = %q, want still one", got)
+	}
+}
+
+// The move to needs_you of a capped stall waits for a full reconcile,
+// which reads the bases its mover looks at, and for one before it that
+// found no one to move the item.
+func TestStallsUsedUpWaitsForAFullReconcile(t *testing.T) {
+	w := capped(t, stateBlocked)
+	w.now = w.now.Add(time.Hour)
+	for _, full := range []bool{false, true} {
+		r := moverRun(t, w, func(r *run) { r.full = full })
+		if _, got := r.stallsUsedUp(r.ents[item]); got != full {
+			t.Errorf("full reconcile %v: stalls used up = %v, want %v", full, got, full)
+		}
+	}
+	w.writeStatus(item, func(st *store.Status) { st.NoMoverSince = time.Time{} })
+	r := moverRun(t, w, nil)
+	if _, got := r.stallsUsedUp(r.ents[item]); got {
+		t.Error("stalls used up with no full reconcile before finding no mover")
+	}
+}
+
+// A retry out of needs_you starts the item's state with the retry's move,
+// so the stall key of its first stall after it carries that move's seq.
+func TestTheFirstStallAfterARetryCounts(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", oneItem("[]"))
+	w.toNeedsYou(item, workQueued, deadLetterRef+"1")
+	w.moveTo(item, stateBlocked)
+	w.append(w.dir("e1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientRecheck,
+		Request: signalStall, Text: "o/r#14", Key: w.stallKey(item)})
+	r := moverRun(t, w, nil)
+	if got := r.stallSignals(r.ents[item]); got != 1 {
+		t.Errorf("stall signals since the retry = %d, want 1", got)
 	}
 }
 
@@ -634,7 +780,9 @@ func threeWaiting(t *testing.T) *world {
 // digests returns the long-wait digests DMed so far.
 func (w *world) digests() []string { return w.dmsWith("factory: long waits:") }
 
-func TestLongWaitsGoInOneDigestAtTheirFirstDayThenDaily(t *testing.T) {
+// A wait that crosses wait_dm goes in a digest once the last is 6h old;
+// with none crossing, the digest comes a day after the last.
+func TestLongWaitsGoInADigestAtMostSixHoursApartThenDaily(t *testing.T) {
 	w := threeWaiting(t)
 	w.at(3 * time.Hour)
 	w.toNeedsYou("e1-w3", workQueued, deadLetterRef+"1")
@@ -649,30 +797,63 @@ func TestLongWaitsGoInOneDigestAtTheirFirstDayThenDaily(t *testing.T) {
 	if got := w.digests(); !slices.Equal(got, want) {
 		t.Fatalf("digests = %q, want %q", got, want)
 	}
-	w.fullTickAt(24*time.Hour + 6*time.Minute)
-	if got := w.digests(); len(got) != 1 {
-		t.Fatalf("digests a tick later = %q, want still one", got)
-	}
 	w.fullTickAt(27*time.Hour + time.Minute)
-	want = append(want, "factory: long waits:\n"+
-		" - e1-w1 (o/r#12) in needs_you for 27h0m0s, waiting on you\n"+
-		" - e1-w2 (o/r#13) in needs_you for 27h0m0s, waiting on you\n"+
-		" - e1-w3 (o/r#14) in needs_you for 24h0m0s, waiting on you")
-	if got := w.digests(); !slices.Equal(got, want) {
-		t.Fatalf("digests once e1-w3 crossed 24h = %q, want %q", got, want)
+	if got := w.digests(); len(got) != 1 {
+		t.Fatalf("digests once e1-w3 crossed 24h, 3h after the last = %q, want still one", got)
 	}
-	w.fullTickAt(51 * time.Hour)
+	w.fullTickAt(30*time.Hour + time.Minute)
+	want = append(want, "factory: long waits:\n"+
+		" - e1-w1 (o/r#12) in needs_you for 30h0m0s, waiting on you\n"+
+		" - e1-w2 (o/r#13) in needs_you for 30h0m0s, waiting on you\n"+
+		" - e1-w3 (o/r#14) in needs_you for 27h0m0s, waiting on you")
+	if got := w.digests(); !slices.Equal(got, want) {
+		t.Fatalf("digests 6h after the last = %q, want %q", got, want)
+	}
+	w.fullTickAt(54 * time.Hour)
 	if got := w.digests(); len(got) != 2 {
 		t.Fatalf("digests 23h59m after the last = %q, want still two", got)
 	}
-	w.fullTickAt(51*time.Hour + 2*time.Minute)
-	if got := w.digests(); len(got) != 3 || !strings.Contains(got[2], "e1-w3 (o/r#14) in needs_you for 48h0m0s") {
+	w.fullTickAt(54*time.Hour + 2*time.Minute)
+	if got := w.digests(); len(got) != 3 || !strings.Contains(got[2], "e1-w3 (o/r#14) in needs_you for 51h0m0s") {
 		t.Errorf("digests a day after the last = %q, want a third listing all three", got)
 	}
 	if done := slices.DeleteFunc(w.kinds("e1", events.KindDone), func(ev events.Event) bool { return !strings.HasPrefix(ev.Key, waitDigestPrefix) }); len(done) != 3 {
 		t.Errorf("digest dones on e1 = %+v, want three", done)
 	}
 	w.noErrors()
+}
+
+// A digest lists the waits only the user or something outside moves: a
+// merge hold, not a babysitter that has work to do.
+func TestADigestLeavesOutWaitsSomeoneMoves(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		world  func(*world)
+		listed bool
+	}{
+		{name: "a merge hold", world: func(w *world) {
+			w.writeStatus(item, func(st *store.Status) { st.MergeHold = "it is not approved" })
+		}, listed: true},
+		{name: "a babysitter trigger", world: func(w *world) {
+			w.append(w.dir(item), events.Event{Kind: events.KindRequest, Recipient: recipientBabysitter, Request: "comment", Text: "a new comment"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.inReviewWith(oneItem("[]"), time.Minute)
+			tc.world(w)
+			w.now = w.now.Add(25 * time.Hour)
+			r := moverRun(t, w, func(r *run) {
+				r.dry = false
+				pr := gh.PR{Number: 5, State: "OPEN"}
+				r.ents[item].pr = &pr
+			})
+			r.digestWaits()
+			if got := w.digests(); len(got) == 1 != tc.listed {
+				t.Errorf("digests = %q, want listed %v", got, tc.listed)
+			}
+		})
+	}
 }
 
 func TestNoDigestWithoutAWaitOverADay(t *testing.T) {

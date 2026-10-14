@@ -53,6 +53,9 @@ values:
   # #<review_channel_name>.
   review_channel: C09QMJQ71FW
   review_channel_name: engineering
+  # On each full reconcile the program reads the checks of at most stall_reads items it sent to
+  # needs_you on red checks, and releases those whose cause is gone.
+  stall_reads: 5
 
 deny:
   models: [fable]

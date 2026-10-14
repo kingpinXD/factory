@@ -137,6 +137,9 @@ type Status struct {
 	// WantsReview is set while an in_review PR waits only on an approval
 	// and other work waits on it, as the last full reconcile saw it.
 	WantsReview bool `json:"wants_review,omitempty"`
+	// ChecksReadAt is when the stall check last read the checks on the
+	// head of an item in needs_you; the least recently read go first.
+	ChecksReadAt time.Time `json:"checks_read_at,omitzero"`
 	// ShortID is the short id `claude agents` last listed a session under,
 	// which `claude attach` and `claude logs` take as well as its name.
 	ShortID string `json:"short_id,omitempty"`

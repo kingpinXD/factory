@@ -98,6 +98,9 @@ type Values struct {
 	// ReviewChannelName is ReviewChannel's name, without #, for status and
 	// DMs.
 	ReviewChannelName string `yaml:"review_channel_name" json:"review_channel_name"`
+	// StallReads is how many items the program sent to needs_you a full
+	// reconcile reads the checks of, to release those whose cause is gone.
+	StallReads int `yaml:"stall_reads" json:"stall_reads"`
 }
 
 // Supervision holds the restart, nudge and escalation values.

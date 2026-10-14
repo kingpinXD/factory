@@ -846,7 +846,7 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	ref := t.TriggerRef
 	switch {
 	case strings.HasPrefix(ref, timeoutRef):
-		return fmt.Sprintf("%s timed out after %s", t.From, time.Duration(e.m.States[t.From].Timeout))
+		return fmt.Sprintf("%s timed out after %s", t.From, time.Duration(e.m.States[t.From].Timeout)) + releasedNote(e, t)
 	case strings.HasPrefix(ref, deadLetterRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, deadLetterRef))
 		return fmt.Sprintf("the same error %d times (dead-lettered): %s", r.b.Values.Supervision.SameErrorDeadLetter, ev.Text)
@@ -873,7 +873,7 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, blockedTooOftenRef))
 		return fmt.Sprintf("its sessions sent blocked_by %d times; the last: %s", blockedByLimit+1, ev.Text)
 	case strings.HasPrefix(ref, redAfterPassRef):
-		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef)))
+		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef))) + releasedNote(e, t)
 	}
 	return ""
 }

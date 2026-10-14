@@ -426,6 +426,11 @@ func TestValidateRules(t *testing.T) {
 			rule:   "review", msg: "values.review_channel_name is empty; want the name of review_channel, without #, for status and DMs",
 		},
 		{
+			name:   "stall_reads missing",
+			breaks: func(b *Blueprint) { b.Values.StallReads = 0 },
+			rule:   "stall", msg: "values.stall_reads is 0; want at least 1",
+		},
+		{
 			name: "a live entity's state was removed",
 			live: []EntityState{{Machine: MachineWork, ID: "w-1", State: "exploring"}},
 			rule: "live_state", msg: `work w-1 is in state "exploring", which machine "work" no longer has`,

@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -281,5 +282,334 @@ func TestAFullReconcileReadsTheLeastRecentlyReadEscalationsUpToStallReads(t *tes
 		if got := w.releases(fmt.Sprintf("e1-w%d", i)); len(got) != 0 {
 			t.Errorf("released a red head: %+v", got)
 		}
+	}
+}
+
+// stuckInReview puts item e1-w1 in in_review with no one to move it: its PR
+// is a draft, so nothing merges it, and its worktree came back from its
+// babysitter, so nothing watches the PR. One full reconcile has run.
+func stuckInReview(t *testing.T) *world {
+	t.Helper()
+	w := watching(t)
+	w.pr(func(pr *gh.PR) { pr.IsDraft = true })
+	w.append(w.dir(item), events.Event{At: w.now, Kind: events.KindHandback, Sender: events.SenderProgram, Text: "fixture"})
+	w.tick(false)
+	return w
+}
+
+// stallSignals returns the stall signals in epic e1's log.
+func (w *world) stallSignals() []events.Event {
+	return slices.DeleteFunc(w.kinds("e1", events.KindRequest), func(ev events.Event) bool { return ev.Request != signalStall })
+}
+
+// stallKey is the key of the stall signal for id in its current state.
+func (w *world) stallKey(id string) string {
+	return fmt.Sprintf("%s%s:%d", stallPrefix, id, last(w.kinds(id, events.KindTransition)).Seq)
+}
+
+// ackAll acks every message in id's inbox, as its session does once it
+// read them.
+func (w *world) ackAll(id string) {
+	w.t.Helper()
+	for _, m := range events.Inbox(w.log(id)) {
+		if err := events.Ack(store.EventsPath(w.dir(id)), m.Seq, id); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+}
+
+// recheckV ends epic e1's running re-check with plan as epic.v<v>.yaml, after
+// its planner read what it was sent.
+func (w *world) recheckV(v int, plan string) {
+	w.t.Helper()
+	w.ackAll("e1")
+	w.end("e1", fmt.Sprintf("state-check.v%d.md", v), stateCheck)
+	w.end("e1", fmt.Sprintf("epic.v%d.yaml", v), plan)
+}
+
+func TestAnItemNoOneMovesIsStalledAfterStallAfter(t *testing.T) {
+	w := stuckInReview(t)
+	w.fullTick(29 * time.Minute)
+	if got := w.stallSignals(); len(got) != 0 || len(w.dmsWith("stalled")) != 0 {
+		t.Fatalf("at 29m: stall signals %+v, DMs %q; want none", got, w.dms)
+	}
+	key := w.stallKey(item)
+	w.fullTick(2 * time.Minute)
+	got := w.stallSignals()
+	if len(got) != 1 || got[0].Key != key || got[0].Recipient != recipientRecheck || !slices.Equal(signalCovers(got[0]), []string{"o/r#14"}) {
+		t.Fatalf("stall signals = %+v, want one under %s covering o/r#14", got, key)
+	}
+	const dm = "factory: e1-w1 (o/r#14) stalled in in_review: no one has moved it for 31m0s. e1 re-checks it."
+	if got := w.dmsWith("stalled"); !slices.Equal(got, []string{dm}) {
+		t.Errorf("DMs = %q, want %q", got, dm)
+	}
+	w.fullTick(time.Minute)
+	if got := w.status(item).State; got != workRechecking {
+		t.Errorf("%s is %s after the stall signal, want rechecking", item, got)
+	}
+	if inbox := strings.Join(w.inbox("e1"), "\n"); !strings.Contains(inbox, "e1-w1 stalled in in_review: no one moved it for 31m0s") {
+		t.Errorf("planner inbox %q does not say what stalled", inbox)
+	}
+	if got := w.stallSignals(); len(got) != 1 || len(w.dmsWith("stalled")) != 1 {
+		t.Errorf("stall signals %+v, DMs %q; want one of each", got, w.dms)
+	}
+	w.noErrors()
+}
+
+func TestABlockedItemWhoseRecheckEndedWithNothingIsStalled(t *testing.T) {
+	w := newWorld(t)
+	w.blockW1(twoItems("[]"), workImplementing)
+	w.recheckAs(twoItems("[]"))
+	w.ackAll("e1")
+	w.ticks(2)
+	if got := w.status("e1-w1").State; got != stateBlocked {
+		t.Fatalf("e1-w1 is %s, want blocked; moves %v", got, w.moves("e1-w1"))
+	}
+	planner := w.listedSession("factory:e1:planner")
+	w.setState(planner.Name, planner.PID, listedTurnEnded)
+	w.fullTick(28 * time.Minute)
+	if got := w.stallSignals(); len(got) != 0 {
+		t.Fatalf("at 28m: stall signals %+v, want none", got)
+	}
+	key := w.stallKey("e1-w1")
+	w.fullTick(2 * time.Minute)
+	if got := w.stallSignals(); len(got) != 1 || got[0].Key != key {
+		t.Fatalf("stall signals = %+v, want one under %s", got, key)
+	}
+}
+
+func TestOnlyQueuedInReviewBlockedAndRecheckingWorkIsJudged(t *testing.T) {
+	for _, state := range []string{workImplementing, workPROpen, workMerging, stateWaitingUser, stateNeedsYou} {
+		t.Run("work "+state, func(t *testing.T) {
+			w := newWorld(t)
+			w.registry()
+			w.planned("e1", oneItem("[]"))
+			w.moveTo("e1-s1", setRunning)
+			w.moveTo(item, state)
+			w.fullTick(45 * time.Minute)
+			if got := w.stallSignals(); len(got) != 0 || len(w.dmsWith("stalled")) != 0 {
+				t.Errorf("stall signals %+v, DMs %q; want none", got, w.dms)
+			}
+		})
+	}
+	w := newWorld(t)
+	for i, state := range []string{epicPlanned, "running", "merging", "uat"} {
+		ep := fmt.Sprintf("e%d", i+1)
+		w.epic(ep, state)
+		w.set(ep, ep+"-s1", map[bool]string{true: "queued", false: stateBlocked}[i%2 == 0])
+	}
+	w.fullTick(45 * time.Minute)
+	for i := range 4 {
+		if got := w.kinds(fmt.Sprintf("e%d", i+1), events.KindRequest); len(got) != 0 {
+			t.Errorf("e%d has signals %+v, want none", i+1, got)
+		}
+	}
+	if got := w.dmsWith("stalled"); len(got) != 0 {
+		t.Errorf("DMs = %q, want none", got)
+	}
+}
+
+func TestAQueuedItemBehindAnItemBeingWorkedIsNotStalled(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", sameSet)
+	w.moveTo("e1-s1", setRunning)
+	w.moveTo("e1-w1", workImplementing)
+	w.fullTick(31 * time.Minute)
+	if got := w.status("e1-w2").State; got != workQueued {
+		t.Fatalf("e1-w2 is %s, want queued", got)
+	}
+	if got := w.stallSignals(); len(got) != 0 {
+		t.Errorf("stall signals %+v, want none", got)
+	}
+}
+
+// moverRun reads the world as a full reconcile's run, its account ok, then
+// changes the run with adjust.
+func moverRun(t *testing.T, w *world, adjust func(*run)) *run {
+	t.Helper()
+	r, err := readRun(context.Background(), w.deps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.useAccount(stateOK, nil)
+	r.full = true
+	if adjust != nil {
+		adjust(r)
+	}
+	return r
+}
+
+func TestEachMoverKeepsAnItemOut(t *testing.T) {
+	readPR := func(r *run) { pr := gh.PR{Number: 5, State: "OPEN"}; r.ents[item].pr = &pr }
+	setStatus := func(w *world, id string, change func(*store.Status)) {
+		st := w.status(id)
+		change(&st)
+		if err := store.WriteStatus(w.dir(id), st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued := func(plan string) func(*world) {
+		return func(w *world) {
+			w.registry()
+			w.planned("e1", plan)
+			w.moveTo("e1-s1", setRunning)
+		}
+	}
+	for _, tc := range []struct {
+		name, id string
+		world    func(*world)
+		adjust   func(*run)
+		want     string
+	}{
+		{name: "no one", world: func(w *world) {
+			w.inReviewWith(oneItem("[]"), time.Minute)
+			w.append(w.dir(item), events.Event{Kind: events.KindHandback})
+		},
+			adjust: readPR, want: ""},
+		{name: "its PR not read", world: func(w *world) {
+			w.inReviewWith(oneItem("[]"), time.Minute)
+			w.append(w.dir(item), events.Event{Kind: events.KindHandback})
+		}, want: "its PR, not read this reconcile"},
+		{name: "a working babysitter", world: func(w *world) {
+			w.inReviewWith(oneItem("[]"), time.Minute)
+			w.babysitter(1, sessionRunning, 5300, listedWorking)
+		}, adjust: readPR, want: "its babysitter"},
+		{name: "a babysitter trigger", world: func(w *world) {
+			w.inReviewWith(oneItem("[]"), time.Minute)
+			w.append(w.dir(item), events.Event{Kind: events.KindRequest, Recipient: recipientBabysitter, Request: "comment", Text: "a new comment"})
+		}, adjust: readPR, want: "its babysitter"},
+		{name: "a merge hold", world: func(w *world) {
+			w.inReviewWith(oneItem("[]"), time.Minute)
+			w.append(w.dir(item), events.Event{Kind: events.KindHandback})
+			setStatus(w, item, func(st *store.Status) { st.MergeHold = "it is not approved" })
+		}, adjust: readPR, want: "its merge hold: it is not approved"},
+		{name: "a waiting link", world: queued(oneItem("\n  - {from: o/r#99, to: w1, gate: start, when: merged, rollback: none}")),
+			want: "a gate: start link into it"},
+		{name: "a red base", world: queued(oneItem("[]")), adjust: func(r *run) {
+			r.bases["o/r@main"] = baseRead{res: gh.BaseResult{Checks: []gh.BaseCheck{{Name: "ci", Red: true}}}}
+		}, want: "its base o/r@main, red"},
+		{name: "the account", world: queued(oneItem("[]")), adjust: func(r *run) { r.useAccount(stateNearLimit, nil) }, want: "the account"},
+		{name: "its set not claimed", world: func(w *world) { w.registry(); w.planned("e1", oneItem("[]")) }, want: "its set e1-s1, still queued"},
+		{name: "an item of its set being worked", id: "e1-w2", world: func(w *world) {
+			queued(sameSet)(w)
+			w.moveTo("e1-w1", workImplementing)
+		}, want: "e1-w1, being worked"},
+		{name: "an earlier item of its set ready", id: "e1-w2", world: func(w *world) {
+			queued(sameSet)(w)
+			w.moveTo("e1-w2", workQueued)
+		}, want: "e1-w1, ready to start first"},
+		{name: "you", world: func(w *world) {
+			queued(oneItem("[]"))(w)
+			w.toNeedsYou(item, workInReview, deadLetterRef+"4")
+		}, want: "you"},
+		{name: "a pending re-check", world: func(w *world) {
+			queued(oneItem("[]"))(w)
+			w.moveTo(item, stateBlocked)
+			w.append(w.dir("e1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientRecheck, Request: signalBlocker, Text: "o/r#14", Key: "blocker:e1-w1:9"})
+		}, want: "e1's re-check"},
+		{name: "a working planner", world: func(w *world) {
+			queued(oneItem("[]"))(w)
+			w.moveTo(item, workRechecking)
+			w.planner("e1", sessionRunning, 5400, listedWorking)
+		}, want: "e1's re-check"},
+		{name: "a planner whose turn ended", world: func(w *world) {
+			queued(oneItem("[]"))(w)
+			w.moveTo(item, workRechecking)
+			w.planner("e1", sessionTurnEnded, 5400, listedTurnEnded)
+		}, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			tc.world(w)
+			id := cmp.Or(tc.id, item)
+			r := moverRun(t, w, tc.adjust)
+			if got := r.mover(r.ents[id]); got != tc.want {
+				t.Errorf("mover of %s (%s) = %q, want %q", id, r.ents[id].cur.State, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFindingStallsCallsNothing(t *testing.T) {
+	w := stuckInReview(t)
+	w.planned("e2", oneItem("\n  - {from: o/r#99, to: w1, gate: start, when: merged, rollback: none}"))
+	w.moveTo("e2-s1", setRunning)
+	w.now = w.now.Add(31 * time.Minute)
+	r := moverRun(t, w, func(r *run) {
+		r.listing()
+		pr := gh.PR{Number: 5, State: "OPEN"}
+		r.ents[item].pr = &pr
+	})
+	before := len(w.fake.Calls())
+	r.findStalls()
+	if got := w.calls()[before:]; len(got) != 0 {
+		t.Errorf("finding stalls called %q", got)
+	}
+	if out := w.out.String(); !strings.Contains(out, "e1-w1: stalled in in_review") || strings.Contains(out, "e2-w1: stalled") {
+		t.Errorf("want e1-w1 stalled and e2-w1 waiting on its link:\n%s", out)
+	}
+}
+
+func TestStallsAreCappedThenTheItemWaitsForYou(t *testing.T) {
+	w := stuckInReview(t)
+	for n := 1; n <= 3; n++ {
+		w.fullTick(31 * time.Minute)
+		if got := w.stallSignals(); len(got) != n {
+			t.Fatalf("stall %d: %d stall signals, want %d", n, len(got), n)
+		}
+		w.fullTick(time.Minute)
+		if got := w.status(item).State; got != workRechecking {
+			t.Fatalf("stall %d: %s is %s, want rechecking", n, item, got)
+		}
+		if n == 1 {
+			w.fullTick(31 * time.Minute)
+			if got := w.status(item).State; got != workRechecking || len(w.stallSignals()) != 1 {
+				t.Fatalf("a re-check its planner works on: %s is %s with %d stall signals", item, got, len(w.stallSignals()))
+			}
+		}
+		w.recheckV(n+1, oneItem("[]"))
+		w.fullTick(time.Minute)
+		if got := w.status(item).State; got != workInReview {
+			t.Fatalf("stall %d: %s is %s after its re-check, want in_review", n, item, got)
+		}
+	}
+	w.fullTick(29 * time.Minute)
+	if got := w.status(item).State; got != workInReview {
+		t.Fatalf("%s is %s 29m after its third re-check, want in_review", item, got)
+	}
+	w.fullTick(2 * time.Minute)
+	moved := last(w.kinds(item, events.KindTransition))
+	if moved.To != stateNeedsYou || !strings.HasPrefix(moved.TriggerRef, stallsRef+item+":") {
+		t.Fatalf("%s moved to %s on %q; want needs_you on stalls:", item, moved.To, moved.TriggerRef)
+	}
+	const why = "no one moved it in in_review for 30m0s after 3 stall re-checks"
+	if got := w.dmsWith(why); len(got) != 1 {
+		t.Errorf("DMs = %q, want one that says %q", w.dms, why)
+	}
+	w.fullTick(31 * time.Minute)
+	if got := w.stallSignals(); len(got) != 3 || len(w.dmsWith(why)) != 1 {
+		t.Errorf("%d stall signals and DMs %q after needs_you; want 3 and one", len(got), w.dms)
+	}
+}
+
+// A capped item in a re-check that ended without moving it gets no more
+// stall signals, and stays: from needs_you, a retry could not take it back.
+func TestAStalledItemInARecheckStaysThereAtTheCap(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", oneItem("[]"))
+	w.ackAll("e1")
+	w.moveTo("e1-s1", setRunning)
+	w.append(w.dir(item), events.Event{Kind: events.KindTransition, At: w.now, From: workQueued, To: workRechecking, Prev: []string{workQueued},
+		Trigger: "file", TriggerRef: "recheck:e1:999"})
+	for n := 1; n <= 3; n++ {
+		sig := w.append(w.dir("e1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: recipientRecheck,
+			Request: signalStall, Text: "o/r#14", Key: fmt.Sprintf("%s%s:%d", stallPrefix, item, 100+n)})
+		w.append(w.dir("e1"), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Key: consumedKey(sig)})
+	}
+	w.fullTick(31 * time.Minute)
+	if got := w.status(item).State; got != workRechecking || len(w.stallSignals()) != 3 {
+		t.Errorf("%s is %s with %d stall signals; want rechecking with 3", item, got, len(w.stallSignals()))
 	}
 }

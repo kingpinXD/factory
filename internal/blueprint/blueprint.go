@@ -101,6 +101,9 @@ type Values struct {
 	// StallReads is how many items the program sent to needs_you a full
 	// reconcile reads the checks of, to release those whose cause is gone.
 	StallReads int `yaml:"stall_reads" json:"stall_reads"`
+	// StallAfter is how long an open work item may wait with no one to
+	// move it before its epic re-checks it.
+	StallAfter Duration `yaml:"stall_after" json:"stall_after"`
 }
 
 // Supervision holds the restart, nudge and escalation values.

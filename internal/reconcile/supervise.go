@@ -872,6 +872,8 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	case strings.HasPrefix(ref, blockedTooOftenRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, blockedTooOftenRef))
 		return fmt.Sprintf("its sessions sent blocked_by %d times; the last: %s", blockedByLimit+1, ev.Text)
+	case strings.HasPrefix(ref, stallsRef):
+		return fmt.Sprintf("no one moved it in %s for %s after %d stall re-checks", t.From, time.Duration(r.b.Values.StallAfter), r.b.Values.Supervision.PlannerRunsPerProblem)
 	case strings.HasPrefix(ref, redAfterPassRef):
 		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef))) + releasedNote(e, t)
 	}

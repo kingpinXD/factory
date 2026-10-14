@@ -9,6 +9,7 @@ values:
   review_channel: C09QMJQ71FW
   review_channel_name: engineering
   stall_reads: 5
+  stall_after: 30m
 deny:
   models: [fable]
 components:

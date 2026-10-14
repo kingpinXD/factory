@@ -102,10 +102,12 @@ type blockerRead struct {
 	err   error
 }
 
+func blockerKey(ref epic.Ref) string { return strings.ToLower(ref.String()) }
+
 // readBlocker reads a blocker issue, and the PR when it is one, once a tick:
 // every guard of every item, set and epic that waits on it asks.
 func (r *run) readBlocker(ref epic.Ref) blockerRead {
-	k := strings.ToLower(ref.String())
+	k := blockerKey(ref)
 	if b, ok := r.blockerReads[k]; ok {
 		return b
 	}

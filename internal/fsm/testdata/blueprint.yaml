@@ -56,6 +56,10 @@ values:
   # On each full reconcile the program reads the checks of at most stall_reads items it sent to
   # needs_you on red checks, and releases those whose cause is gone.
   stall_reads: 5
+  # An open work item in queued, in_review, blocked or rechecking that no one moves for
+  # stall_after gets a re-check of its epic and one DM; after planner_runs_per_problem of those
+  # it waits for the user.
+  stall_after: 30m
 
 deny:
   models: [fable]

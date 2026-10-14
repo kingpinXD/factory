@@ -172,8 +172,8 @@ func (r *run) settleReviews(carrier *entity) {
 		if len(unposted) == 0 || carrier.has(reviewDMPrefix+list) || !r.reviewUnanswered(carrier, req) {
 			continue
 		}
-		text := fmt.Sprintf("factory: %s's babysitter did not post the review request; post it in %s yourself:\n - %s",
-			carrier.id, r.b.Values.ReviewChannel, strings.Join(unposted, "\n - "))
+		text := fmt.Sprintf("factory: %s's babysitter did not post the review request; post it in #%s yourself:\n - %s",
+			carrier.id, r.b.Values.ReviewChannelName, strings.Join(unposted, "\n - "))
 		r.dm(carrier, reviewDMPrefix+list, text)
 	}
 }
@@ -198,7 +198,8 @@ func (r *run) markPosted(done events.Event) {
 }
 
 // unposted returns the URLs of the PRs in a review request's list,
-// owner/repo#n joined by commas, that were not posted.
+// owner/repo#n joined by commas, that were not posted and still wait on a
+// review: open and not approved.
 func (r *run) unposted(list string) []string {
 	var urls []string
 	for _, s := range strings.Split(list, ",") {
@@ -206,18 +207,24 @@ func (r *run) unposted(list string) []string {
 		if err != nil {
 			continue
 		}
-		if it := r.itemByPR(ref); it != nil && !it.has(reviewPostKey(ref)) {
-			urls = append(urls, it.st.PRURL)
+		it := r.itemByPR(ref)
+		if it == nil || it.has(reviewPostKey(ref)) || it.st.PRState != prOpen || it.pr != nil && approved(*it.pr) {
+			continue
 		}
+		urls = append(urls, it.st.PRURL)
 	}
 	return urls
 }
 
-// reviewUnanswered: the carrier left review, or a pass of its babysitter
-// that began after req reached it ended. A pass under way when req reached
-// it may end before reading it; the next one gets to it.
+// reviewUnanswered: the carrier left review for good, or a pass of its
+// babysitter that began after req reached it ended. A pass under way when
+// req reached it may end before reading it; the next one gets to it. A
+// carrier in a re-check or blocked comes back.
 func (r *run) reviewUnanswered(carrier *entity, req events.Event) bool {
-	if !slices.Contains(watchStates, carrier.cur.State) {
+	switch {
+	case carrier.cur.State == workRechecking || carrier.cur.State == stateBlocked:
+		return false
+	case !slices.Contains(watchStates, carrier.cur.State):
 		return true
 	}
 	given, ok := carrier.byKey(reviewGivenKey(req))
@@ -257,7 +264,7 @@ func (r *run) noteReviewsGiven() {
 // stands: posted, and when, or wanted.
 func (r *run) reviewStatus(it *entity) (string, time.Time) {
 	if ev, ok := it.byKey(reviewPostKey(prRef(it))); ok {
-		return "review requested in " + r.b.Values.ReviewChannel, ev.At
+		return "review requested in #" + r.b.Values.ReviewChannelName, ev.At
 	}
 	if it.st.WantsReview {
 		return "wants a review", time.Time{}

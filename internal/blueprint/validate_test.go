@@ -431,6 +431,11 @@ func TestValidateRules(t *testing.T) {
 			rule:   "review", msg: "values.review_channel is empty; want the Slack channel id review requests are posted in",
 		},
 		{
+			name:   "review_channel_name missing",
+			breaks: func(b *Blueprint) { b.Values.ReviewChannelName = "" },
+			rule:   "review", msg: "values.review_channel_name is empty; want the name of review_channel, without #, for status and DMs",
+		},
+		{
 			name:   "an mcp config that does not exist",
 			breaks: func(b *Blueprint) { setComponent(b, "planner", func(c *Component) { c.MCP = "default" }) },
 			rule:   "mcp", msg: `component "planner": mcp "default" needs <brain>/connectors/default.mcp.json, which does not exist`,

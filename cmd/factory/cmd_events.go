@@ -71,6 +71,17 @@ func runEvent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "factory event: %v\n", err)
 		return 2
 	}
+	if kind == events.KindBlockedBy {
+		refusal, err := reconcile.BlockedByRefusal(context.Background(), blueprint.Brain(), id, sender())
+		if err != nil {
+			fmt.Fprintf(stderr, "factory event: %v\n", err)
+			return 1
+		}
+		if refusal != "" {
+			fmt.Fprintf(stderr, "factory event: %s\n", refusal)
+			return 2
+		}
+	}
 
 	logged, err := logEvent(id, events.Event{Kind: kind, Sender: sender(), Text: *text}, *file, *to)
 	if err != nil {

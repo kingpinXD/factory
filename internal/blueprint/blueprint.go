@@ -94,6 +94,9 @@ type Values struct {
 	// ReviewChannel is the Slack channel id a babysitter posts review
 	// requests in, for PRs that wait on an approval and hold other work.
 	ReviewChannel string `yaml:"review_channel" json:"review_channel"`
+	// ReviewChannelName is ReviewChannel's name, without #, for status and
+	// DMs.
+	ReviewChannelName string `yaml:"review_channel_name" json:"review_channel_name"`
 }
 
 // Supervision holds the restart, nudge and escalation values.

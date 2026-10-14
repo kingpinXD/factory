@@ -395,22 +395,40 @@ func (r *run) retryAllowed(e *entity) (bool, string, error) {
 // instructionReceived: an instruction to the entity in its current state;
 // for a work item, also one to its set since the item was blocked. The
 // planner sends that one during the re-check the block starts, so it can
-// predate the item's return from that re-check.
+// predate the item's return from that re-check. After a blocked_by, the
+// set's instruction counts only when it starts "<item id>:", and work
+// before pr_open also waits for its set (waitsForSet).
 func (r *run) instructionReceived(e *entity) (bool, string, error) {
-	if ev, ok := e.newest(events.KindInstruction, nil); ok {
-		return true, seqRef(ev), nil
+	ref, ok := r.instruction(e)
+	if !ok || e.work == nil {
+		return ok, ref, nil
 	}
-	if e.work == nil || r.ents[e.work.Set] == nil {
-		return false, "", nil
-	}
-	set, since := r.ents[e.work.Set], blockedAt(e)
-	for i := len(set.evs) - 1; i >= 0; i-- {
-		ev := set.evs[i]
-		if ev.Kind == events.KindInstruction && !ev.At.Before(since) {
-			return true, eventRef(set.id, ev), nil
+	if entry, ok := blockEntry(e); ok && blockedByReport(entry) {
+		if wait, err := r.waitsForSet(e); wait || err != nil {
+			return false, "", err
 		}
 	}
-	return false, "", nil
+	return true, ref, nil
+}
+
+// instruction returns the ref of the instruction instructionReceived counts.
+func (r *run) instruction(e *entity) (string, bool) {
+	if ev, ok := e.newest(events.KindInstruction, nil); ok {
+		return seqRef(ev), true
+	}
+	if e.work == nil || r.ents[e.work.Set] == nil {
+		return "", false
+	}
+	set, since := r.ents[e.work.Set], blockedAt(e)
+	entry, ok := blockEntry(e)
+	named := ok && blockedByReport(entry)
+	for i := len(set.evs) - 1; i >= 0; i-- {
+		ev := set.evs[i]
+		if ev.Kind == events.KindInstruction && !ev.At.Before(since) && (!named || strings.HasPrefix(ev.Text, e.id+":")) {
+			return eventRef(set.id, ev), true
+		}
+	}
+	return "", false
 }
 
 // blockedAt returns when the item was last blocked: its newest escalation

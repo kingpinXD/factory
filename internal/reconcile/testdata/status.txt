@@ -24,6 +24,6 @@ agents (3):
   factory:e1-w1:babysitter  id ?  running, context ?, 0 unread
   factory:e2-s1:orchestrator  id ?  stopped, context ?, 0 unread
 open PRs (1):
-  e1-w1  https://github.com/o/r/pull/41  in_review, 2 unanswered, not merged yet: a reviewer requested changes, review requested in C09QMJQ71FW 25m0s ago
+  e1-w1  https://github.com/o/r/pull/41  in_review, 2 unanswered, not merged yet: a reviewer requested changes, review requested in #engineering 25m0s ago
 errors in the last tick (1):
   e9: claude agents: exit status 1

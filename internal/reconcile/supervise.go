@@ -869,6 +869,9 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 		return fmt.Sprintf("%d plan versions in a row were refused; the last: %s", r.b.Values.Supervision.PlannerRunsPerProblem, refusal)
 	case e.work != nil && t.From == workClosed:
 		return fmt.Sprintf("its PR %s was closed without merging", e.st.PRURL)
+	case strings.HasPrefix(ref, blockedTooOftenRef):
+		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, blockedTooOftenRef))
+		return fmt.Sprintf("its sessions sent blocked_by %d times; the last: %s", blockedByLimit+1, ev.Text)
 	case strings.HasPrefix(ref, redAfterPassRef):
 		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef)))
 	}

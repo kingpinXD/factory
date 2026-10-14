@@ -1,12 +1,14 @@
 package reconcile
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/gh"
 )
 
 // sameSet is a plan with two items in one set: an orchestrator works w1,
@@ -170,12 +172,51 @@ func TestAnInstructionDuringTheBlockerRecheckReleasesTheItem(t *testing.T) {
 	w := newWorld(t)
 	w.blockW1(twoItems("[]"), workImplementing)
 	w.now = w.now.Add(time.Minute)
-	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "use the old helper"})
+	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "e1-w1: use the old helper"})
 	w.recheckAs(twoItems("[]"))
 	w.ticks(3)
 	want := []string{"implementing→blocked", "blocked→rechecking", "rechecking→blocked", "blocked→implementing"}
 	if got := w.moves("e1-w1"); !slices.Equal(got[len(got)-4:], want) {
 		t.Errorf("moves %v, want them to end %v", got, want)
+	}
+}
+
+// An instruction to the set that does not start with the blocked item's id
+// is about other work: it leaves the item blocked.
+func TestAnInstructionForOtherWorkLeavesTheItemBlocked(t *testing.T) {
+	w := newWorld(t)
+	w.blockW1(twoItems("[]"), workImplementing)
+	w.now = w.now.Add(time.Minute)
+	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "use the old helper"})
+	w.recheckAs(twoItems("[]"))
+	w.ticks(3)
+	if got := w.status("e1-w1").State; got != stateBlocked {
+		t.Fatalf("e1-w1 is %s after an instruction that does not name it, want blocked; moves %v", got, w.moves("e1-w1"))
+	}
+	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "e1-w1: use the old helper"})
+	w.ticks(1)
+	if got := w.moves("e1-w1"); last(got) != "blocked→implementing" {
+		t.Errorf("e1-w1 moves %v, want back to implementing on the instruction that names it", got)
+	}
+}
+
+// The instruction answer waits, like a released link, until no other item
+// of the set is being worked.
+func TestAnInstructedItemWaitsForItsSetsActiveItem(t *testing.T) {
+	w := newWorld(t)
+	w.blockW1(sameSet, workImplementing)
+	w.moveTo("e1-w2", workImplementing)
+	w.now = w.now.Add(time.Minute)
+	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "e1-w1: use the old helper"})
+	w.recheckAs(sameSet)
+	w.ticks(3)
+	if got := w.status("e1-w1").State; got != stateBlocked {
+		t.Fatalf("e1-w1 is %s while e1-w2 is implementing, want blocked; moves %v", got, w.moves("e1-w1"))
+	}
+	w.moveTo("e1-w2", workPROpen)
+	w.ticks(1)
+	if got := w.moves("e1-w1"); last(got) != "blocked→implementing" {
+		t.Errorf("e1-w1 moves %v, want back to implementing once e1-w2 reached pr_open", got)
 	}
 }
 
@@ -190,7 +231,7 @@ func TestAnInReviewItemGoesBackToReviewAtOnce(t *testing.T) {
 	w.orchestrator("e1-s1", "turn_ended", 4401, "done")
 	w.listen(w.orchestrator("e1-s1", "turn_ended", 4401, "done").PID)
 	w.moveTo("e1-s1", "running")
-	w.inReview("e1-w1", 5)
+	w.listen(w.inReview("e1-w1", 5).PID)
 	w.moveTo("e1-w2", workImplementing)
 	w.blockedBy("e1-w1", "needs o/r#14's API first")
 	w.ticks(2)
@@ -236,5 +277,134 @@ func TestAnOldReleasedLinkWaitsForTheBlockerRecheck(t *testing.T) {
 	w.ticks(2)
 	if got := w.moves("e1-w1"); slices.Contains(got, "blocked→implementing") || last(got) != "blocked→rechecking" {
 		t.Errorf("e1-w1 moves %v, want blocked until its re-check, then rechecking", got)
+	}
+	w.recheckAs(twoItems("[{from: w2, to: w1, gate: start, when: merged, rollback: revert w1 too}]"))
+	w.ticks(3)
+	if got := w.status("e1-w1").State; got != stateBlocked {
+		t.Errorf("e1-w1 is %s once a re-check kept only the old link, want blocked; moves %v", got, w.moves("e1-w1"))
+	}
+}
+
+// blockInReview puts e1-w1 in in_review with PR 5, a thread its babysitter
+// answered and left open, and has the babysitter send blocked_by. Two ticks
+// later e1-w1 is in its re-check. It returns what is posted to the
+// babysitter.
+func (w *world) blockInReview() func() []string {
+	w.t.Helper()
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	w.tick(false)
+	posted := w.listen(w.inReview("e1-w1", 5).PID)
+	w.pulls.threads[5] = []gh.Thread{thread("T1", 11, "me")}
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindBlockedBy, Sender: "e1-w1", Text: "needs o/r#14's API first"})
+	w.ticks(2)
+	if got := w.status("e1-w1").State; got != workRechecking {
+		w.t.Fatalf("e1-w1 is %s, want rechecking; moves %v", got, w.moves("e1-w1"))
+	}
+	return posted
+}
+
+// landed returns the requests to e1-w1's babysitter that say its blocker
+// landed.
+func (w *world) landed() []string {
+	var out []string
+	for _, ev := range w.toBabysitter() {
+		if strings.HasPrefix(ev.Text, "e1-w1's blocker landed") {
+			out = append(out, ev.Text)
+		}
+	}
+	return out
+}
+
+// The babysitter left its threads open when it sent blocked_by. Back in
+// review, nothing on the PR is new, so the program wakes it, once.
+func TestABabysitterIsWokenOnceItsBlockerLands(t *testing.T) {
+	w := newWorld(t)
+	posted := w.blockInReview()
+	w.recheckAs(withBlocker(twoItems("[]")))
+	w.ticks(1)
+	w.moveTo("e1-w3", stateMerged)
+	w.ticks(3)
+	if got := w.moves("e1-w1"); last(got) != "blocked→in_review" {
+		t.Fatalf("e1-w1 moves %v, want back to in_review", got)
+	}
+	want := "e1-w1's blocker landed: finish the threads you left open"
+	if got := w.landed(); !slices.Equal(got, []string{want}) {
+		t.Errorf("requests to the babysitter = %q, want one: %s", got, want)
+	}
+	if got := posted(); !slices.ContainsFunc(got, func(s string) bool { return strings.Contains(s, want) }) {
+		t.Errorf("posted to the babysitter: %q, want the wake", got)
+	}
+	w.noErrors()
+}
+
+// Released by an instruction, the babysitter also gets its text.
+func TestAnInstructedInReviewItemPassesTheInstructionToItsBabysitter(t *testing.T) {
+	w := newWorld(t)
+	w.blockInReview()
+	w.now = w.now.Add(time.Minute)
+	w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "e1-w1: the API change is out of scope; say so"})
+	w.recheckAs(twoItems("[]"))
+	w.ticks(3)
+	if got := w.moves("e1-w1"); last(got) != "blocked→in_review" {
+		t.Fatalf("e1-w1 moves %v, want back to in_review", got)
+	}
+	want := "e1-w1's blocker landed: finish the threads you left open. Instruction: e1-w1: the API change is out of scope; say so"
+	if got := w.landed(); !slices.Equal(got, []string{want}) {
+		t.Errorf("requests to the babysitter = %q, want one: %s", got, want)
+	}
+}
+
+// Only the item's own orchestrator or babysitter blocks it.
+func TestBlockedByFromAnotherSessionIsIgnored(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.planned("e1", twoItems("[]"))
+	w.tick(false)
+	w.moveTo("e1-w1", workImplementing)
+	for _, sender := range []string{"e1-s2", "e1-w2", "user"} {
+		w.append(w.dir("e1-w1"), events.Event{Kind: events.KindBlockedBy, Sender: sender, Text: "not mine to say"})
+	}
+	w.ticks(2)
+	if got := w.status("e1-w1").State; got != workImplementing {
+		t.Fatalf("e1-w1 is %s after blocked_by from other sessions, want implementing; moves %v", got, w.moves("e1-w1"))
+	}
+	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindBlockedBy, Sender: "e1-w1", Text: "needs o/r#14 first"})
+	w.tick(false)
+	if got := w.moves("e1-w1"); last(got) != "implementing→blocked" {
+		t.Errorf("e1-w1 moves %v, want blocked by its own session", got)
+	}
+}
+
+// Two blocked_by moves on one item, each answered by an instruction; the
+// third goes to the user, with one DM, and starts no re-check.
+func TestAThirdBlockedByGoesToTheUser(t *testing.T) {
+	w := newWorld(t)
+	w.blockW1(twoItems("[]"), workImplementing)
+	for v := 2; v <= 3; v++ {
+		w.now = w.now.Add(time.Minute)
+		w.append(w.dir("e1-s1"), events.Event{Kind: events.KindInstruction, Sender: "e1", At: w.now, Text: "e1-w1: go on"})
+		w.end("e1", fmt.Sprintf("state-check.v%d.md", v), stateCheck)
+		w.end("e1", fmt.Sprintf("epic.v%d.yaml", v), twoItems("[]"))
+		w.ticks(3)
+		if got := w.status("e1-w1").State; got != workImplementing {
+			t.Fatalf("e1-w1 is %s after re-check %d, want implementing; moves %v", got, v, w.moves("e1-w1"))
+		}
+		if v == 2 {
+			w.blockedBy("e1-w1", "a second blocker")
+			w.ticks(2)
+		}
+	}
+	w.blockedBy("e1-w1", "a third blocker")
+	w.ticks(3)
+	if got := w.moves("e1-w1"); last(got) != "implementing→needs_you" {
+		t.Fatalf("e1-w1 moves %v, want needs_you on the third blocked_by", got)
+	}
+	want := "factory: e1-w1 needs you: its sessions sent blocked_by 3 times; the last: a third blocker. When it is settled: factory retry e1-w1, or factory stop e1-w1 --reason \"<why>\"."
+	if got := w.dmsWith("sent blocked_by"); !slices.Equal(got, []string{want}) {
+		t.Errorf("DMs = %q, want one:\n%s", got, want)
+	}
+	if got := w.signals("e1"); len(got) != 2 {
+		t.Errorf("signals = %v, want the first two blockers only", got)
 	}
 }

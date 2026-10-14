@@ -104,7 +104,6 @@ func TestEventAgentKinds(t *testing.T) {
 		{"intent", "--text", "msg 4: push abc123"},
 		{"done", "--text", "pushed abc123"},
 		{"issue_stale", "--text", "fixed by #12"},
-		{"blocked_by", "--text", "needs o/r#14 first"},
 		{"instruction", "--text", "split the PR"},
 		{"message", "--text", "re-read your issue"},
 		{"checkpoint", "--file", out},
@@ -118,6 +117,39 @@ func TestEventAgentKinds(t *testing.T) {
 	evs := logOf(t, dirs["ea-w1"])
 	if len(evs) != len(cases) || evs[2].Text != "go test failed" || evs[2].Sender != "user" {
 		t.Errorf("log = %+v", evs)
+	}
+}
+
+// blocked_by comes from the item's own orchestrator or babysitter, in a
+// state that can move to blocked.
+func TestEventBlockedBy(t *testing.T) {
+	brain, dirs := eventsBrain(t)
+	writeShipped(t, brain)
+	matchTick(t, brain)
+	for _, c := range []struct {
+		id, task string
+		code     int
+		want     string
+	}{
+		{"ea-w1", "", 2, "factory event: blocked_by is sent by ea-w1's orchestrator (FACTORY_TASK=ea-s1) or babysitter (FACTORY_TASK=ea-w1), not user\n"},
+		{"ea-w1", "eb-s1", 2, "factory event: blocked_by is sent by ea-w1's orchestrator (FACTORY_TASK=ea-s1) or babysitter (FACTORY_TASK=ea-w1), not eb-s1\n"},
+		{"eb-w1", "eb-s1", 2, "factory event: eb-w1 is queued; blocked_by applies only in starting, exploring, planning, plan_review, implementing, verifying, pr_open or in_review\n"},
+		{"ea-s1", "ea-s1", 2, "factory event: ea-s1 is a set; blocked_by names a work item\n"},
+		{"ea-w1", "ea-s1", 0, ""},
+		{"ea-w1", "ea-w1", 0, ""},
+	} {
+		t.Setenv("FACTORY_TASK", c.task)
+		code, _, stderr := cli(t, "event", c.id, "blocked_by", "--text", "needs o/r#14 first")
+		if code != c.code || stderr != c.want {
+			t.Errorf("%s blocked_by from %q = %d, %q; want %d and %q", c.id, c.task, code, stderr, c.code, c.want)
+		}
+	}
+	blocked := slices.DeleteFunc(logOf(t, dirs["ea-w1"]), func(ev events.Event) bool { return ev.Kind != events.KindBlockedBy })
+	if len(blocked) != 2 || blocked[0].Sender != "ea-s1" || blocked[1].Sender != "ea-w1" {
+		t.Errorf("logged blocked_by = %+v, want the orchestrator's and the babysitter's", blocked)
+	}
+	if evs := logOf(t, dirs["eb-w1"]); slices.ContainsFunc(evs, func(ev events.Event) bool { return ev.Kind == events.KindBlockedBy }) {
+		t.Errorf("a refused blocked_by was logged: %+v", evs)
 	}
 }
 
@@ -564,7 +596,7 @@ func matchTick(t *testing.T, brain string) {
 		case blueprint.MachineSet:
 			in = &reconcile.SetInputs{ID: id, Epic: e.Epic}
 		case blueprint.MachineWork:
-			in = &reconcile.WorkInputs{ID: id, Epic: e.Epic, Repo: st.Repo, Base: "main", Issue: st.Issue}
+			in = &reconcile.WorkInputs{ID: id, Epic: e.Epic, Set: filepath.Base(filepath.Dir(e.Dir)), Repo: st.Repo, Base: "main", Issue: st.Issue}
 		}
 		if err := store.WriteInputs(e.Dir, in); err != nil {
 			t.Fatal(err)

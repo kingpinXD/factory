@@ -249,7 +249,7 @@ func TestAPostedReviewRequestMarksEveryPRItNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i := slices.IndexFunc(rep.PRs, func(p OpenPR) bool { return p.ID == "e1-w2" }); i < 0 || rep.PRs[i].Review != "review requested in C09QMJQ71FW" || rep.PRs[i].ReviewAt.IsZero() {
+	if i := slices.IndexFunc(rep.PRs, func(p OpenPR) bool { return p.ID == "e1-w2" }); i < 0 || rep.PRs[i].Review != "review requested in #engineering" || rep.PRs[i].ReviewAt.IsZero() {
 		t.Errorf("open PRs = %+v, want e1-w2's review posted", rep.PRs)
 	}
 }
@@ -262,7 +262,7 @@ func TestAPassThatEndsWithoutPostingDMsTheUserOnce(t *testing.T) {
 	w.passOf(1)
 	w.fullTickAt(5 * time.Minute)
 	dms := w.dmsWith("did not post the review request")
-	want := "factory: e1-w1's babysitter did not post the review request; post it in C09QMJQ71FW yourself:\n - " + prURL + "\n - " + prURL9
+	want := "factory: e1-w1's babysitter did not post the review request; post it in #engineering yourself:\n - " + prURL + "\n - " + prURL9
 	if len(dms) != 1 || dms[0] != want {
 		t.Fatalf("DMs = %q, want one:\n%s", w.dms, want)
 	}
@@ -363,5 +363,58 @@ func TestTheDependentStartsOnceTheReviewedPRMerges(t *testing.T) {
 	w.fullTickAt(15 * time.Minute)
 	if got := w.status("e1-w2").State; got == workQueued {
 		t.Errorf("e1-w2 is still queued once e1-w1 merged; moves %v", w.moves("e1-w2"))
+	}
+}
+
+// approve approves the PR of item id on GitHub.
+func (w *world) approve(id string) {
+	pr := w.prs[git.Branch(id)]
+	pr.Reviews = []gh.Review{{Author: gh.User{Login: "alice"}, AuthorAssociation: "MEMBER", State: "APPROVED", SubmittedAt: t0}}
+	w.prs[git.Branch(id)] = pr
+}
+
+// The DM lists only the PRs that still wait on a review: open and not
+// approved.
+func TestTheReviewDMListsOnlyPRsThatStillWait(t *testing.T) {
+	w := awaitingReview(t, threeItems)
+	w.reviewing("e1-w2", 9, prURL9, head9)
+	w.fullNext()
+	w.tick(false)
+	w.approve("e1-w2")
+	w.passOf(1)
+	w.fullTickAt(5 * time.Minute)
+	want := "factory: e1-w1's babysitter did not post the review request; post it in #engineering yourself:\n - " + prURL
+	if dms := w.dmsWith("did not post the review request"); !slices.Equal(dms, []string{want}) {
+		t.Errorf("DMs = %q, want one:\n%s", w.dms, want)
+	}
+}
+
+func TestNoReviewDMOnceEveryPRWasApproved(t *testing.T) {
+	w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
+	w.tick(false)
+	w.approve(item)
+	w.passOf(1)
+	for i := range 3 {
+		w.fullTickAt(time.Duration(i+1) * 5 * time.Minute)
+	}
+	if dms := w.dmsWith("review request"); len(dms) != 0 {
+		t.Errorf("DMs = %q, want none: nothing waits on a review", dms)
+	}
+}
+
+// A carrier in a re-check or blocked comes back to review; its babysitter
+// has not failed yet.
+func TestACarrierInARecheckOrBlockedSendsNoDMYet(t *testing.T) {
+	for _, state := range []string{workRechecking, stateBlocked} {
+		t.Run(state, func(t *testing.T) {
+			w := awaitingReview(t, twoItems("[{from: w1, to: w2, gate: start, when: merged, rollback: none}]"))
+			w.tick(false)
+			w.moveTo(item, state)
+			w.fullTickAt(5 * time.Minute)
+			w.fullTickAt(10 * time.Minute)
+			if dms := w.dmsWith("did not post the review request"); len(dms) != 0 {
+				t.Errorf("DMs = %q with the carrier %s, want none", dms, state)
+			}
+		})
 	}
 }

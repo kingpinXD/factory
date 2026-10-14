@@ -21,6 +21,9 @@ func (r *run) enter(e *entity, t events.Event) error {
 	if err := r.tellReleased(e, t); err != nil {
 		return err
 	}
+	if err := r.wakeReleased(e, t); err != nil {
+		return err
+	}
 	switch {
 	case e.work != nil && e.cur.State == stateStarting:
 		if _, ok := worktreeReady(e); !ok {

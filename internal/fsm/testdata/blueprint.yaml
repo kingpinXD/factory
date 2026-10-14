@@ -48,9 +48,10 @@ values:
   # repair_attempts repair epics in 24h.
   red_after: 15m
   repair_attempts: 2
-  # A babysitter posts a review request here (#engineering) for PRs that wait only on an
-  # approval while other work waits on them.
+  # A babysitter posts a review request in review_channel for PRs that wait only on an
+  # approval while other work waits on them; status and DMs call it #<review_channel_name>.
   review_channel: C09QMJQ71FW
+  review_channel_name: engineering
 
 deny:
   models: [fable]
@@ -261,8 +262,8 @@ machines:
         exits: back to the state it left when the answer is logged
         health: waits
       blocked:
-        entry: the item used up its restarts, or its orchestrator or babysitter sent blocked_by; its epic re-checks it
-        exits: back to the state it left when the planner sends an instruction; after blocked_by, also once the re-check ended and every gate:start link into it is released (back to work before pr_open only while no other item of its set is being worked; the orchestrator is told to resume it)
+        entry: the item used up its restarts, or its orchestrator or babysitter sent blocked_by (a third one goes to needs_you instead); its epic re-checks it
+        exits: back to the state it left when the planner sends an instruction (after blocked_by, one to its set must start with the item's id); after blocked_by, also once the re-check ended and every gate:start link a later plan added into it is released. After blocked_by, back to work before pr_open only while no other item of its set is being worked; the orchestrator is told to resume it on a release, the babysitter on any return to review
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)

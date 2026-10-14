@@ -52,6 +52,9 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 	if b.Values.ReviewChannel == "" {
 		v.add("review", "values.review_channel is empty; want the Slack channel id review requests are posted in")
 	}
+	if b.Values.ReviewChannelName == "" {
+		v.add("review", "values.review_channel_name is empty; want the name of review_channel, without #, for status and DMs")
+	}
 	return v.problems
 }
 

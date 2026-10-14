@@ -7,6 +7,7 @@ values:
   red_after: 15m
   repair_attempts: 2
   review_channel: C09QMJQ71FW
+  review_channel_name: engineering
 deny:
   models: [fable]
 components:

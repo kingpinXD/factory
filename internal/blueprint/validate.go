@@ -55,6 +55,12 @@ func (b *Blueprint) Validate(brain string, live []EntityState) []Problem {
 	if b.Values.ReviewChannelName == "" {
 		v.add("review", "values.review_channel_name is empty; want the name of review_channel, without #, for status and DMs")
 	}
+	if b.Values.StallReads < 1 {
+		v.add("stall", "values.stall_reads is %d; want at least 1", b.Values.StallReads)
+	}
+	if b.Values.StallAfter <= 0 {
+		v.add("stall", "values.stall_after is %s; want how long an item may wait with no one to move it", time.Duration(b.Values.StallAfter))
+	}
 	return v.problems
 }
 

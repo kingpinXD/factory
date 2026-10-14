@@ -49,28 +49,40 @@ func watched(it *entity) bool {
 // watchPRs runs on a full reconcile, after the moves: for each watched PR
 // it counts the unanswered threads, logs what is new for the babysitter,
 // keeps the PR's prs.md line live, and brings a PR that is ready but behind
-// its base up to date.
+// its base up to date. A read that fails is the merge hold of a PR in
+// review.
 func (r *run) watchPRs() {
-	me := ""
+	var me string
+	var meErr error
 	for _, id := range r.order() {
 		it := r.ents[id]
 		it.st.MergeHold = ""
 		if it.pr == nil || !watched(it) {
 			continue
 		}
-		if me == "" {
+		if me == "" && meErr == nil {
 			ctx, cancel := r.call()
-			login, err := r.d.GitHub.Me(ctx)
+			me, meErr = r.d.GitHub.Me(ctx)
 			cancel()
-			if err != nil {
-				r.fail("who the user is on GitHub: %v", err)
-				return
+			if meErr != nil {
+				meErr = fmt.Errorf("who the user is on GitHub: %w", meErr)
+				r.fail("%v", meErr)
 			}
-			me = login
+		}
+		if meErr != nil {
+			holdOnError(it, meErr)
+			continue
 		}
 		if err := r.watchPR(it, me); err != nil {
 			r.fail("%s: %v", id, err)
 		}
+	}
+}
+
+// holdOnError keeps a read that failed as the merge hold of a PR in review.
+func holdOnError(it *entity, err error) {
+	if it.cur.State == workInReview {
+		it.st.MergeHold = "a read failed: " + err.Error()
 	}
 }
 
@@ -98,8 +110,12 @@ func (r *run) watchPR(it *entity, me string) error {
 		return nil
 	}
 	hold, err := r.mergeHold(it)
-	if hold == "" || err != nil {
+	if err != nil {
+		holdOnError(it, err)
 		return err
+	}
+	if hold == "" {
+		return nil
 	}
 	it.st.MergeHold = hold
 	r.say("%s: not merged yet: %s", it.id, hold)

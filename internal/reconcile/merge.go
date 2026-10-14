@@ -179,10 +179,16 @@ func approved(pr gh.PR) bool {
 	if pr.ReviewDecision != "" {
 		return pr.ReviewDecision == "APPROVED"
 	}
-	pr.Reviews = slices.DeleteFunc(slices.Clone(pr.Reviews), func(rv gh.Review) bool {
+	pr.Reviews = approverReviews(pr)
+	return reviewedAs(pr, "APPROVED")
+}
+
+// approverReviews returns the PR's reviews by an owner, member or
+// collaborator that is not a bot.
+func approverReviews(pr gh.PR) []gh.Review {
+	return slices.DeleteFunc(slices.Clone(pr.Reviews), func(rv gh.Review) bool {
 		return !slices.Contains(approvers, rv.AuthorAssociation) || strings.HasSuffix(rv.Author.Login, "[bot]")
 	})
-	return reviewedAs(pr, "APPROVED")
 }
 
 func reviewedAs(pr gh.PR, state string) bool {

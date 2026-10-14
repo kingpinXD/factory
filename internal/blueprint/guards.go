@@ -29,7 +29,7 @@ var Guards = map[string]string{
 	"recheck_kept":         "the re-check result for the item is ready or updated",
 	"recheck_dropped":      "the re-check result for the item is done, obsolete or duplicate",
 	"recheck_needs_user":   "the re-check result for the item waits on the user or on someone else",
-	"needs_user":           "only the user can settle it: a dead-letter, planner runs used up, the same SHA red after a babysitter pass, or a third blocked_by",
+	"needs_user":           "only the user can settle it: a dead-letter, planner runs used up, the same SHA red after a babysitter pass, a third blocked_by, or an item stalled again after planner_runs_per_problem stall re-checks",
 	"retry_requested":      "the user ran factory retry on it",
 	"retry_allowed":        "the user ran factory retry on it, and its PR is not closed",
 	// set
@@ -47,7 +47,7 @@ var Guards = map[string]string{
 	"epic_idle":         "no open item of the epic can start, and none is being worked or in review",
 	"all_in_review":     "every open item is in_review or later",
 	"uat_passed":        "the epic has uat: none, or uat/result.md says pass",
-	"recheck_signal":    "a re-check signal: issue_stale, an item's blocked_by, a set blocked past its restarts, a related non-factory merge, factory replan, or factory answer",
+	"recheck_signal":    "a re-check signal: issue_stale, an item's blocked_by, a set blocked past its restarts, a related non-factory merge, an item no one moved for stall_after, factory replan, or factory answer",
 	"recheck_ended":     "the re-check's newest epic.v<n>.yaml has its end event",
 	// session
 	"listed_working":      "claude agents lists the session with a pid, working, and its transcript does not show its turn ended",

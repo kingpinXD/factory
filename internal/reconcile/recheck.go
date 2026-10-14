@@ -34,6 +34,7 @@ const (
 	signalOverlap = "overlap" // another epic's explore ended with files overlapping an item's
 	signalReplan  = "replan"  // factory replan
 	signalAnswer  = "answer"  // factory answer to a result that waits on the user
+	signalStall   = "stall"   // no one moved an item for stall_after
 )
 
 // everyIssue, as a covered issue, is every issue of the epic.
@@ -156,8 +157,23 @@ func (r *run) describe(ep *entity, sig events.Event) string {
 	case signalAnswer:
 		ref, choice, _ := strings.Cut(sig.Text, " ")
 		return fmt.Sprintf("the user answered %s: %s", ref, choice)
+	case signalStall:
+		return r.describeStall(sig, parts[1], parts[2])
 	}
 	return sig.Request
+}
+
+// describeStall says which state item id stalled in, entered at seq, and
+// how long no one had moved it when sig was sent.
+func (r *run) describeStall(sig events.Event, id, seq string) string {
+	it := r.ents[id]
+	if it == nil {
+		return id + " stalled"
+	}
+	entry, _ := eventBySeq(it, seq)
+	quiet := sig.At.Sub(quietSince(it, entry.At, sig.At)).Round(time.Minute)
+	return fmt.Sprintf("%s stalled in %s: no one moved it for %s. Find what it waits on and unblock it: an instruction to its set starting \"%s:\", a link, or a result for its issue",
+		id, entry.To, quiet, id)
 }
 
 // covered returns the issues the epic's running re-check covers.
@@ -194,10 +210,13 @@ func recheckBeganBefore(ep *entity, seq int) int {
 // covers reports whether the epic's running re-check covers the item's issue.
 func (r *run) covers(ep, it *entity) bool {
 	ref := issueRef(it)
-	return slices.ContainsFunc(covered(ep), func(s string) bool {
-		c, err := epic.ParseRef(s)
-		return s == everyIssue || err == nil && c.Is(ref)
-	})
+	return slices.ContainsFunc(covered(ep), func(s string) bool { return refCovers(s, ref) })
+}
+
+// refCovers reports whether s, an issue a signal covers, is ref.
+func refCovers(s string, ref epic.Ref) bool {
+	c, err := epic.ParseRef(s)
+	return s == everyIssue || err == nil && c.Is(ref)
 }
 
 // awaitsAnswer reports whether the item waits on the user after a re-check:

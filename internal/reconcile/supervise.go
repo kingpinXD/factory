@@ -846,7 +846,7 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	ref := t.TriggerRef
 	switch {
 	case strings.HasPrefix(ref, timeoutRef):
-		return fmt.Sprintf("%s timed out after %s", t.From, time.Duration(e.m.States[t.From].Timeout))
+		return fmt.Sprintf("%s timed out after %s", t.From, time.Duration(e.m.States[t.From].Timeout)) + releasedNote(e, t)
 	case strings.HasPrefix(ref, deadLetterRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, deadLetterRef))
 		return fmt.Sprintf("the same error %d times (dead-lettered): %s", r.b.Values.Supervision.SameErrorDeadLetter, ev.Text)
@@ -872,24 +872,28 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	case strings.HasPrefix(ref, blockedTooOftenRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, blockedTooOftenRef))
 		return fmt.Sprintf("its sessions sent blocked_by %d times; the last: %s", blockedByLimit+1, ev.Text)
+	case strings.HasPrefix(ref, stallsRef):
+		return fmt.Sprintf("no one moved it in %s for %s after %d stall re-checks", t.From, time.Duration(r.b.Values.StallAfter), r.b.Values.Supervision.PlannerRunsPerProblem)
 	case strings.HasPrefix(ref, redAfterPassRef):
-		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef)))
+		return fmt.Sprintf("checks on %s stayed red after a babysitter pass, on %s", e.st.PRURL, abbrev(strings.TrimPrefix(ref, redAfterPassRef))) + releasedNote(e, t)
 	}
 	return ""
 }
 
 // dm sends the user text once per key, logged in e's log: an intent before
-// the DM and a done after it, as for every outside action.
-func (r *run) dm(e *entity, key, text string) {
+// the DM and a done after it, as for every outside action. It reports
+// whether the DM was sent, now or before.
+func (r *run) dm(e *entity, key, text string) bool {
 	if e.has(key) {
-		return
+		return true
 	}
 	r.logged(r.append(e, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Text: key, Key: key + ":intent"}))
 	if err := r.act("DM the user about "+e.id, func(ctx context.Context) error { return r.d.Notify.DM(ctx, text) }); err != nil {
 		r.fail("%v", err)
-		return
+		return false
 	}
 	r.logged(r.append(e, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: key, Key: key}))
+	return true
 }
 
 // usedRef reports whether a transition of e names ref.

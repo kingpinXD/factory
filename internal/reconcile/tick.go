@@ -109,6 +109,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if r.full {
 		r.watchPRs()
 		r.requestReviews()
+		r.checkStalls()
 	}
 	r.supervise()
 	r.driveSessions()

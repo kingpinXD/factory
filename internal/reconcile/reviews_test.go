@@ -195,7 +195,7 @@ func TestNoReviewRequestUnlessOnlyTheApprovalHoldsWork(t *testing.T) {
 		}},
 		{name: "behind its base", setup: func(w *world) { w.pr(func(pr *gh.PR) { pr.MergeStateStatus = "BEHIND" }) }},
 		{name: "waiting on a repair", setup: func(w *world) {
-			w.baseIs("FAILURE", "aaa1111", red("govulncheck"))
+			w.baseIs("aaa1111", red("govulncheck"))
 			w.pulls.checks[head1] = []gh.Check{{Name: "govulncheck", State: "FAILURE", Required: true}}
 		}},
 		{name: "approved", setup: func(w *world) { w.approve(item) }},

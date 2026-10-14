@@ -13,6 +13,7 @@
                   "name": "ci",
                   "status": "COMPLETED",
                   "conclusion": "SUCCESS",
+                  "startedAt": "2026-10-13T15:01:45Z",
                   "detailsUrl": "https://github.com/kingpinXD/factory/actions/runs/38418484316/job/115369153028"
                 }
               ]

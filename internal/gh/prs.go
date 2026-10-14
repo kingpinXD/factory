@@ -102,8 +102,69 @@ const checksQuery = `query($owner:String!,$name:String!,$sha:GitObjectID!,$pr:In
 	`pullRequest(number:$pr){baseRef{branchProtectionRule{requiredStatusCheckContexts} refUpdateRule{requiredStatusCheckContexts} ` +
 	`rules(first:100){nodes{parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}}} ` +
 	`object(oid:$sha){... on Commit{statusCheckRollup{contexts(first:100){nodes{__typename ` +
-	`... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr)} ` +
-	`... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}`
+	`... on CheckRun{name status conclusion startedAt isRequired(pullRequestNumber:$pr)} ` +
+	`... on StatusContext{context state createdAt isRequired(pullRequestNumber:$pr)}}}}}}}}`
+
+// checkRollup is a commit's checks as GitHub lists them: every run of each,
+// a cancelled one beside its re-run too.
+type checkRollup struct {
+	Contexts struct{ Nodes []checkNode }
+}
+
+// checkNode is one check run or commit status in a checkRollup.
+type checkNode struct {
+	Typename   string `json:"__typename"`
+	Name       string
+	Status     string
+	Conclusion string
+	StartedAt  time.Time
+	DetailsURL string `json:"detailsUrl"`
+	Context    string
+	State      string
+	CreatedAt  time.Time
+	TargetURL  string `json:"targetUrl"`
+	IsRequired bool
+}
+
+// checkRun is a checkNode with its kind's fields picked: State is as
+// Check.State has it.
+type checkRun struct {
+	Name, State, URL string
+	At               time.Time
+	Required         bool
+}
+
+func (n checkNode) run() checkRun {
+	if n.Typename == "StatusContext" {
+		return checkRun{n.Context, n.State, n.TargetURL, n.CreatedAt, n.IsRequired}
+	}
+	state := n.Conclusion
+	if n.Status != "COMPLETED" {
+		state = n.Status
+	}
+	return checkRun{n.Name, state, n.DetailsURL, n.StartedAt, n.IsRequired}
+}
+
+// newest returns the newest run of each check, where its first run is
+// listed. A run that has not started is newer than any that has; of two
+// that started at once, the one listed later is.
+func (r *checkRollup) newest() []checkRun {
+	if r == nil {
+		return nil
+	}
+	var runs []checkRun
+	for _, n := range r.Contexts.Nodes {
+		run := n.run()
+		i := slices.IndexFunc(runs, func(o checkRun) bool { return o.Name == run.Name })
+		switch {
+		case i < 0:
+			runs = append(runs, run)
+		case run.At.IsZero() || !runs[i].At.IsZero() && !run.At.Before(runs[i].At):
+			runs[i] = run
+		}
+	}
+	return runs
+}
 
 // requiredChecks is where GitHub names the checks a base branch requires:
 // its branch protection (shown to admins), the rules that apply to the
@@ -142,9 +203,9 @@ func (r *requiredChecks) names() []string {
 	return names
 }
 
-// Checks returns the checks on commit sha, each marked by whether pull
-// request pr needs it to merge, and an EXPECTED check for each one pr's
-// base branch requires that has not started.
+// Checks returns the newest run of each check on commit sha, marked by
+// whether pull request pr needs it to merge, and an EXPECTED check for each
+// one pr's base branch requires that has not started.
 func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]Check, error) {
 	var data struct {
 		Repository struct {
@@ -152,19 +213,7 @@ func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]
 				BaseRef *requiredChecks
 			}
 			Object *struct {
-				StatusCheckRollup *struct {
-					Contexts struct {
-						Nodes []struct {
-							Typename   string `json:"__typename"`
-							Name       string
-							Status     string
-							Conclusion string
-							Context    string
-							State      string
-							IsRequired bool
-						}
-					}
-				}
+				StatusCheckRollup *checkRollup
 			}
 		}
 	}
@@ -176,17 +225,8 @@ func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]
 		return nil, fmt.Errorf("%s has no commit %s", repo, sha)
 	}
 	var checks []Check
-	if rollup := data.Repository.Object.StatusCheckRollup; rollup != nil {
-		for _, n := range rollup.Contexts.Nodes {
-			ch := Check{Name: n.Name, State: n.Conclusion, Required: n.IsRequired}
-			switch {
-			case n.Typename == "StatusContext":
-				ch.Name, ch.State = n.Context, n.State
-			case n.Status != "COMPLETED":
-				ch.State = n.Status
-			}
-			checks = append(checks, ch)
-		}
+	for _, run := range data.Repository.Object.StatusCheckRollup.newest() {
+		checks = append(checks, Check{Name: run.Name, State: run.State, Required: run.Required})
 	}
 	for _, name := range data.Repository.PullRequest.BaseRef.names() {
 		if !slices.ContainsFunc(checks, func(ch Check) bool { return ch.Name == name }) {
@@ -197,15 +237,12 @@ func (c Client) Checks(ctx context.Context, repo string, pr int, sha string) ([]
 }
 
 const baseQuery = `query($owner:String!,$name:String!,$ref:String!){repository(owner:$owner,name:$name){ref(qualifiedName:$ref){` +
-	`target{... on Commit{oid statusCheckRollup{state contexts(first:100){nodes{__typename ` +
-	`... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}}}`
+	`target{... on Commit{oid statusCheckRollup{contexts(first:100){nodes{__typename ` +
+	`... on CheckRun{name status conclusion startedAt detailsUrl} ... on StatusContext{context state createdAt targetUrl}}}}}}}}}`
 
-// BaseResult is a branch's newest commit and its checks, as BaseState reads
-// them.
+// BaseResult is a branch's newest commit and the newest run of each check
+// on it, as BaseState reads them.
 type BaseResult struct {
-	// State is the commit's check rollup: SUCCESS, FAILURE, ERROR, PENDING
-	// or EXPECTED; "" when it has no checks.
-	State  string
 	SHA    string
 	Checks []BaseCheck
 }
@@ -221,40 +258,34 @@ type BaseCheck struct {
 	Success bool `json:"success,omitempty"`
 }
 
-// Red reports whether the commit's checks failed or errored.
-func (b BaseResult) Red() bool { return b.State == "FAILURE" || b.State == "ERROR" }
+// Red reports whether a check failed.
+func (b BaseResult) Red() bool {
+	return slices.ContainsFunc(b.Checks, func(c BaseCheck) bool { return c.Red })
+}
 
 // Green reports whether the commit is not red: pending checks, or none,
 // count as green.
 func (b BaseResult) Green() bool { return !b.Red() }
+
+// Passed reports whether the commit has checks and every one passed.
+func (b BaseResult) Passed() bool {
+	return len(b.Checks) > 0 && !slices.ContainsFunc(b.Checks, func(c BaseCheck) bool { return !c.Success })
+}
 
 // RedChecks returns the checks that failed.
 func (b BaseResult) RedChecks() []BaseCheck {
 	return slices.DeleteFunc(slices.Clone(b.Checks), func(c BaseCheck) bool { return !c.Red })
 }
 
-// BaseState reads branch's newest commit, its check rollup and each check.
+// BaseState reads branch's newest commit and the newest run of each check
+// on it.
 func (c Client) BaseState(ctx context.Context, repo, branch string) (BaseResult, error) {
 	var data struct {
 		Repository struct {
 			Ref *struct {
 				Target struct {
 					Oid               string
-					StatusCheckRollup *struct {
-						State    string
-						Contexts struct {
-							Nodes []struct {
-								Typename   string `json:"__typename"`
-								Name       string
-								Status     string
-								Conclusion string
-								DetailsURL string `json:"detailsUrl"`
-								Context    string
-								State      string
-								TargetURL  string `json:"targetUrl"`
-							}
-						}
-					}
+					StatusCheckRollup *checkRollup
 				}
 			}
 		}
@@ -267,19 +298,8 @@ func (c Client) BaseState(ctx context.Context, repo, branch string) (BaseResult,
 	}
 	t := data.Repository.Ref.Target
 	res := BaseResult{SHA: t.Oid}
-	if t.StatusCheckRollup == nil {
-		return res, nil
-	}
-	res.State = t.StatusCheckRollup.State
-	for _, n := range t.StatusCheckRollup.Contexts.Nodes {
-		name, url, state := n.Name, n.DetailsURL, n.Conclusion
-		switch {
-		case n.Typename == "StatusContext":
-			name, url, state = n.Context, n.TargetURL, n.State
-		case n.Status != "COMPLETED":
-			state = n.Status
-		}
-		res.Checks = append(res.Checks, BaseCheck{Name: name, URL: url, Red: slices.Contains(RedStates, state), Success: slices.Contains(GreenStates, state)})
+	for _, run := range t.StatusCheckRollup.newest() {
+		res.Checks = append(res.Checks, BaseCheck{Name: run.Name, URL: run.URL, Red: slices.Contains(RedStates, run.State), Success: slices.Contains(GreenStates, run.State)})
 	}
 	return res, nil
 }

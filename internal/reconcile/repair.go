@@ -111,11 +111,11 @@ func (r *run) readEpisode(b repoBase, res gh.BaseResult) {
 	}
 }
 
-// greenAgain reports whether a read that is not red closes ep: the base
-// reads SUCCESS, or every check ep lists passed on a head other than the
-// red one.
+// greenAgain reports whether a read that is not red closes ep: every check
+// on the base passed, or every check ep lists passed on a head other than
+// the red one.
 func greenAgain(ep store.RepairEpisode, res gh.BaseResult) bool {
-	if res.State == "SUCCESS" {
+	if res.Passed() {
 		return true
 	}
 	if res.SHA == ep.RedSHA || len(ep.Checks) == 0 {

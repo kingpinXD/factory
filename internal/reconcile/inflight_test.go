@@ -18,7 +18,7 @@ const redPass = "## Outcome\nopen — CI red\n## Comments\nnone\n## CI\ngovulnch
 func inReviewOnRedBase(t *testing.T) *world {
 	w := newWorld(t)
 	w.inReviewWith(oneItem("[]"), 20*time.Minute)
-	w.baseIs("FAILURE", "aaa1111", red("govulncheck"))
+	w.baseIs("aaa1111", red("govulncheck"))
 	w.pulls.checks[head1] = []gh.Check{{Name: "govulncheck", State: "FAILURE", Required: true}, {Name: "ci", State: "SUCCESS", Required: true}}
 	return w
 }
@@ -150,7 +150,7 @@ func TestOrchestratorsInARedRepoAreToldOnceAndPRsUpdatedOnceWhenGreen(t *testing
 		t.Errorf("the repair's own orchestrator got %q", got)
 	}
 
-	w.baseIs("SUCCESS", "bbb2222", passed("govulncheck"))
+	w.baseIs("bbb2222", passed("govulncheck"))
 	w.fullTickAt(redAfter + 5*time.Minute)
 	if got := w.messagesKeyed("e2-s1", "repair-green:"); !slices.Equal(got, []string{"o/r@main is green again; merge origin/main before your next push"}) {
 		t.Errorf("e2-s1 green messages = %q, want one", got)
@@ -190,7 +190,7 @@ func TestAPRRedBeyondItsBaseIsNotUpdatedWhenTheBaseTurnsGreen(t *testing.T) {
 	w := inReviewOnRedBase(t)
 	w.pulls.checks[head1] = append(w.pulls.checks[head1], gh.Check{Name: "lint", State: "FAILURE", Required: true})
 	w.tick(false)
-	w.baseIs("SUCCESS", "bbb2222", passed("govulncheck"))
+	w.baseIs("bbb2222", passed("govulncheck"))
 	w.fullTickAt(5 * time.Minute)
 	if eps := w.episodes(); len(eps) != 0 {
 		t.Fatalf("episodes = %+v, want it closed", eps)

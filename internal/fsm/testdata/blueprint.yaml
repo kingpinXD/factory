@@ -256,8 +256,8 @@ machines:
         exits: back to the state it left when the answer is logged
         health: waits
       blocked:
-        entry: the item used up its restarts; its set asks the planner for a re-check
-        exits: back to the state it left when the planner sends an instruction
+        entry: the item used up its restarts, or its orchestrator or babysitter sent blocked_by; its epic re-checks it
+        exits: back to the state it left when the planner sends an instruction; after blocked_by, also once the re-check ended and every gate:start link into it is released (back to work before pr_open only while no other item of its set is being worked; the orchestrator is told to resume it)
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -301,7 +301,16 @@ machines:
       - {from: plan_review, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: implementing, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: verifying, to: blocked, trigger: tick, guard: restarts_exhausted}
+      - {from: starting, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: exploring, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: planning, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: plan_review, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: implementing, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: verifying, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: pr_open, to: blocked, trigger: file, guard: blocked_reported}
+      - {from: in_review, to: blocked, trigger: file, guard: blocked_reported}
       - {from: blocked, to: previous, trigger: file, guard: instruction_received}
+      - {from: blocked, to: previous, trigger: tick, guard: blockers_released}
       - {from: rechecking, to: previous, trigger: file, guard: recheck_kept}
       - {from: rechecking, to: cancelled, trigger: file, guard: recheck_dropped}
       - {from: rechecking, to: needs_you, trigger: file, guard: recheck_needs_user}
@@ -332,7 +341,7 @@ machines:
         health: events
       blocked:
         entry: nothing in the set can start (the orchestrator ended its turn), or it used up its restarts (one planner run)
-        exits: running when an item can start (the tick nudges the orchestrator), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
+        exits: running when an item can start (the tick nudges the orchestrator), an item's blockers are released (the orchestrator is told to resume it), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)
@@ -353,6 +362,7 @@ machines:
       - {from: running, to: blocked, trigger: file, guard: nothing_startable}
       - {from: running, to: blocked, trigger: tick, guard: restarts_exhausted}
       - {from: blocked, to: running, trigger: tick, guard: item_startable}
+      - {from: blocked, to: running, trigger: tick, guard: item_released}
       - {from: blocked, to: running, trigger: file, guard: instruction_received}
       - {from: blocked, to: running, trigger: file, guard: handed_back}
       - {from: running, to: done, trigger: tick, guard: items_finished}

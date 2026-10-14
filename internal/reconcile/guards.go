@@ -35,6 +35,8 @@ var guards = map[string]guard{
 	"retry_allowed":        (*run).retryAllowed,
 	"cancel_requested":     requested(RequestStop),
 	"instruction_received": (*run).instructionReceived,
+	"blocked_reported":     (*run).blockedReported,
+	"blockers_released":    (*run).blockersReleased,
 	"pr_recorded":          (*run).prRecorded,
 	"pr_merged":            func(r *run, e *entity) (bool, string, error) { return prState(e, prMerged) },
 	"pr_closed_unmerged":   func(r *run, e *entity) (bool, string, error) { return prState(e, prClosed) },
@@ -46,6 +48,7 @@ var guards = map[string]guard{
 	"item_startable":    (*run).itemStartable,
 	"nothing_startable": (*run).nothingStartable,
 	"handed_back":       (*run).handedBack,
+	"item_released":     (*run).itemReleased,
 	// session
 	"listed_working":  (*run).listedWorking,
 	"turn_ended":      (*run).sessionTurnEnded,
@@ -410,13 +413,11 @@ func (r *run) instructionReceived(e *entity) (bool, string, error) {
 	return false, "", nil
 }
 
-// blockedAt returns when the item was last blocked: its newest escalation,
-// not a return to blocked from a re-check or needs_you.
+// blockedAt returns when the item was last blocked: its newest escalation
+// or blocked_by, not a return to blocked from a re-check or needs_you.
 func blockedAt(it *entity) time.Time {
-	for i := len(it.evs) - 1; i >= 0; i-- {
-		if blockedPastRestarts(it.evs[i]) {
-			return it.evs[i].At
-		}
+	if ev, ok := blockEntry(it); ok {
+		return ev.At
 	}
 	return it.cur.Since
 }

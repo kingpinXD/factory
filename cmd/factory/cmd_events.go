@@ -24,7 +24,7 @@ import (
 // written by the program itself.
 var agentKinds = []string{
 	events.KindStart, events.KindEnd, events.KindError, events.KindIntent, events.KindDone,
-	events.KindIssueStale, events.KindInstruction, events.KindMessage, events.KindCheckpoint,
+	events.KindIssueStale, events.KindBlockedBy, events.KindInstruction, events.KindMessage, events.KindCheckpoint,
 }
 
 // contextLine opens every inbox and heartbeat reply: the context use of the
@@ -134,7 +134,7 @@ func checkEvent(kind, file, text, to string) error {
 		return fmt.Errorf("%s events are written by the program, not by factory event", kind)
 	case (kind == events.KindEnd || kind == events.KindCheckpoint) && file == "":
 		return fmt.Errorf("%s needs --file <path>", kind)
-	case (kind == events.KindMessage || kind == events.KindInstruction) && text == "":
+	case (kind == events.KindMessage || kind == events.KindInstruction || kind == events.KindBlockedBy) && text == "":
 		return fmt.Errorf("%s needs --text", kind)
 	case strings.ContainsAny(text, "\r\n"):
 		return errors.New("--text must be one line")

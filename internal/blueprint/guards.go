@@ -15,6 +15,8 @@ var Guards = map[string]string{
 	"answered":             "the user's answer is logged",
 	"restarts_exhausted":   "the entity used up its restarts or nudges",
 	"instruction_received": "the planner sent the entity an instruction event",
+	"blocked_reported":     "the item's orchestrator or babysitter sent blocked_by in its current state",
+	"blockers_released":    "the item was blocked by blocked_by and the re-check it started ended; its plan has a gate: start link into it and every one is released; before pr_open, no other item of its set is being worked",
 	"pr_recorded":          "a PR on factory/<work-id>, or the adopted PR, is recorded and the worktree is handed over",
 	"merge_ready":          "required checks green on the head SHA, no unresolved thread, no CHANGES_REQUESTED, merge_quiet passed since the program first saw the PR's current head SHA, may-merge is 0, and an approval or `Merge without approval: yes`",
 	"merge_failed":         "the merge call failed",
@@ -37,6 +39,7 @@ var Guards = map[string]string{
 	"item_startable":    "an open item can start now",
 	"items_finished":    "every item is merged or cancelled",
 	"handed_back":       "an item of the set got its worktree back from its babysitter since the set entered its state",
+	"item_released":     "an item of the set went back to work before pr_open, its blockers released, since the set entered its state",
 	// epic
 	"state_check_ended": "the newest state-check.v<n>.md has its end event, and the epic has no state to return to: the first check, not a re-check",
 	"epic_plan_ended":   "the newest epic.v<n>.yaml has its end event, is valid, and every issue has a result",
@@ -44,7 +47,7 @@ var Guards = map[string]string{
 	"epic_idle":         "no open item of the epic can start, and none is being worked or in review",
 	"all_in_review":     "every open item is in_review or later",
 	"uat_passed":        "the epic has uat: none, or uat/result.md says pass",
-	"recheck_signal":    "a re-check signal: issue_stale, a set blocked past its restarts, a related non-factory merge, factory replan, or factory answer",
+	"recheck_signal":    "a re-check signal: issue_stale, an item's blocked_by, a set blocked past its restarts, a related non-factory merge, factory replan, or factory answer",
 	"recheck_ended":     "the re-check's newest epic.v<n>.yaml has its end event",
 	// session
 	"listed_working":      "claude agents lists the session with a pid, working, and its transcript does not show its turn ended",

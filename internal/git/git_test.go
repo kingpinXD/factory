@@ -275,6 +275,9 @@ func TestWorktreeAtPRLeavesTheUsersCheckout(t *testing.T) {
 		{"killed after making the branch", func(t *testing.T, clone, head string) {
 			run(t, "-C", clone, "branch", "factory/w1", head)
 		}},
+		{"branch left at an older head", func(t *testing.T, clone, _ string) {
+			run(t, "-C", clone, "branch", "factory/w1", "origin/main")
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clone, _ := userClone(t)
@@ -290,6 +293,9 @@ func TestWorktreeAtPRLeavesTheUsersCheckout(t *testing.T) {
 			assertReady(t, clone, path)
 			if got := run(t, "-C", path, "rev-parse", "HEAD"); got != head {
 				t.Errorf("HEAD = %s, want the PR's head %s", got, head)
+			}
+			if got := run(t, "-C", clone, "rev-parse", "refs/factory/pr-7"); got != head {
+				t.Errorf("refs/factory/pr-7 = %s, want the PR's head %s", got, head)
 			}
 			if after := stateOf(t, clone); after != before {
 				t.Errorf("user clone changed: %+v, was %+v", after, before)

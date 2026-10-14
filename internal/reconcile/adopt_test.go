@@ -43,6 +43,7 @@ func TestARepairAdoptsTheUsersOwnOpenPRWithoutAnAnswer(t *testing.T) {
 		name     string
 		repair   bool
 		change   func(*gh.PR)
+		other    bool
 		refusals []string
 	}{
 		{name: "a repair, the user's own open PR", repair: true, change: func(*gh.PR) {}},
@@ -56,11 +57,23 @@ func TestARepairAdoptsTheUsersOwnOpenPRWithoutAnAnswer(t *testing.T) {
 			refusals: []string{"item w1 adopts o/r#7, which alice opened, not the user"}},
 		{name: "a repair, a closed PR", repair: true, change: func(pr *gh.PR) { pr.State = prClosed },
 			refusals: []string{"item w1 adopts o/r#7, which is closed, not open"}},
+		{name: "a repair, a factory PR", repair: true, change: func(pr *gh.PR) { pr.HeadRefName = "factory/e0-w1" },
+			refusals: []string{"item w1 adopts o/r#7, a factory PR on factory/e0-w1"}},
+		{name: "a repair, a PR to another branch", repair: true, change: func(pr *gh.PR) { pr.BaseRefName = "dev" },
+			refusals: []string{"item w1 adopts o/r#7, which targets dev, not main"}},
+		{name: "a repair, a PR another item works", repair: true, change: func(*gh.PR) {}, other: true,
+			refusals: []string{"item w1 adopts o/r#7, which e0-w1 already works on"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
 			w.registry()
 			w.fixPR(tc.change)
+			if tc.other {
+				w.epic("e0", "running")
+				w.set("e0", "e0-s1", "running", "e0-w1")
+				w.item("e0", "e0-s1", "e0-w1", workInReview, func(in *WorkInputs) { in.Issue = 3 })
+				w.writeStatus("e0-w1", func(st *store.Status) { st.PR = 7 })
+			}
 			w.planFirst("e1", yoursPlan)
 			if tc.repair {
 				w.makeRepair("e1")
@@ -136,7 +149,7 @@ func TestAnAdoptedPRGoesStraightToItsBabysitter(t *testing.T) {
 			if len(ready) != 1 || ready[0].Text != path {
 				t.Fatalf("worktree_ready = %+v, errors %+v", ready, w.kinds(item, events.KindError))
 			}
-			for _, want := range []string{"git -C " + clone + " fetch origin refs/pull/7/head", "git -C " + clone + " worktree add " + path + " -b factory/e1-w1 FETCH_HEAD"} {
+			for _, want := range []string{"git -C " + clone + " fetch origin +refs/pull/7/head:refs/factory/pr-7", "git -C " + clone + " worktree add " + path + " -B factory/e1-w1 refs/factory/pr-7"} {
 				if got := w.called(want); len(got) != 1 {
 					t.Errorf("calls %q lack %q", w.calls(), want)
 				}
@@ -233,5 +246,27 @@ func TestTheAdoptedPRsBranchOutlivesTheFullReconcile(t *testing.T) {
 	args := startArgs(t, w, "factory:e1-w1:babysitter")
 	if prompt := args[len(args)-1]; !strings.Contains(prompt, "branch: fix/vuln\n") {
 		t.Errorf("babysitter prompt lacks the adopted PR's branch:\n%s", prompt)
+	}
+}
+
+// A re-check of a repair keeps adopting the PR its own item already works.
+func TestARecheckKeepsTheRepairsOwnAdoptedPR(t *testing.T) {
+	w := newWorld(t)
+	w.registry()
+	w.fixPR(func(*gh.PR) {})
+	w.planFirst("e1", yoursPlan)
+	w.makeRepair("e1")
+	w.tick(false)
+	if _, err := Replan(context.Background(), w.deps(), "e1", "check #14 again"); err != nil {
+		t.Fatal(err)
+	}
+	w.tick(false)
+	w.recheckAs(yoursPlan)
+	w.tick(false)
+	if errs := w.kinds("e1", events.KindError); len(errs) != 0 {
+		t.Errorf("errors = %+v, want the re-check's plan taken", errs)
+	}
+	if got := w.status("e1").State; got != epicPlanned {
+		t.Errorf("e1 is %s, want planned again\n%s", got, w.out.String())
 	}
 }

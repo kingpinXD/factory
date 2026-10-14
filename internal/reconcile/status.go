@@ -155,7 +155,7 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 
 func (r *run) repairLoad(ep store.RepairEpisode) RepairLoad {
 	rl := RepairLoad{Repo: ep.Repo, Base: ep.Base, RedSince: ep.RedSince, Checks: append([]string{}, baseCheckNames(ep.Checks)...),
-		Attempts: r.attempts(r.repairsOf(ep)), Stopped: ep.Stopped, WaitingOn: ep.WaitingOn}
+		Attempts: len(r.recentRepairs(episodeBase(ep))), Stopped: ep.Stopped, WaitingOn: ep.WaitingOn}
 	if e := r.openRepair(ep.Repo, ep.Base); e != nil {
 		rl.Epic, rl.EpicState = e.id, e.cur.State
 	}
@@ -287,7 +287,7 @@ func (rep Report) WriteText(w io.Writer) {
 		} else {
 			line += fmt.Sprintf("repair %s %s", x.Epic, x.EpicState)
 		}
-		line += fmt.Sprintf(", attempts %d", x.Attempts)
+		line += fmt.Sprintf(", attempts %d in 24h", x.Attempts)
 		switch {
 		case x.Stopped:
 			line += ", stopped by you"

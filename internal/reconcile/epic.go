@@ -1,6 +1,7 @@
 package reconcile
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -175,22 +176,23 @@ func (r *run) planProblems(ep *entity, end events.Event) ([]string, error) {
 			return it != nil && it.work != nil && it.cur.State == workCancelled
 		},
 		TookOver:  func(issue epic.Ref) bool { return tookOver(ep, issue) },
-		Repair:    isRepairEpic(ep),
+		Repair:    repairBase(ep),
 		UATRunner: !r.b.Components["uat-runner"].Placeholder,
 	})
 	if len(problems) > 0 {
 		return problems, nil
 	}
-	problems, err = r.githubProblems(p)
+	problems, err = r.githubProblems(p, isRepairEpic(ep))
 	if len(problems) > 0 || err != nil {
 		return problems, err
 	}
-	return r.adoptionProblems(p)
+	return r.adoptionProblems(ep, p)
 }
 
 // adoptionProblems reads each PR the plan adopts on GitHub: it must be an
-// open PR in its item's repo, not from a fork, and opened by the user.
-func (r *run) adoptionProblems(p *epic.Plan) ([]string, error) {
+// open PR in its item's repo, not from a fork, opened by the user, not on a
+// factory branch, aimed at its item's base, and worked by no other item.
+func (r *run) adoptionProblems(ep *entity, p *epic.Plan) ([]string, error) {
 	var problems []string
 	me := ""
 	for _, it := range p.Items {
@@ -202,6 +204,8 @@ func (r *run) adoptionProblems(p *epic.Plan) ([]string, error) {
 			return nil, err
 		}
 		ref := epic.Ref{Repo: repo.FullName, Number: it.PR}
+		base := cmp.Or(it.Base, repo.Default)
+		other := r.itemByPR(ref)
 		ctx, cancel := r.call()
 		i, err := r.d.GitHub.Issue(ctx, ref.Repo, ref.Number)
 		var pr gh.PR
@@ -223,14 +227,21 @@ func (r *run) adoptionProblems(p *epic.Plan) ([]string, error) {
 			problems = append(problems, fmt.Sprintf("item %s adopts %s, which %s opened, not the user", it.ID, ref, pr.Author.Login))
 		case pr.State != prOpen:
 			problems = append(problems, fmt.Sprintf("item %s adopts %s, which is %s, not open", it.ID, ref, strings.ToLower(pr.State)))
+		case strings.HasPrefix(pr.HeadRefName, "factory/"):
+			problems = append(problems, fmt.Sprintf("item %s adopts %s, a factory PR on %s", it.ID, ref, pr.HeadRefName))
+		case pr.BaseRefName != base:
+			problems = append(problems, fmt.Sprintf("item %s adopts %s, which targets %s, not %s", it.ID, ref, pr.BaseRefName, base))
+		case other != nil && other.id != entityID(ep.id, it.ID):
+			problems = append(problems, fmt.Sprintf("item %s adopts %s, which %s already works on", it.ID, ref, other.id))
 		}
 	}
 	return problems, nil
 }
 
 // githubProblems reads each issue and blocker the plan names on GitHub: each
-// must exist, and an item's issue must be open.
-func (r *run) githubProblems(p *epic.Plan) ([]string, error) {
+// must exist, and an item's issue must be open. In a repair's plan, the PR
+// an elsewhere issue names must be open: the repair waits on it.
+func (r *run) githubProblems(p *epic.Plan, repair bool) ([]string, error) {
 	var problems []string
 	closed := map[string]bool{}
 	check := func(ref epic.Ref) error {
@@ -266,6 +277,27 @@ func (r *run) githubProblems(p *epic.Plan) ([]string, error) {
 	for _, it := range p.Items {
 		if ref, _ := epic.ParseRef(it.Issue); closed[strings.ToLower(ref.String())] {
 			problems = append(problems, fmt.Sprintf("item %s is for %s, which is closed on GitHub", it.ID, ref))
+		}
+	}
+	if !repair {
+		return problems, nil
+	}
+	for _, i := range p.Issues {
+		ref, _ := epic.ParseRef(i.Ref)
+		ev, err := epic.ParseEvidence(i.Evidence, ref.Repo)
+		if i.Result != epic.ResultElsewhere || err != nil || ev.Kind != epic.EvidencePR {
+			continue
+		}
+		ctx, cancel := r.call()
+		pr, err := r.d.GitHub.PR(ctx, ev.Ref.Repo, ev.Ref.Number)
+		cancel()
+		switch {
+		case notFound(err):
+			problems = append(problems, fmt.Sprintf("issue %s is elsewhere in %s: no such PR", ref, ev.Ref))
+		case err != nil:
+			return nil, err
+		case pr.State != prOpen:
+			problems = append(problems, fmt.Sprintf("issue %s is elsewhere in %s, which is %s, not open", ref, ev.Ref, strings.ToLower(pr.State)))
 		}
 	}
 	return problems, nil

@@ -298,6 +298,11 @@ func TestAGreenBaseClosesTheEpisodeAndStopsItsRepair(t *testing.T) {
 			if got := w.status(id).State == workCancelled; got != tc.stopped || len(stops) == 1 != tc.stopped {
 				t.Fatalf("%s is %s with stops %+v; want stopped %v", id, w.status(id).State, stops, tc.stopped)
 			}
+			w.fullTickAt(redAfter + 4*time.Minute)
+			closes := w.called("gh issue close")
+			if want := "gh issue close 5 -R o/r --reason not planned --comment o/r@main turned green on its own at fff6666; closing"; tc.stopped != slices.Equal(closes, []string{want}) {
+				t.Errorf("closes = %q, want %q only when stopped", closes, want)
+			}
 			if !tc.stopped {
 				return
 			}
@@ -376,7 +381,7 @@ func TestAUserStopEndsTheEpisodesRepairs(t *testing.T) {
 	}
 }
 
-func TestARepairFoundElsewhereWaitsOnThatPRAndDoesNotCount(t *testing.T) {
+func TestARepairFoundElsewhereWaitsOnThatPRAndCounts(t *testing.T) {
 	w := redWorld(t)
 	w.prs["alice/fix"] = gh.PR{Number: 9, URL: "https://github.com/o/r/pull/9", State: "OPEN", HeadRefName: "alice/fix"}
 	w.fullTickAt(redAfter)
@@ -412,12 +417,29 @@ links: []
 	w.endRepair(got[1])
 	w.fullTickAt(5*redAfter + time.Minute)
 	w.fullTickAt(6*redAfter + time.Minute)
-	if got := w.repairEpics(); len(got) != 3 {
-		t.Errorf("repair epics = %v, want a third: the elsewhere epic is no attempt", got)
+	if got := w.repairEpics(); len(got) != 2 {
+		t.Errorf("repair epics = %v, want no third: the elsewhere epic is an attempt", got)
 	}
-	if got := w.dmsWith("gave up"); len(got) != 0 {
-		t.Errorf("gave-up DMs = %q", got)
+	if got, want := w.dmsWith("gave up"), "factory: repair gave up on o/r@main: "+first+", "+got[1]; !slices.Equal(got, []string{want}) {
+		t.Errorf("gave-up DMs = %q, want %q", got, want)
 	}
+}
+
+func TestARepairPlanNamingAPRElsewhereThatIsNotOpenIsRefused(t *testing.T) {
+	w := redWorld(t)
+	w.prs["alice/fix"] = gh.PR{Number: 9, URL: "https://github.com/o/r/pull/9", State: "CLOSED", HeadRefName: "alice/fix"}
+	w.fullTickAt(redAfter)
+	id := w.repairEpics()[0]
+	w.end(id, "state-check.v1.md", stateCheck)
+	w.end(id, "epic.v1.yaml", `uat: none
+issues:
+  - {ref: o/r#5, result: elsewhere, evidence: "pr:o/r#9", why: alice's PR fixes it}
+items: []
+sets: []
+links: []
+`)
+	w.tick(false)
+	w.refusedWith(id, "issue o/r#5 is elsewhere in o/r#9, which is closed, not open")
 }
 
 func TestARepairMadeByATickThatDiedIsMadeOnce(t *testing.T) {
@@ -505,5 +527,102 @@ func TestIsRepairResolvesEachEntityToItsEpic(t *testing.T) {
 	}
 	if _, ok := r.openEpisode("o/r", "dev"); ok {
 		t.Error("openEpisode found o/r@dev")
+	}
+}
+
+// A finished repair's fix is still running its checks on the base: the next
+// repair waits for a red read, however long the base stays pending.
+func TestTheNextRepairWaitsForARedRead(t *testing.T) {
+	w := redWorld(t)
+	w.fullTickAt(redAfter)
+	first := w.repairEpics()[0]
+	w.planRepair(first, repairPlan)
+	ended := redAfter + 5*time.Minute
+	w.at(ended)
+	w.endRepair(first)
+	w.baseIs("PENDING", "bbb2222", pending("govulncheck"), pending("lint"))
+	for _, d := range []time.Duration{ended, ended + redAfter, ended + 2*redAfter} {
+		w.fullTickAt(d)
+	}
+	if got := w.repairEpics(); len(got) != 1 {
+		t.Fatalf("repair epics = %v while the base is pending, want one", got)
+	}
+	w.baseIs("FAILURE", "bbb2222", red("govulncheck"), passed("lint"))
+	w.fullTickAt(ended + 2*redAfter + time.Minute)
+	if got := w.repairEpics(); len(got) != 2 {
+		t.Errorf("repair epics = %v once the base reads red, want a second", got)
+	}
+}
+
+// A base that flaps between red and green opens a new episode each time;
+// its repairs count over a day, and only the first DMs that it started.
+func TestAFlakyBaseCountsItsRepairsOverADay(t *testing.T) {
+	w := redWorld(t)
+	redAgain := func(at time.Duration) {
+		w.t.Helper()
+		w.baseIs("SUCCESS", "fff6666", passed("govulncheck"), passed("lint"))
+		w.fullTickAt(at - 30*time.Minute)
+		w.fullTickAt(at - 29*time.Minute)
+		w.fullTickAt(at - 28*time.Minute)
+		w.baseIs("FAILURE", "aaa1111", red("govulncheck"), red("lint"))
+		w.fullTickAt(at)
+	}
+	w.fullTickAt(redAfter)
+	first := w.repairEpics()[0]
+	redAgain(time.Hour)
+	w.fullTickAt(time.Hour + redAfter)
+	got := w.repairEpics()
+	if len(got) != 2 {
+		t.Fatalf("repair epics = %v, want a second on the second red period", got)
+	}
+	second := got[1]
+	redAgain(2 * time.Hour)
+	w.fullTickAt(2*time.Hour + redAfter)
+	redAgain(3 * time.Hour)
+	w.fullTickAt(3*time.Hour + redAfter)
+	if got := w.repairEpics(); len(got) != 2 {
+		t.Fatalf("repair epics = %v, want no third within a day", got)
+	}
+	if got := w.dmsWith("repair epic"); len(got) != 1 || !strings.Contains(got[0], first) {
+		t.Errorf("started DMs = %q, want one, for %s", got, first)
+	}
+	if got, want := w.dmsWith("gave up"), "factory: repair gave up on o/r@main: "+first+", "+second; !slices.Equal(got, []string{want}) {
+		t.Errorf("gave-up DMs = %q, want %q once", got, want)
+	}
+	w.fullTickAt(redAfter + 24*time.Hour + time.Minute)
+	if got := w.repairEpics(); len(got) != 3 {
+		t.Errorf("repair epics = %v, want a third once the first is a day old", got)
+	}
+	if got := w.dmsWith("repair epic"); len(got) != 1 {
+		t.Errorf("started DMs = %q, want still one", got)
+	}
+}
+
+// An orchestrator whose item went to review meanwhile is not woken to hear
+// that its base is green again.
+func TestGreenAgainIsToldOnlyToOrchestratorsStillAtWork(t *testing.T) {
+	w := inReviewOnRedBase(t)
+	for _, n := range []string{"2", "3"} {
+		e, set, it := "e"+n, "e"+n+"-s1", "e"+n+"-w1"
+		w.epic(e, "running")
+		w.set(e, set, "running", it)
+		w.item(e, set, it, workImplementing, func(in *WorkInputs) { in.Issue = 20 })
+		w.orchestrator(set, sessionRunning, 5400, listedWorking)
+	}
+	w.tick(false)
+	w.fullTickAt(5 * time.Minute)
+	for _, set := range []string{"e2-s1", "e3-s1"} {
+		if got := w.messagesKeyed(set, "repair-note:"); len(got) != 1 {
+			t.Fatalf("%s notes = %q, want one", set, got)
+		}
+	}
+	w.moveTo("e3-w1", workPROpen)
+	w.baseIs("SUCCESS", "bbb2222", passed("govulncheck"))
+	w.fullTickAt(10 * time.Minute)
+	if got := w.messagesKeyed("e2-s1", "repair-green:"); len(got) != 1 {
+		t.Errorf("e2-s1 green messages = %q, want one", got)
+	}
+	if got := w.messagesKeyed("e3-s1", "repair-green:"); len(got) != 0 {
+		t.Errorf("e3-s1, whose item is in pr_open, got %q", got)
 	}
 }

@@ -127,7 +127,7 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
      "checks": ["govulncheck"],          // the checks that failed on the newest red head
      "epic": "e2610131",                 // the open repair epic; "" when none is open
      "epic_state": "checking",           // its state; "" when none is open
-     "attempts": 1,                      // repair epics that count toward values.repair_attempts
+     "attempts": 1,                      // its repair epics in the last 24h, which count toward values.repair_attempts
      "stopped": false,                   // a repair epic was stopped with factory stop: no more start
      "waiting_on": ""}                   // the open PR, owner/repo#n, a repair found fixing it elsewhere
   ],

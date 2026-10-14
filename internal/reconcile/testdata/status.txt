@@ -14,7 +14,7 @@ dead-letters (1):
 paused repos (1):
   o/r@main
 repairs (1):
-  o/r@main  red for 2h0m0s (govulncheck, lint), repair e3 checking, attempts 1
+  o/r@main  red for 2h0m0s (govulncheck, lint), repair e3 checking, attempts 1 in 24h
 epics (3):
   e1  planned for 3h0m0s, re-checks 0
   e2  checking for 2h0m0s, re-checks 1

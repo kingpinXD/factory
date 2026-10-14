@@ -332,7 +332,7 @@ func TestMayMergeAndDeployed(t *testing.T) {
 		t.Errorf("may-merge 41 = %q once e1-w1 is deployed", why)
 	}
 	// An adopted PR whose item is not made yet is held.
-	w.prs["me/sixty"] = gh.PR{Number: 60, State: "OPEN", HeadRefName: "me/sixty", Author: gh.User{Login: "me"}}
+	w.prs["me/sixty"] = gh.PR{Number: 60, State: "OPEN", HeadRefName: "me/sixty", BaseRefName: "main", Author: gh.User{Login: "me"}}
 	w.plannedAdopting("e3", strings.Replace(oneItem("[]"), "{id: w1, repo: r, issue: o/r#14}", "{id: w1, repo: r, issue: o/r#14, pr: 60}", 1), "o/r#14", 60)
 	r, err := readRun(ctx, w.deps())
 	if err != nil {

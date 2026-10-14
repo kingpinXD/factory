@@ -89,7 +89,7 @@ type Values struct {
 	// before a repair epic starts, and how long after a repair epic ended
 	// with the base still red the next one starts.
 	RedAfter Duration `yaml:"red_after" json:"red_after"`
-	// RepairAttempts is how many repair epics one red episode gets.
+	// RepairAttempts is how many repair epics one repo@base gets in 24h.
 	RepairAttempts int `yaml:"repair_attempts" json:"repair_attempts"`
 	// ReviewChannel is the Slack channel id a babysitter posts review
 	// requests in, for PRs that wait on an approval and hold other work.

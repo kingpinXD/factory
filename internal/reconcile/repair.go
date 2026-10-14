@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -21,7 +22,8 @@ import (
 // check it lists passes on a newer head: a pending head changes nothing. An
 // episode red for red_after with no repair epic open gets one, which the
 // planner turns into a fix; one still red red_after after its repair epic
-// ended gets another, up to repair_attempts.
+// ended gets another, on a red read. A repo@base gets at most
+// repair_attempts repair epics in repairWindow, whatever its episodes.
 
 // epicKindRepair is the kind of an epic the tick starts for a red base.
 const epicKindRepair = "repair"
@@ -29,6 +31,10 @@ const epicKindRepair = "repair"
 // baseGreenAgain is why a repair epic is stopped when its base turns green
 // before its fix merged.
 const baseGreenAgain = "base green again"
+
+// repairWindow is how far back a repo@base's repair epics count toward
+// repair_attempts.
+const repairWindow = 24 * time.Hour
 
 type repoBase struct{ repo, base string }
 
@@ -101,7 +107,7 @@ func (r *run) readEpisode(b repoBase, res gh.BaseResult) {
 			ep.Checks = red
 		}
 	case open && greenAgain(*ep, res):
-		r.closeEpisode(*ep)
+		r.closeEpisode(*ep, res.SHA)
 	}
 }
 
@@ -123,9 +129,10 @@ func greenAgain(ep store.RepairEpisode, res gh.BaseResult) bool {
 	return true
 }
 
-// closeEpisode ends ep, tells the work it held, and stops its open repair
-// epic unless the repair's fix is merging or merged.
-func (r *run) closeEpisode(ep store.RepairEpisode) {
+// closeEpisode ends ep, green at sha, tells the work it held, and stops its
+// open repair epic and closes its fix issue, unless the repair's fix is
+// merging or merged.
+func (r *run) closeEpisode(ep store.RepairEpisode, sha string) {
 	r.repairs = slices.DeleteFunc(r.repairs, func(o store.RepairEpisode) bool { return episodeBase(o) == episodeBase(ep) })
 	r.closed = append(r.closed, ep)
 	r.say("%s: green again; repair episode closed", episodeBase(ep))
@@ -150,6 +157,30 @@ func (r *run) closeEpisode(ep store.RepairEpisode) {
 	if _, err := r.append(rep, stop); err != nil {
 		r.fail("%s: %v", rep.id, err)
 	}
+	if err := r.closeFixIssue(rep, ep, sha); err != nil {
+		r.fail("%s: %v", rep.id, err)
+	}
+}
+
+// closeFixIssue closes the fix issue of rep, stopped because its base
+// turned green at sha, as not planned: no evidence kind says that.
+func (r *run) closeFixIssue(rep *entity, ep store.RepairEpisode, sha string) error {
+	i, ok := r.fixIssue(rep)
+	if !ok {
+		return nil
+	}
+	ref, err := epic.ParseRef(i.Ref)
+	if err != nil {
+		return err
+	}
+	comment := fmt.Sprintf("%s turned green on its own at %s; closing", episodeBase(ep), abbrev(sha))
+	return r.once(rep, "repair-close:"+episodeKey(ep), "close "+ref.String()+" as not planned", func(ctx context.Context) error {
+		issue, err := r.d.GitHub.Issue(ctx, ref.Repo, ref.Number)
+		if err != nil || issue.State == "closed" {
+			return err
+		}
+		return r.d.GitHub.Close(ctx, ref.Repo, ref.Number, gh.ReasonNotPlanned, comment)
+	})
 }
 
 // noteRepairs tells each orchestrator working on an item in a red
@@ -172,9 +203,10 @@ func (r *run) noteRepairs() {
 	}
 }
 
-// releaseHeld tells each orchestrator that got ep's note that its base is
-// green again, and brings each PR in review that only ep's checks hold up
-// to date with the base, once per base commit.
+// releaseHeld tells each orchestrator that got ep's note and still works
+// on an item there that its base is green again, and brings each PR in
+// review that only ep's checks hold up to date with the base, once per base
+// commit.
 func (r *run) releaseHeld(ep store.RepairEpisode) {
 	b, names := episodeBase(ep), baseCheckNames(ep.Checks)
 	for _, id := range r.order() {
@@ -182,7 +214,7 @@ func (r *run) releaseHeld(ep store.RepairEpisode) {
 		if it.work == nil || (repoBase{it.work.Repo, it.work.Base}) != b || r.isRepair(it) {
 			continue
 		}
-		if set := r.ents[it.work.Set]; set != nil && set.has("repair-note:"+episodeKey(ep)) {
+		if set := r.ents[it.work.Set]; active(it) && set != nil && set.has("repair-note:"+episodeKey(ep)) {
 			text := fmt.Sprintf("%s is green again; merge origin/%s before your next push", b, ep.Base)
 			if err := r.tell(it, "repair-green:"+episodeKey(ep), text); err != nil {
 				r.fail("%s: %v", it.id, err)
@@ -300,8 +332,10 @@ func (r *run) startRepairs() {
 }
 
 // startRepair starts ep's next repair epic when none is open, the user
-// stopped none, it waits on no PR, and red_after passed since it opened or
-// its last repair ended. Past repair_attempts it DMs once instead.
+// stopped none, it waits on no PR, red_after passed since it opened or its
+// last repair ended, and this tick read the base red. Only the first repair
+// epic of its repo@base in repairWindow DMs; past repair_attempts in it, it
+// DMs once instead.
 func (r *run) startRepair(ep *store.RepairEpisode) error {
 	if r.openRepair(ep.Repo, ep.Base) != nil {
 		return nil
@@ -321,19 +355,24 @@ func (r *run) startRepair(ep *store.RepairEpisode) error {
 	if r.now.Sub(since) < time.Duration(r.b.Values.RedAfter) {
 		return nil
 	}
-	if r.attempts(past) >= r.b.Values.RepairAttempts {
+	// watchBases reported a read error already.
+	if res, err := r.baseState(ep.Repo, ep.Base); err != nil || !res.Red() {
+		return nil
+	}
+	recent := r.recentRepairs(episodeBase(*ep))
+	if len(recent) >= r.b.Values.RepairAttempts {
 		var ids []string
-		for _, e := range past {
+		for _, e := range recent {
 			ids = append(ids, e.id)
 		}
-		r.dm(past[len(past)-1], "repair-gave-up:"+episodeKey(*ep), fmt.Sprintf("factory: repair gave up on %s: %s", episodeBase(*ep), strings.Join(ids, ", ")))
+		r.dm(recent[len(recent)-1], "repair-gave-up:"+episodeBase(*ep).String(), fmt.Sprintf("factory: repair gave up on %s: %s", episodeBase(*ep), strings.Join(ids, ", ")))
 		return nil
 	}
 	id := r.newEpicID()
 	in := &EpicInputs{ID: id, Kind: epicKindRepair, Repo: ep.Repo, Base: ep.Base, RepoHint: ep.Repo, Input: r.repairText(*ep, past), AddedAt: r.now}
 	dir := filepath.Join(store.Factory(r.d.Brain), "work", id)
 	e, err := r.create(id, store.Entry{Kind: blueprint.MachineEpic, Dir: dir, Epic: id}, in, blueprint.TriggerTick)
-	if err != nil {
+	if err != nil || len(recent) > 0 {
 		return err
 	}
 	r.dm(e, "repair-dm:"+id, fmt.Sprintf("factory: %s red since %s (%s); repair epic %s started",
@@ -389,18 +428,6 @@ func (r *run) elsewherePR(ep *entity) (epic.Ref, bool) {
 	return ev.Ref, err == nil && ev.Kind == epic.EvidencePR
 }
 
-// attempts counts the repair epics that count toward repair_attempts: all
-// but those that found the fix in someone else's PR.
-func (r *run) attempts(past []*entity) int {
-	n := 0
-	for _, e := range past {
-		if _, elsewhere := r.elsewherePR(e); !elsewhere {
-			n++
-		}
-	}
-	return n
-}
-
 // stoppedByUser reports whether a repair epic ended on the user's factory
 // stop.
 func stoppedByUser(ep *entity) bool {
@@ -415,10 +442,21 @@ func stoppedByUser(ep *entity) bool {
 // repairsOf returns ep's repair epics: those for its repo@base added since
 // it opened, oldest first.
 func (r *run) repairsOf(ep store.RepairEpisode) []*entity {
+	return r.repairsSince(episodeBase(ep), ep.RedSince)
+}
+
+// recentRepairs returns b's repair epics added in repairWindow, the ones
+// that count toward repair_attempts, oldest first.
+func (r *run) recentRepairs(b repoBase) []*entity {
+	return r.repairsSince(b, r.now.Add(-repairWindow))
+}
+
+// repairsSince returns b's repair epics added since t, oldest first.
+func (r *run) repairsSince(b repoBase, t time.Time) []*entity {
 	var out []*entity
 	for _, id := range r.order() {
 		e := r.ents[id]
-		if isRepairEpic(e) && episodeBase(ep) == (repoBase{e.epic.Repo, e.epic.Base}) && !e.epic.AddedAt.Before(ep.RedSince) {
+		if isRepairEpic(e) && b == (repoBase{e.epic.Repo, e.epic.Base}) && !e.epic.AddedAt.Before(t) {
 			out = append(out, e)
 		}
 	}
@@ -446,6 +484,15 @@ func (r *run) openRepair(repo, base string) *entity {
 }
 
 func isRepairEpic(e *entity) bool { return e.epic != nil && e.epic.Kind == epicKindRepair }
+
+// repairBase returns the repo@base repair epic ep fixes, nil for another
+// epic.
+func repairBase(ep *entity) *epic.RepoBase {
+	if !isRepairEpic(ep) {
+		return nil
+	}
+	return &epic.RepoBase{Repo: ep.epic.Repo, Base: ep.epic.Base}
+}
 
 // isRepair reports whether e, an epic, set, work item or session, belongs
 // to a repair epic.

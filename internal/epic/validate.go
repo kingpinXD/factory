@@ -25,12 +25,17 @@ type Env struct {
 	// TookOver reports whether the user answered "take over" for issue, which
 	// lets an item adopt the PR it names.
 	TookOver func(issue Ref) bool
-	// Repair is set for a repair epic: it adopts the user's own PR without
-	// a "take over", and a yours issue whose PR it adopts needs no answers.
-	Repair bool
+	// Repair is the repo@base a repair epic fixes, nil for any other epic.
+	// A repair adopts the user's own PR without a "take over", and a yours
+	// issue whose PR it adopts needs no answers; its plan holds at most one
+	// item, on that repo@base, and no links.
+	Repair *RepoBase
 	// UATRunner is set once the uat-runner is built, not a placeholder.
 	UATRunner bool
 }
+
+// RepoBase is a base branch of a repo, named owner/name.
+type RepoBase struct{ Repo, Base string }
 
 // Validate returns every reason the tick cannot act on the plan, or none.
 func (p *Plan) Validate(env Env) []string {
@@ -100,7 +105,7 @@ func (v *validator) issues() {
 		default:
 			v.evidence(ref, i)
 		}
-		if i.NeedsUser() && len(i.Answers) == 0 && !(v.env.Repair && v.p.AdoptsYours(i)) {
+		if i.NeedsUser() && len(i.Answers) == 0 && !(v.env.Repair != nil && v.p.AdoptsYours(i)) {
 			v.add("issue %s: result %s waits on the user, so it needs answers", ref, i.Result)
 		}
 	}
@@ -143,6 +148,9 @@ func withColon(kinds []string) []string {
 }
 
 func (v *validator) items() {
+	if n := len(v.p.Items); v.env.Repair != nil && n > 1 {
+		v.add("a repair plan holds one item at most, not %d", n)
+	}
 	seen := map[string]bool{}
 	for _, it := range v.p.Items {
 		if err := store.CheckID(it.ID); err != nil {
@@ -199,6 +207,9 @@ func (v *validator) itemRepo(it Item) {
 	if slices.Contains(v.env.Deny.Branches, blueprint.RepoBranch{Repo: it.Repo, Branch: base}) {
 		v.add("item %s: base %s of %s is denied", it.ID, base, it.Repo)
 	}
+	if rb := v.env.Repair; rb != nil && (!strings.EqualFold(repo.FullName, rb.Repo) || base != rb.Base) {
+		v.add("item %s is on %s@%s, not the repair's %s@%s", it.ID, repo.FullName, base, rb.Repo, rb.Base)
+	}
 	ref, err := ParseRef(it.Issue)
 	if err == nil && !strings.EqualFold(ref.Repo, repo.FullName) {
 		v.add("item %s is in two repos: %s (%s) and its issue's %s", it.ID, it.Repo, repo.FullName, ref.Repo)
@@ -219,7 +230,7 @@ func (v *validator) itemIssue(it Item) {
 	case slices.Contains(closing, issue.Result):
 		v.add("item %s is for %s, whose result is %s", it.ID, ref, issue.Result)
 	}
-	if it.PR != 0 && !v.env.Repair && (v.env.TookOver == nil || !v.env.TookOver(ref)) {
+	if it.PR != 0 && v.env.Repair == nil && (v.env.TookOver == nil || !v.env.TookOver(ref)) {
 		v.add("item %s adopts PR #%d, but the user has not answered \"take over\" for %s", it.ID, it.PR, ref)
 	}
 }
@@ -250,6 +261,9 @@ func (v *validator) sets() {
 }
 
 func (v *validator) links() {
+	if v.env.Repair != nil && len(v.p.Links) > 0 {
+		v.add("a repair plan holds no links")
+	}
 	for _, l := range v.p.Links {
 		if _, ok := v.p.Item(l.To); !ok {
 			v.add("link %s: %s is not an item of this epic", l, l.To)

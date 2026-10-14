@@ -44,7 +44,8 @@ values:
     compact_failures_dm: 2
   wait_dm: 24h
   # A base branch an open item works on that stays red red_after gets a repair epic; one that
-  # is still red red_after after a repair epic ended gets another, up to repair_attempts.
+  # is still red red_after after a repair epic ended gets another. A repo@base gets at most
+  # repair_attempts repair epics in 24h.
   red_after: 15m
   repair_attempts: 2
   # A babysitter posts a review request here (#engineering) for PRs that wait only on an

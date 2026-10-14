@@ -323,6 +323,30 @@ func TestTheSameHeadRedAfterAPassWaitsForTheUser(t *testing.T) {
 	}
 }
 
+// rerunGreen are the runs on anuma-marketing-site#412's head, oldest first:
+// GitHub lists each one, and the newest of each check passed.
+var rerunGreen = []gh.Check{
+	{Name: "Validate PR title", State: "CANCELLED"}, {Name: "Lint", State: "SUCCESS"},
+	{Name: "Validate PR title", State: "SUCCESS"}, {Name: "Validate PR title", State: "SUCCESS"},
+}
+
+func TestACancelledRunReRunGreenIsNotRed(t *testing.T) {
+	w := watching(t)
+	w.babysitter(1, sessionTurnEnded, 5400, listedTurnEnded)
+	w.pulls.checks[head1] = rerunGreen
+	w.tick(false)
+	w.end(item, "babysit.v1.md", "## Outcome\nopen — waiting on review\n## Comments\nnone\n## CI\ngreen\n")
+	w.now = w.now.Add(5 * time.Minute)
+	w.fullNext()
+	w.tick(false)
+	if got := w.toBabysitter(); len(got) != 0 {
+		t.Errorf("requests to the babysitter = %+v, want none", got)
+	}
+	if got := w.status(item).State; got == stateNeedsYou || len(w.dms) != 0 {
+		t.Errorf("state %s, DMs %q; want it not sent to the user", got, w.dms)
+	}
+}
+
 func TestTriggersLeaveOutWhatTheUserWrote(t *testing.T) {
 	me := gh.User{Login: "me"}
 	pr := gh.PR{HeadRefOid: head1, BaseRefOid: base1, Mergeable: "MERGEABLE", Reviews: []gh.Review{

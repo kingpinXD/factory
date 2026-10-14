@@ -219,19 +219,18 @@ func (w *world) respond(c proc.Cmd) ([]byte, error) {
 }
 
 // baseRead answers the read of base branch k, repo@branch: its entry in
-// bases; else red with no checks listed when red says so, or SUCCESS.
+// bases; else one check, ci, failed when red says so and passed when not.
+// The checks started in the order listed.
 func (w *world) baseRead(k string) ([]byte, error) {
 	res, ok := w.bases[k]
 	switch {
 	case ok && res.err != nil:
 		return nil, res.err
-	case !ok && w.red[k]:
-		res.State = "FAILURE"
 	case !ok:
-		res.State = "SUCCESS"
+		res.Checks = []gh.BaseCheck{{Name: "ci", Red: w.red[k], Success: !w.red[k]}}
 	}
-	var nodes []map[string]string
-	for _, c := range res.Checks {
+	var nodes []map[string]any
+	for i, c := range res.Checks {
 		conclusion := ""
 		switch {
 		case c.Red:
@@ -243,9 +242,10 @@ func (w *world) baseRead(k string) ([]byte, error) {
 		if conclusion == "" {
 			status = "IN_PROGRESS"
 		}
-		nodes = append(nodes, map[string]string{"__typename": "CheckRun", "name": c.Name, "status": status, "conclusion": conclusion, "detailsUrl": c.URL})
+		nodes = append(nodes, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": status, "conclusion": conclusion, "detailsUrl": c.URL,
+			"startedAt": t0.Add(time.Duration(i) * time.Minute)})
 	}
-	rollup := map[string]any{"state": res.State, "contexts": map[string]any{"nodes": nodes}}
+	rollup := map[string]any{"contexts": map[string]any{"nodes": nodes}}
 	return json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"ref": map[string]any{"target": map[string]any{"oid": res.SHA, "statusCheckRollup": rollup}}}}})
 }
 

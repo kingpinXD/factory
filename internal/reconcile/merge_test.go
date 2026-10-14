@@ -29,8 +29,8 @@ import (
 type pulls struct {
 	threads  map[int][]gh.Thread
 	comments map[int][]gh.Comment
-	// checks are by commit; a check in state EXPECTED is a required one
-	// that never started.
+	// checks are by commit, started in the order listed; a check in state
+	// EXPECTED is a required one that never started.
 	checks map[string][]gh.Check
 	queues map[string]bool // repo@base
 	// pushBeforeMerge, when set, is a head commit pushed between the merge
@@ -61,7 +61,7 @@ func (p *pulls) respond(w *world, c proc.Cmd) (out []byte, ok bool, err error) {
 	case strings.Contains(line, "reviewThreads("):
 		n, _ := strconv.Atoi(field(a, "number="))
 		out, err = threadsReply(p.threads[n])
-	case strings.Contains(line, "statusCheckRollup{contexts"):
+	case strings.Contains(line, "object(oid:$sha)"):
 		out, err = checksReply(p.checks[field(a, "sha=")])
 	case strings.Contains(line, "mergeQueue(branch"):
 		queue := "null"
@@ -116,7 +116,7 @@ func threadsReply(threads []gh.Thread) ([]byte, error) {
 
 func checksReply(checks []gh.Check) ([]byte, error) {
 	required, nodes := []string{}, []any{}
-	for _, c := range checks {
+	for i, c := range checks {
 		if c.Required {
 			required = append(required, c.Name)
 		}
@@ -127,7 +127,8 @@ func checksReply(checks []gh.Check) ([]byte, error) {
 		if c.State == "QUEUED" || c.State == "IN_PROGRESS" {
 			status, conclusion = c.State, ""
 		}
-		nodes = append(nodes, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": status, "conclusion": conclusion, "isRequired": c.Required})
+		nodes = append(nodes, map[string]any{"__typename": "CheckRun", "name": c.Name, "status": status, "conclusion": conclusion, "isRequired": c.Required,
+			"startedAt": t0.Add(time.Duration(i) * time.Minute)})
 	}
 	return json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{
 		"pullRequest": map[string]any{"baseRef": map[string]any{"refUpdateRule": map[string]any{"requiredStatusCheckContexts": required}}},
@@ -324,6 +325,10 @@ func TestTheMergeCheckHoldsThePR(t *testing.T) {
 		}},
 		{name: "no required check and one red", hold: "its required checks are not green", setup: func(w *world) {
 			w.pulls.checks[head1] = []gh.Check{{Name: "ci", State: "SUCCESS"}, {Name: "lint", State: "FAILURE"}}
+		}},
+		{name: "a cancelled run re-run green, no required check", setup: func(w *world) { w.pulls.checks[head1] = rerunGreen }},
+		{name: "a passed run re-run red, no required check", hold: "its required checks are not green", setup: func(w *world) {
+			w.pulls.checks[head1] = []gh.Check{{Name: "ci", State: "SUCCESS"}, {Name: "title", State: "SUCCESS"}, {Name: "title", State: "FAILURE"}}
 		}},
 		{name: "no checks at all on the head", hold: "no checks ran on 1111111", setup: func(w *world) { delete(w.pulls.checks, head1) }},
 		{name: "a draft", hold: "its PR is a draft", setup: func(w *world) { w.pr(func(pr *gh.PR) { pr.IsDraft = true }) }},

@@ -20,9 +20,9 @@ import (
 
 const redAfter = 15 * time.Minute
 
-// baseIs makes o/r@main read as state at sha, with checks.
-func (w *world) baseIs(state, sha string, checks ...gh.BaseCheck) {
-	w.bases["o/r@main"] = fakeBase{BaseResult: gh.BaseResult{State: state, SHA: sha, Checks: checks}}
+// baseIs makes o/r@main read as sha, with checks.
+func (w *world) baseIs(sha string, checks ...gh.BaseCheck) {
+	w.bases["o/r@main"] = fakeBase{BaseResult: gh.BaseResult{SHA: sha, Checks: checks}}
 }
 
 func red(name string) gh.BaseCheck {
@@ -96,7 +96,7 @@ func redWorld(t *testing.T) *world {
 	w.registry()
 	w.listSession("someone-else", 1, "working")
 	oneSet(w)
-	w.baseIs("FAILURE", "aaa1111", red("govulncheck"), red("lint"), passed("build"))
+	w.baseIs("aaa1111", red("govulncheck"), red("lint"), passed("build"))
 	w.fullTickAt(0)
 	return w
 }
@@ -188,7 +188,7 @@ func TestBasesAreReadOnFullReconcilesForOpenItemsOnly(t *testing.T) {
 	oneSet(w)
 	w.moveTo("e1-w1", stateBlocked)
 	w.moveTo("e1-w2", workDone)
-	w.baseIs("FAILURE", "aaa1111", red("govulncheck"))
+	w.baseIs("aaa1111", red("govulncheck"))
 	w.fullTickAt(0)
 	if n := w.baseReads(); n != 1 || len(w.episodes()) != 1 {
 		t.Fatalf("base reads %d, episodes %+v; want one read and one episode", n, w.episodes())
@@ -228,18 +228,18 @@ func TestAReadErrorLeavesTheEpisodeAsItIs(t *testing.T) {
 
 func TestAPendingHeadNeverClosesTheEpisode(t *testing.T) {
 	w := redWorld(t)
-	w.baseIs("PENDING", "bbb2222", pending("govulncheck"), pending("lint"))
+	w.baseIs("bbb2222", pending("govulncheck"), pending("lint"))
 	w.fullTickAt(5 * time.Minute)
-	w.baseIs("FAILURE", "ccc3333", red("govulncheck"), pending("lint"))
+	w.baseIs("ccc3333", red("govulncheck"), pending("lint"))
 	w.fullTickAt(10 * time.Minute)
 	eps := w.episodes()
 	if len(eps) != 1 || !eps[0].RedSince.Equal(t0) || eps[0].RedSHA != "ccc3333" || !reflect.DeepEqual(eps[0].Checks, []gh.BaseCheck{red("govulncheck")}) {
 		t.Fatalf("episodes = %+v, want the first one, refreshed", eps)
 	}
 	w.fullTickAt(redAfter)
-	w.baseIs("PENDING", "ddd4444", pending("govulncheck"))
+	w.baseIs("ddd4444", pending("govulncheck"))
 	w.fullTickAt(redAfter + time.Minute)
-	w.baseIs("FAILURE", "eee5555", red("govulncheck"))
+	w.baseIs("eee5555", red("govulncheck"))
 	w.fullTickAt(redAfter + 2*time.Minute)
 	if got := w.repairEpics(); len(got) != 1 {
 		t.Errorf("repair epics = %v, want one", got)
@@ -251,20 +251,31 @@ func TestAPendingHeadNeverClosesTheEpisode(t *testing.T) {
 
 func TestEveryListedCheckPassingOnANewHeadClosesTheEpisode(t *testing.T) {
 	w := redWorld(t)
-	w.baseIs("PENDING", "aaa1111", passed("govulncheck"), passed("lint"), pending("build"))
+	w.baseIs("aaa1111", passed("govulncheck"), passed("lint"), pending("build"))
 	w.fullTickAt(time.Minute)
 	if eps := w.episodes(); len(eps) != 1 {
 		t.Fatalf("episodes = %+v, want it open: the head is the red one", eps)
 	}
-	w.baseIs("PENDING", "bbb2222", passed("govulncheck"), pending("lint"))
+	w.baseIs("bbb2222", passed("govulncheck"), pending("lint"))
 	w.fullTickAt(2 * time.Minute)
 	if eps := w.episodes(); len(eps) != 1 {
 		t.Fatalf("episodes = %+v, want it open: lint has not passed", eps)
 	}
-	w.baseIs("PENDING", "bbb2222", passed("govulncheck"), passed("lint"), pending("build"))
+	w.baseIs("bbb2222", passed("govulncheck"), passed("lint"), pending("build"))
 	w.fullTickAt(3 * time.Minute)
 	if eps := w.episodes(); len(eps) != 0 {
 		t.Errorf("episodes = %+v, want it closed", eps)
+	}
+}
+
+// GitHub lists every run of a check, and its rollup reads FAILURE while a
+// failed run's re-run passed on the same head.
+func TestAFailedRunReRunGreenClosesTheEpisode(t *testing.T) {
+	w := redWorld(t)
+	w.baseIs("aaa1111", red("govulncheck"), red("lint"), passed("build"), passed("govulncheck"), passed("lint"))
+	w.fullTickAt(time.Minute)
+	if eps := w.episodes(); len(eps) != 0 {
+		t.Errorf("episodes = %+v, want it closed: every check's newest run passed", eps)
 	}
 }
 
@@ -286,7 +297,7 @@ func TestAGreenBaseClosesTheEpisodeAndStopsItsRepair(t *testing.T) {
 			if tc.itemState != workQueued {
 				w.moveTo(item, tc.itemState)
 			}
-			w.baseIs("SUCCESS", "fff6666", passed("govulncheck"), passed("lint"))
+			w.baseIs("fff6666", passed("govulncheck"), passed("lint"))
 			w.fullTickAt(redAfter + 2*time.Minute)
 			if eps := w.episodes(); len(eps) != 0 {
 				t.Fatalf("episodes = %+v, want none", eps)
@@ -492,7 +503,7 @@ func TestPausedReposListOnlyRedBasesWithAQueuedItem(t *testing.T) {
 	oneSet(w)
 	w.moveTo("e1-w1", stateBlocked)
 	w.moveTo("e1-w2", stateBlocked)
-	w.baseIs("FAILURE", "aaa1111", red("govulncheck"))
+	w.baseIs("aaa1111", red("govulncheck"))
 	w.fullTickAt(0)
 	o, _ := store.ReadOverall(w.brain)
 	if len(o.PausedRepos) != 0 || len(o.Repairs) != 1 {
@@ -540,14 +551,14 @@ func TestTheNextRepairWaitsForARedRead(t *testing.T) {
 	ended := redAfter + 5*time.Minute
 	w.at(ended)
 	w.endRepair(first)
-	w.baseIs("PENDING", "bbb2222", pending("govulncheck"), pending("lint"))
+	w.baseIs("bbb2222", pending("govulncheck"), pending("lint"))
 	for _, d := range []time.Duration{ended, ended + redAfter, ended + 2*redAfter} {
 		w.fullTickAt(d)
 	}
 	if got := w.repairEpics(); len(got) != 1 {
 		t.Fatalf("repair epics = %v while the base is pending, want one", got)
 	}
-	w.baseIs("FAILURE", "bbb2222", red("govulncheck"), passed("lint"))
+	w.baseIs("bbb2222", red("govulncheck"), passed("lint"))
 	w.fullTickAt(ended + 2*redAfter + time.Minute)
 	if got := w.repairEpics(); len(got) != 2 {
 		t.Errorf("repair epics = %v once the base reads red, want a second", got)
@@ -560,11 +571,11 @@ func TestAFlakyBaseCountsItsRepairsOverADay(t *testing.T) {
 	w := redWorld(t)
 	redAgain := func(at time.Duration) {
 		w.t.Helper()
-		w.baseIs("SUCCESS", "fff6666", passed("govulncheck"), passed("lint"))
+		w.baseIs("fff6666", passed("govulncheck"), passed("lint"))
 		w.fullTickAt(at - 30*time.Minute)
 		w.fullTickAt(at - 29*time.Minute)
 		w.fullTickAt(at - 28*time.Minute)
-		w.baseIs("FAILURE", "aaa1111", red("govulncheck"), red("lint"))
+		w.baseIs("aaa1111", red("govulncheck"), red("lint"))
 		w.fullTickAt(at)
 	}
 	w.fullTickAt(redAfter)
@@ -617,7 +628,7 @@ func TestGreenAgainIsToldOnlyToOrchestratorsStillAtWork(t *testing.T) {
 		}
 	}
 	w.moveTo("e3-w1", workPROpen)
-	w.baseIs("SUCCESS", "bbb2222", passed("govulncheck"))
+	w.baseIs("bbb2222", passed("govulncheck"))
 	w.fullTickAt(10 * time.Minute)
 	if got := w.messagesKeyed("e2-s1", "repair-green:"); len(got) != 1 {
 		t.Errorf("e2-s1 green messages = %q, want one", got)

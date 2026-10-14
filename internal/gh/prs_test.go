@@ -76,6 +76,15 @@ func TestChecks(t *testing.T) {
 	constructed := `{"data":{"repository":{"object":{"statusCheckRollup":{"contexts":{"nodes":[` +
 		`{"__typename":"StatusContext","context":"ci/legacy","state":"PENDING","isRequired":true},` +
 		`{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":null,"isRequired":true}]}}}}}}`
+	// GitHub's order is not the runs' order: the newest run of test and
+	// ci/legacy is listed first, of lint last.
+	rerun := `{"data":{"repository":{"object":{"statusCheckRollup":{"contexts":{"nodes":[` +
+		`{"__typename":"CheckRun","name":"test","status":"QUEUED","conclusion":null,"startedAt":null,"isRequired":true},` +
+		`{"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-14T05:09:34Z","isRequired":false},` +
+		`{"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE","createdAt":"2026-10-14T05:10:00Z","isRequired":false},` +
+		`{"__typename":"StatusContext","context":"ci/legacy","state":"SUCCESS","createdAt":"2026-10-14T05:09:00Z","isRequired":false},` +
+		`{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-14T05:09:34Z","isRequired":true},` +
+		`{"__typename":"CheckRun","name":"lint","status":"QUEUED","conclusion":null,"startedAt":null,"isRequired":false}]}}}}}}`
 	for _, tc := range []struct {
 		name string
 		out  string
@@ -87,6 +96,14 @@ func TestChecks(t *testing.T) {
 			{"start-e2e-consensus-test / e2e", "SKIPPED", false}, {"check-changelog", "SUCCESS", false},
 		}},
 		{"a commit status and a running check", constructed, []Check{{"ci/legacy", "PENDING", true}, {"test", "IN_PROGRESS", true}}},
+		// anuma-marketing-site#412: GitHub lists every run of a check, and
+		// its cancelled first run of Validate PR title was re-run green.
+		{"recorded, a cancelled run re-run green", fixture(t, "checks-rerun.json"), []Check{
+			{"Validate PR title", "SUCCESS", false}, {"Format Check", "SUCCESS", false}, {"Lint", "SUCCESS", false}, {"Test", "SUCCESS", false},
+			{"Type Check", "SUCCESS", false}, {"Greptile Review", "SUCCESS", false}, {"Vercel", "SUCCESS", false},
+			{"Workers Builds: anuma-marketing-site", "SUCCESS", false},
+		}},
+		{"failed runs re-run, not started yet", rerun, []Check{{"test", "QUEUED", true}, {"lint", "QUEUED", false}, {"ci/legacy", "FAILURE", false}}},
 		{"no checks", `{"data":{"repository":{"object":{"statusCheckRollup":null}}}}`, nil},
 		// Required names as GitHub gives them: branchProtectionRule to an
 		// admin, refUpdateRule to a writer, rules for a ruleset.
@@ -136,18 +153,28 @@ func TestBaseState(t *testing.T) {
 	build := `{"__typename":"CheckRun","name":"build","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://ci/3"}`
 	deploy := `{"__typename":"StatusContext","context":"deploy","state":"ERROR","targetUrl":"https://deploy/4"}`
 	for _, tc := range []struct {
-		name       string
-		out        string
-		want       BaseResult
-		red, green bool
+		name               string
+		out                string
+		want               BaseResult
+		red, green, passed bool
 	}{
-		{"recorded success", fixture(t, "base.json"), BaseResult{State: "SUCCESS", SHA: "1747cd4997f9caa0d6b7a1df43530e0b75fd7a82",
-			Checks: []BaseCheck{{Name: "ci", URL: "https://github.com/kingpinXD/factory/actions/runs/38418484316/job/115369153028", Success: true}}}, false, true},
-		{"failure", rollup("FAILURE", strings.Join([]string{vuln, lint, build}, ",")), BaseResult{State: "FAILURE", SHA: "f453fce", Checks: []BaseCheck{
-			{Name: "govulncheck", URL: "https://ci/1", Red: true}, {Name: "lint", URL: "https://ci/2", Success: true}, {Name: "build", URL: "https://ci/3"}}}, true, false},
-		{"error", rollup("ERROR", deploy), BaseResult{State: "ERROR", SHA: "f453fce", Checks: []BaseCheck{{Name: "deploy", URL: "https://deploy/4", Red: true}}}, true, false},
-		{"pending", rollup("PENDING", build), BaseResult{State: "PENDING", SHA: "f453fce", Checks: []BaseCheck{{Name: "build", URL: "https://ci/3"}}}, false, true},
-		{"no checks", `{"data":{"repository":{"ref":{"target":{"oid":"f453fce","statusCheckRollup":null}}}}}`, BaseResult{SHA: "f453fce"}, false, true},
+		{"recorded success", fixture(t, "base.json"), BaseResult{SHA: "1747cd4997f9caa0d6b7a1df43530e0b75fd7a82",
+			Checks: []BaseCheck{{Name: "ci", URL: "https://github.com/kingpinXD/factory/actions/runs/38418484316/job/115369153028", Success: true}}}, false, true, true},
+		{"failure", rollup("FAILURE", strings.Join([]string{vuln, lint, build}, ",")), BaseResult{SHA: "f453fce", Checks: []BaseCheck{
+			{Name: "govulncheck", URL: "https://ci/1", Red: true}, {Name: "lint", URL: "https://ci/2", Success: true}, {Name: "build", URL: "https://ci/3"}}}, true, false, false},
+		{"error", rollup("ERROR", deploy), BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "deploy", URL: "https://deploy/4", Red: true}}}, true, false, false},
+		{"pending", rollup("PENDING", build), BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "build", URL: "https://ci/3"}}}, false, true, false},
+		{"no checks", `{"data":{"repository":{"ref":{"target":{"oid":"f453fce","statusCheckRollup":null}}}}}`, BaseResult{SHA: "f453fce"}, false, true, false},
+		// GitHub's own rollup reads FAILURE while a cancelled run's re-run
+		// passed.
+		{"a cancelled run re-run green", rollup("FAILURE",
+			`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"CANCELLED","startedAt":"2026-10-14T05:09:34Z","detailsUrl":"https://ci/1"},`+
+				`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-14T05:09:43Z","detailsUrl":"https://ci/5"}`),
+			BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "govulncheck", URL: "https://ci/5", Success: true}}}, false, true, true},
+		{"a passed run re-run red", rollup("FAILURE",
+			`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-10-14T05:12:04Z","detailsUrl":"https://ci/6"},`+
+				`{"__typename":"CheckRun","name":"govulncheck","status":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-10-14T05:09:43Z","detailsUrl":"https://ci/5"}`),
+			BaseResult{SHA: "f453fce", Checks: []BaseCheck{{Name: "govulncheck", URL: "https://ci/6", Red: true}}}, true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := fakeGH(map[string]reply{"ref(qualifiedName:$ref)": {out: tc.out}})
@@ -155,8 +182,8 @@ func TestBaseState(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("BaseState = %+v, %v; want %+v", got, err, tc.want)
 			}
-			if got.Red() != tc.red || got.Green() != tc.green {
-				t.Errorf("Red() = %v, Green() = %v; want %v, %v", got.Red(), got.Green(), tc.red, tc.green)
+			if got.Red() != tc.red || got.Green() != tc.green || got.Passed() != tc.passed {
+				t.Errorf("Red() = %v, Green() = %v, Passed() = %v; want %v, %v, %v", got.Red(), got.Green(), got.Passed(), tc.red, tc.green, tc.passed)
 			}
 			if call := strings.Join(f.Calls()[0].Args, " "); !strings.Contains(call, "-f ref=refs/heads/main") {
 				t.Errorf("call = %q", call)

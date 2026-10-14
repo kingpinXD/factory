@@ -1,0 +1,115 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "baseRef": {
+          "branchProtectionRule": null,
+          "refUpdateRule": null,
+          "rules": {
+            "nodes": [
+              {
+                "parameters": {}
+              },
+              {
+                "parameters": null
+              },
+              {
+                "parameters": null
+              },
+              {
+                "parameters": null
+              }
+            ]
+          }
+        }
+      },
+      "object": {
+        "statusCheckRollup": {
+          "contexts": {
+            "nodes": [
+              {
+                "__typename": "CheckRun",
+                "name": "Validate PR title",
+                "status": "COMPLETED",
+                "conclusion": "CANCELLED",
+                "startedAt": "2026-10-14T05:09:34Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Format Check",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:09:33Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Lint",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:09:33Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Validate PR title",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:09:43Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Validate PR title",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:12:04Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Test",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:09:33Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Type Check",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:09:33Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Greptile Review",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:09:39Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "StatusContext",
+                "context": "Vercel",
+                "state": "SUCCESS",
+                "createdAt": "2026-10-14T05:11:12Z",
+                "isRequired": false
+              },
+              {
+                "__typename": "CheckRun",
+                "name": "Workers Builds: anuma-marketing-site",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "startedAt": "2026-10-14T05:12:51Z",
+                "isRequired": false
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

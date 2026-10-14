@@ -176,7 +176,7 @@ func (r *run) noteRepairs() {
 // green again, and brings each PR in review that only ep's checks hold up
 // to date with the base, once per base commit.
 func (r *run) releaseHeld(ep store.RepairEpisode) {
-	b := episodeBase(ep)
+	b, names := episodeBase(ep), baseCheckNames(ep.Checks)
 	for _, id := range r.order() {
 		it := r.ents[id]
 		if it.work == nil || (repoBase{it.work.Repo, it.work.Base}) != b || r.isRepair(it) {
@@ -188,7 +188,7 @@ func (r *run) releaseHeld(ep store.RepairEpisode) {
 				r.fail("%s: %v", it.id, err)
 			}
 		}
-		if err := r.updateHeldByBase(it, baseCheckNames(ep.Checks)); err != nil {
+		if err := r.updateHeldByBase(it, names); err != nil {
 			r.fail("%s: %v", it.id, err)
 		}
 	}

@@ -122,8 +122,8 @@ func (r *run) hold(it *entity, skipApproval bool) (string, error) {
 	if len(rd.checks) == 0 {
 		return "no checks ran on " + abbrev(pr.HeadRefOid), nil
 	}
-	if !allGreen(gating(rd.checks)) {
-		if redOnBase(failing(gating(rd.checks)), r.baseRed(it)) {
+	if gated := gating(rd.checks); !allGreen(gated) {
+		if redOnBase(failing(gated), r.baseRed(it)) {
 			return r.waitingOnRepair(it), nil
 		}
 		return "its required checks are not green on " + abbrev(pr.HeadRefOid), nil

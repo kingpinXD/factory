@@ -63,7 +63,7 @@ func (r *run) baseGreen(repo, base string) (bool, error) {
 
 // baseState reads repo's base branch, once per tick.
 func (r *run) baseState(repo, base string) (gh.BaseResult, error) {
-	k := repo + "@" + base
+	k := repoBase{repo, base}.String()
 	if read, ok := r.bases[k]; ok {
 		return read.res, read.err
 	}

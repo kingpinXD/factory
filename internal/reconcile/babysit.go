@@ -292,9 +292,9 @@ const triggerRed = "red"
 // so a return from blocked, rechecking or needs_you wakes the babysitter
 // for a fresh pass.
 func redKey(it *entity, sha string) string {
-	key := "babysit:red:" + sha
-	if red, ok := lastRed(it, sha); ok && red.Seq < reviewEntered(it) {
-		key += ":" + strconv.Itoa(reviewEntered(it))
+	key, entered := "babysit:red:"+sha, reviewEntered(it)
+	if red, ok := lastRed(it, sha); ok && red.Seq < entered {
+		key += ":" + strconv.Itoa(entered)
 	}
 	return key
 }

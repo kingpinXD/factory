@@ -154,11 +154,8 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 }
 
 func (r *run) repairLoad(ep store.RepairEpisode) RepairLoad {
-	rl := RepairLoad{Repo: ep.Repo, Base: ep.Base, RedSince: ep.RedSince, Checks: []string{},
+	rl := RepairLoad{Repo: ep.Repo, Base: ep.Base, RedSince: ep.RedSince, Checks: append([]string{}, baseCheckNames(ep.Checks)...),
 		Attempts: r.attempts(r.repairsOf(ep)), Stopped: ep.Stopped, WaitingOn: ep.WaitingOn}
-	for _, c := range ep.Checks {
-		rl.Checks = append(rl.Checks, c.Name)
-	}
 	if e := r.openRepair(ep.Repo, ep.Base); e != nil {
 		rl.Epic, rl.EpicState = e.id, e.cur.State
 	}
@@ -284,7 +281,7 @@ func (rep Report) WriteText(w io.Writer) {
 	section(w, "dead-letters", rep.Dead, func(x DeadLetter) string { return fmt.Sprintf("%s  %s", x.ID, x.Error) })
 	section(w, "paused repos", rep.Paused, func(x string) string { return x })
 	section(w, "repairs", rep.Repairs, func(x RepairLoad) string {
-		line := fmt.Sprintf("%s@%s  red for %s (%s), ", x.Repo, x.Base, age(x.RedSince), strings.Join(x.Checks, ", "))
+		line := fmt.Sprintf("%s  red for %s (%s), ", repoBase{x.Repo, x.Base}, age(x.RedSince), strings.Join(x.Checks, ", "))
 		if x.Epic == "" {
 			line += "no repair epic open"
 		} else {

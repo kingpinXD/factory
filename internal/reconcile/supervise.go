@@ -117,7 +117,7 @@ func (r *run) supervised(o *store.Overall) {
 func (r *run) queuedOn(k string) bool {
 	return slices.ContainsFunc(r.order(), func(id string) bool {
 		it := r.ents[id]
-		return it.work != nil && it.cur.State == it.m.Start && it.work.Repo+"@"+it.work.Base == k
+		return it.work != nil && it.cur.State == it.m.Start && repoBase{it.work.Repo, it.work.Base}.String() == k
 	})
 }
 

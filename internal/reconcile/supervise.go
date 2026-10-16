@@ -260,6 +260,9 @@ type stall struct {
 // shows no progress; a session whose turn ended stalls when its work is
 // open and nothing came for an inbox check interval.
 func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bool) {
+	if r.nativeBusy(owner.id) {
+		return stall{}, false
+	}
 	v := r.b.Values
 	turnEnded := r.turnEnded(sess)
 	if !turnEnded && s.State == listedWorking {
@@ -290,6 +293,9 @@ func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bo
 // helperBusy reports whether someone in the set's session heartbeat under
 // its lease within the last inbox check interval.
 func (r *run) helperBusy(owner *entity) bool {
+	if r.nativeBusy(owner.id) {
+		return true
+	}
 	if owner.set == nil {
 		return false
 	}
@@ -359,7 +365,7 @@ func (r *run) nudge(owner, subject *entity, s claude.Session, why string) {
 // then moves it to stopped and resumes it with no flags.
 func (r *run) restart(subject, sess *entity, s claude.Session, why string) {
 	key := "restart:" + strconv.Itoa(r.n)
-	if err := r.stopSession(sess, s, key, fmt.Sprintf("restart %s: %s", s.Name, why)); err != nil {
+	if err := r.stopCoordinator(sess, s, key, fmt.Sprintf("restart %s: %s", s.Name, why)); err != nil {
 		r.fail("%v", err)
 		return
 	}
@@ -433,15 +439,31 @@ func openIntents(e *entity, sender string) []events.Event {
 // heartbeat and lease-ok fail and it pushes nothing. Its next prompt
 // carries the new number.
 func (r *run) checkLease(set, sess *entity) {
+	if nativeBoundaryState(sess).pending() {
+		return
+	}
+	if r.nativeBusy(set.id) {
+		return
+	}
 	lease := set.st.Lease
 	renewed := r.leaseRenewed(set, sess)
 	if lease == 0 || r.elapsed(set, renewed) < time.Duration(r.b.Values.Lease) {
 		return
 	}
+	if err := r.fenceHelpers(set, "lease expiry"); err != nil {
+		r.fail("%s: %v", set.id, err)
+		return
+	}
 	set.st.Lease++
 	text := fmt.Sprintf("lease %d expired after %s with no heartbeat; lease %d granted", lease, r.elapsed(set, renewed).Round(time.Minute), set.st.Lease)
 	r.say("%s: %s", set.id, text)
-	r.logged(r.grantLease(set, text))
+	if _, err := r.grantLease(set, text); err != nil {
+		r.fail("%s: %v", set.id, err)
+		return
+	}
+	if err := r.reopenHelpers(set); err != nil {
+		r.fail("%s: %v", set.id, err)
+	}
 }
 
 // leaseRenewed returns when the set's current lease was last renewed: a
@@ -568,7 +590,7 @@ func (r *run) restartWorker(e *entity, key string) {
 	if !ok || !s.Live() {
 		return
 	}
-	if err := r.stopSession(sess, s, key, fmt.Sprintf("restart %s: %s timed out in %s", s.Name, e.id, e.cur.State)); err != nil {
+	if err := r.stopCoordinator(sess, s, key, fmt.Sprintf("restart %s: %s timed out in %s", s.Name, e.id, e.cur.State)); err != nil {
 		r.fail("%v", err)
 	}
 }

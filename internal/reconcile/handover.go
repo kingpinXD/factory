@@ -86,9 +86,15 @@ func (r *run) handOver(it *entity) error {
 	if why == "" {
 		return nil
 	}
+	if err := r.fenceHelpers(it, "handover"); err != nil {
+		return err
+	}
 	r.say("%s: worktree handed over to the babysitter: %s", it.id, why)
 	_, err := r.append(it, events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: why, Key: "handover:" + strconv.Itoa(it.entered)})
-	return err
+	if err != nil {
+		return err
+	}
+	return r.reopenHelpers(it)
 }
 
 func (r *run) handoverDue(it *entity) string {
@@ -132,10 +138,16 @@ func (r *run) handBack(it *entity) error {
 	if it.cur.State != workImplementing || !strings.HasPrefix(t.TriggerRef, "scope:") || it.has(key) {
 		return nil
 	}
+	if err := r.fenceHelpers(it, "handback"); err != nil {
+		return err
+	}
 	if err := r.stopBabysitter(it, key, "the scope changed"); err != nil {
 		return err
 	}
 	if _, err := r.append(it, events.Event{At: r.now, Kind: events.KindHandback, Sender: events.SenderProgram, Text: "the scope changed", Key: key}); err != nil {
+		return err
+	}
+	if err := r.reopenHelpers(it); err != nil {
 		return err
 	}
 	ready, _ := worktreeReady(it)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -17,6 +18,7 @@ import (
 // on the user, as the files the tick writes say. README.md documents its
 // JSON.
 type Report struct {
+	Native   []NativeLoad  `json:"native_helpers,omitempty"`
 	At       time.Time     `json:"at"`
 	LastTick time.Time     `json:"last_tick,omitzero"`
 	Tick     int           `json:"tick"`
@@ -90,6 +92,7 @@ type RepairLoad struct {
 
 // EpicLoad is an open epic's state and its re-checks so far.
 type EpicLoad struct {
+	Executor string    `json:"executor,omitempty"`
 	ID       string    `json:"id"`
 	State    string    `json:"state"`
 	Since    time.Time `json:"since"`
@@ -146,6 +149,22 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 	}
 	for _, id := range r.order() {
 		r.report(&rep, r.ents[id])
+	}
+	jobs, err := (helper.Service{Brain: d.Brain}).Jobs()
+	if err != nil {
+		return Report{}, err
+	}
+	for _, j := range jobs {
+		rep.Native = append(rep.Native, NativeLoad{j.ID, j.Scope.EpicID, j.Route.Model, j.State, j.HoldReason, "factory z-attach " + j.ID})
+	}
+	for i := range rep.Epics {
+		s, err := NativeSelection(d.Brain, rep.Epics[i].ID)
+		if err != nil {
+			return Report{}, err
+		}
+		if s.Executor == "z" {
+			rep.Epics[i].Executor = "z"
+		}
 	}
 	for _, ep := range o.Repairs {
 		rep.Repairs = append(rep.Repairs, r.repairLoad(ep))
@@ -260,7 +279,19 @@ func (r *run) repoOf(owner *entity) string {
 }
 
 // WriteText prints the report for a person, ages counted to rep.At.
+type NativeLoad struct {
+	JobID  string `json:"job_id"`
+	EpicID string `json:"epic_id"`
+	Model  string `json:"model"`
+	State  string `json:"state"`
+	Hold   string `json:"hold_reason"`
+	Attach string `json:"attach"`
+}
+
 func (rep Report) WriteText(w io.Writer) {
+	for _, n := range rep.Native {
+		fmt.Fprintf(w, "native z: %s %s %s hold=%s attach=%s\n", n.JobID, n.Model, n.State, n.Hold, n.Attach)
+	}
 	age := func(t time.Time) time.Duration { return rep.At.Sub(t).Truncate(time.Second) }
 	if rep.LastTick.IsZero() {
 		fmt.Fprintln(w, "last tick: none (the factory is not running)")

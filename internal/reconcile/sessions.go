@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -319,6 +321,11 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 func (r *run) launch(owner *entity, sess *entity) error {
 	component := sess.session.Component
 	if owner.set != nil {
+		if err := r.fenceHelpers(owner, "lease replacement"); err != nil {
+			return err
+		}
+	}
+	if owner.set != nil {
 		owner.st.Lease++
 	}
 	prompt := r.startPrompt(owner, component)
@@ -331,6 +338,14 @@ func (r *run) launch(owner *entity, sess *entity) error {
 			return err
 		}
 	}
+	if err := r.finishNativeBoundary(sess, false); err != nil {
+		return err
+	}
+	if owner.set != nil {
+		if err := r.reopenHelpers(owner); err != nil {
+			return err
+		}
+	}
 	if err := r.writeIndex(); err != nil {
 		return err
 	}
@@ -340,6 +355,9 @@ func (r *run) launch(owner *entity, sess *entity) error {
 		return err
 	}
 	markDelivered(sess, r.deliveries(owner))
+	if err := r.nativeBoundaryDelivered(sess); err != nil {
+		return err
+	}
 	if component == babysitterComponent {
 		return r.renewPRLine(owner)
 	}
@@ -348,6 +366,9 @@ func (r *run) launch(owner *entity, sess *entity) error {
 
 // post gives a live session its new work through its socket.
 func (r *run) post(owner, sess *entity, s claude.Session, news []delivery) error {
+	if nativeBoundaryState(sess).pending() {
+		return nil
+	}
 	text := r.wakePrompt(owner, sess.session.Component, news)
 	what := fmt.Sprintf("post %d new to %s (pid %d)", len(news), sess.session.Name, s.PID)
 	err := r.act(what, func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
@@ -363,6 +384,9 @@ func (r *run) post(owner, sess *entity, s claude.Session, news []delivery) error
 // so the resume does not run a second copy; a live one is posted to, never
 // resumed.
 func (r *run) wake(sess *entity) error {
+	if _, err := NativeSelection(r.d.Brain, sess.entry.Epic); err != nil {
+		return err
+	}
 	owner := r.ents[sess.session.Task]
 	if owner == nil {
 		return fmt.Errorf("owner %s is not indexed", sess.session.Task)
@@ -372,8 +396,31 @@ func (r *run) wake(sess *entity) error {
 	if !listed {
 		return r.launch(owner, sess)
 	}
+	if sess.enteredBy.From == sessionDead || (!s.Live() && s.State == listedWorking) {
+		b, err := r.beginNativeBoundary(sess, "restart", "wake:"+sess.id+":"+strconv.Itoa(sess.entered))
+		if err != nil {
+			return err
+		}
+		if b.intent.Seq != 0 {
+			if s.Live() {
+				return r.stopCoordinator(sess, s, b.intent.Key, "stop restarted coordinator before native authority transfer")
+			}
+			if s.State == listedWorking {
+				if err := r.act("stop restarting "+s.Name, func(ctx context.Context) error { return r.d.Claude.Stop(ctx, s.ID) }); err != nil {
+					return err
+				}
+				s.State = "stopped"
+			}
+		}
+	}
 	if s.Live() {
+		if b := nativeBoundaryState(sess); b.pending() {
+			return r.stopCoordinator(sess, s, b.intent.Key, "wait for native coordinator boundary stop")
+		}
 		return r.post(owner, sess, s, r.undelivered(owner, sess))
+	}
+	if err := r.finishNativeBoundary(sess, true); err != nil {
+		return err
 	}
 	news := r.unacknowledged(owner, sess)
 	prompt := r.resumePrompt(owner, sess.session.Component, news)
@@ -387,6 +434,7 @@ func (r *run) wake(sess *entity) error {
 	})
 	if err == nil {
 		markDelivered(sess, news)
+		return r.nativeBoundaryDelivered(sess)
 	}
 	return err
 }
@@ -397,6 +445,27 @@ func (r *run) wake(sess *entity) error {
 func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (claude.Spec, error) {
 	component := sess.Component
 	ov := r.overrides(owner)
+	selection, err := executor.ReadSelection(r.d.Brain, owner.entry.Epic)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return claude.Spec{}, err
+	}
+	if err == nil && selection.Executor == "z" {
+		routes := selection.Routes[component]
+		if len(routes) != 1 || routes[0].Provider != "claude" || routes[0].Model != executor.ClaudeModel {
+			return claude.Spec{}, fmt.Errorf("invalid pinned top route")
+		}
+		dir := filepath.Join(store.Factory(r.d.Brain), "executors", owner.entry.Epic)
+		if !r.dry {
+			if _, _, err := agents.BuildFor(r.d.Brain, dir, r.b, ov.Tier); err != nil {
+				return claude.Spec{}, err
+			}
+		}
+		effort := routes[0].Effort
+		if v, ok := ov.Effort[component]; ok {
+			effort = v
+		}
+		return claude.Spec{Name: sess.Name, Model: routes[0].Model, Effort: effort, PromptFile: agents.PromptPathFor(dir, component), Agents: "{}", Task: owner.id, GHToken: r.d.GHToken, AutoCompactPct: r.b.Values.Context.AutoCompactAt, AutoCompactWindow: r.b.Values.Context.Window, Prompt: prompt}, nil
+	}
 	c := r.b.Components[component]
 	tier, effort := c.Tier, c.Effort
 	if t, ok := ov.Tier[component]; ok {

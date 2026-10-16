@@ -12,8 +12,10 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/notify"
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/reconcile"
@@ -52,6 +54,19 @@ var newDeps = func(out io.Writer) (reconcile.Deps, error) {
 		AccountTimeout: accountTimeout,
 		TickTimeout:    tickTimeout,
 		Out:            out,
+	}
+	service := helperService(brain)
+	d.Helpers = &service
+	d.NativePreflight = nativePreflight
+	d.StartHelpers = func(ctx context.Context) error {
+		jobs, err := service.Jobs()
+		if err != nil {
+			return err
+		}
+		if len(jobs) == 0 {
+			return nil
+		}
+		return helper.StartRunner(ctx, cl.FactoryBin, brain)
 	}
 	d.Account = reconcile.PlanAccount{Deps: d, Probe: reconcile.Probe{Runner: proc.Exec{}, Claude: cl.Bin, Home: cl.Home}}
 	return d, nil
@@ -100,6 +115,8 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Var(pairs(ov.Tier), "set", "step=tier: the tier a step runs on for this input")
 	fs.Var(pairs(ov.Effort), "effort", "step=level: the effort a step runs at for this input")
+	executorName := fs.String("executor", "claude", "claude or z")
+	profile := fs.String("executor-profile", "", "native executor profile")
 	var input string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		input, args = args[0], args[1:]
@@ -121,7 +138,7 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	id, err := reconcile.Add(ctx, d, input, ov)
+	id, err := reconcile.AddWithOptions(ctx, d, input, ov, executor.Options{Executor: *executorName, ProfilePath: *profile})
 	if id != "" {
 		fmt.Fprintf(stdout, "added %s\n", id)
 	}

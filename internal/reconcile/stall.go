@@ -307,6 +307,9 @@ const (
 // no one. It reads only what this tick read already: a session's listing,
 // the merge hold watchPRs kept, the blockers and bases read so far.
 func (r *run) mover(it *entity) string {
+	if r.nativeBusy(it.id) {
+		return "its native helper"
+	}
 	ep := r.ents[it.entry.Epic]
 	switch {
 	case it.cur.State == stateNeedsYou, it.cur.State == stateWaitingUser, ep != nil && ep.cur.State == stateNeedsYou:

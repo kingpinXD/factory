@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func (r *run) checkpointReady(sess *entity) (bool, string, error) {
 		return false, "", nil
 	}
 	ref := eventRef(owner.id, cp)
-	if usedRef(sess, ref) || r.stepOpen(owner) || !r.accountAllows(sess, false) {
+	if usedRef(sess, ref) || r.nativeBusy(owner.id) || r.stepOpen(owner) || !r.accountAllows(sess, false) {
 		return false, "", nil
 	}
 	return true, ref, nil
@@ -156,6 +157,9 @@ func (r *run) stepOpen(owner *entity) bool {
 // compact runs as the session enters compacting: it stops the session,
 // waits for its pid to go, and resumes it with /compact and no flags.
 func (r *run) compact(sess *entity) error {
+	if _, err := r.beginNativeBoundary(sess, "compact", "compact:"+sess.id+":"+strconv.Itoa(sess.entered)); err != nil {
+		return err
+	}
 	s, ok := r.findSession(sess.session.Name)
 	if !ok {
 		return fmt.Errorf("%s is not listed", sess.session.Name)
@@ -186,6 +190,9 @@ func (r *run) afterCompaction(sess *entity, t events.Event) error {
 	if owner == nil {
 		return fmt.Errorf("owner %s is not indexed", sess.session.Task)
 	}
+	if err := r.finishNativeBoundary(sess, true); err != nil {
+		return err
+	}
 	start, _ := newestTransitionTo(sess, sessionCompacting)
 	file := ""
 	if id, seq, ok := strings.Cut(start.TriggerRef, "#"); ok && id == owner.id {
@@ -197,7 +204,15 @@ func (r *run) afterCompaction(sess *entity, t events.Event) error {
 			Text: "no compaction record 10m after /compact; resumed without compacting", Key: "compact-timeout:" + seqRef(t)}))
 		r.dmCompactFailures(sess, t)
 	}
-	return r.deliver(sess, compactedPrompt(owner.id, file))
+	text := compactedPrompt(owner.id, file)
+	if b := nativeBoundaryState(sess); b.ready.Seq != 0 && owner.set != nil {
+		text += fmt.Sprintf("set: %s\nlease: %d\nThe program renewed your lease at the checkpoint boundary. Discard earlier lease values.\n", owner.id, owner.st.Lease)
+	}
+	delivered, err := r.deliver(sess, text)
+	if err != nil || !delivered {
+		return err
+	}
+	return r.nativeBoundaryDelivered(sess)
 }
 
 // dmCompactFailures DMs once when the compaction failed the blueprint's
@@ -221,18 +236,23 @@ func (r *run) dmCompactFailures(sess *entity, t events.Event) {
 
 // deliver gives the session text: posted when it has a process, as a
 // flagless resume when it is stopped.
-func (r *run) deliver(sess *entity, text string) error {
+func (r *run) deliver(sess *entity, text string) (bool, error) {
 	s, ok := r.findSession(sess.session.Name)
-	switch {
-	case !ok:
-		return fmt.Errorf("%s is not listed", sess.session.Name)
-	case s.Live():
-		return r.act("post to "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
-	case !r.accountAllows(sess, false):
-		r.say("%s: not resumed after its compaction: the account holds work back", s.Name)
-		return nil
+	if !ok {
+		return false, fmt.Errorf("%s is not listed", sess.session.Name)
 	}
-	return r.act("resume "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Resume(ctx, s.ID, text) })
+	// Posting to a live session also starts work. Recheck the account after the
+	// potentially slow listing, before either Post or Resume, not just on resume.
+	if !r.workAllowed(sess) || !r.accountAllows(sess, false) {
+		r.say("%s: checkpoint delivery waits for Claude account eligibility", s.Name)
+		return false, nil
+	}
+	if s.Live() {
+		err := r.act("post to "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
+		return err == nil, err
+	}
+	err := r.act("resume "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Resume(ctx, s.ID, text) })
+	return err == nil, err
 }
 
 // compactedPrompt tells a compacted session how to pick up its work: from

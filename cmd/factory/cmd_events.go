@@ -101,6 +101,14 @@ func logEvent(id string, ev events.Event, file, to string) (events.Event, error)
 	}
 	if file != "" {
 		var err error
+		file, err = filepath.Abs(file)
+		if err != nil {
+			return events.Event{}, err
+		}
+	}
+
+	if file != "" {
+		var err error
 		if ev.File, err = filepath.Abs(file); err != nil {
 			return events.Event{}, err
 		}
@@ -113,7 +121,7 @@ func logEvent(id string, ev events.Event, file, to string) (events.Event, error)
 			}
 		}
 	}
-	return store.AppendTo(blueprint.Brain(), id, ev)
+	return helperService(blueprint.Brain()).WithUnmanagedEvent(context.Background(), id, ev.Kind, file, func() (events.Event, error) { return store.AppendTo(blueprint.Brain(), id, ev) })
 }
 
 // checkOwnFile refuses an end event's file outside the folder of the entity

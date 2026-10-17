@@ -1,0 +1,148 @@
+{
+  "upstream": "https://github.com/zed-industries/zed",
+  "release": "v1.24.2",
+  "commit": "fb69067729cb16a7f6135e2c1600c26a28c59659",
+  "rust": "1.98.1",
+  "auxiliary_branch": "feat/factory-native-probe",
+  "snapshot_utc": "2026-10-17T05:26:07.296054+00:00",
+  "auxiliary_snapshot_sha256": "8c2d29b45f7991ed4576751f2ae4da1b2d2253a335969ffcc95a9bf5014efe5e",
+  "overlay_snapshot_sha256": "f7c7948b6d850b6aa1e7f27a371aaa61778bc746c07db0d3f74a818fafd075a1",
+  "documentation_normalizations": {
+    "crates/eval_cli/README.md": "Replace the single personal CARGO_TARGET_DIR example with /absolute/path/to/selected-cargo-target; executable source is unchanged."
+  },
+  "overlay": {
+    "Cargo.lock": {
+      "sha256": "9cf424dda0401b86b493dc30cc3f7a224a215e0c046730ce7bc2616467f06872",
+      "auxiliary_sha256": "9cf424dda0401b86b493dc30cc3f7a224a215e0c046730ce7bc2616467f06872",
+      "base_sha256": "06873fdcc84d1e0fc215a45eb4fff9fbba40c0fa8adcb85e4042d5ac1e016e9d"
+    },
+    "README.md": {
+      "sha256": "33f81962761669232cb8f2691e4a464ddac8cdf8a18e4ac51deba1d9a62f7319",
+      "auxiliary_sha256": "33f81962761669232cb8f2691e4a464ddac8cdf8a18e4ac51deba1d9a62f7319",
+      "base_sha256": "0a1b8417d31d53dfd6b4f1c5cc1a1a6f7ae6d3ac044bdb1938bd49cbd09d8198"
+    },
+    "crates/agent/src/agent.rs": {
+      "sha256": "f89ec7886cb4e7bd14d00bb9c7296a324217fc03b924ff696af391d90c871a9d",
+      "auxiliary_sha256": "f89ec7886cb4e7bd14d00bb9c7296a324217fc03b924ff696af391d90c871a9d",
+      "base_sha256": "21207d34f8c5d00db683bf2a92d4ac202eebeaf32c6427fe82c5856ced743c48"
+    },
+    "crates/agent/src/db.rs": {
+      "sha256": "1e0cf644462bae0cef75ca4ecce8477836cf1883a0439a1ce9d36d2f4c67c2be",
+      "auxiliary_sha256": "1e0cf644462bae0cef75ca4ecce8477836cf1883a0439a1ce9d36d2f4c67c2be",
+      "base_sha256": "3fb7a86484a3eec7747d09f6e219bf7fd65f0e71451e72be27c0b2dc39e15772"
+    },
+    "crates/eval_cli/Cargo.toml": {
+      "sha256": "3100fef55d3649dc329e824b061006e126063be732ca720ddaadcda8b24e8e0f",
+      "auxiliary_sha256": "3100fef55d3649dc329e824b061006e126063be732ca720ddaadcda8b24e8e0f",
+      "base_sha256": "f286de317029032f721c8fbb491df7c13803b73a0cbf3f04353015a15598b986"
+    },
+    "crates/eval_cli/README.md": {
+      "sha256": "174466f09992db876baa26edf50f149c91439736e7081144f932dc7930ae311d",
+      "auxiliary_sha256": "61b45c026d8610acb17e681d5d1ede95a9dc68c68a7f29af9b934ed4519c0537",
+      "base_sha256": "94746a214bc40208ad57701d74d99033c48518dfad7e5bb516cacd722a8ca7df"
+    },
+    "crates/eval_cli/src/credential_probe.rs": {
+      "sha256": "ffb55c5e7a6126021d494a3e0b3695da3bde07a18f0b0c10e91106f3f1a6737d",
+      "auxiliary_sha256": "ffb55c5e7a6126021d494a3e0b3695da3bde07a18f0b0c10e91106f3f1a6737d",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/headless.rs": {
+      "sha256": "8ab4cbb7cc8222c9e778f5536430d96ba61b165b9b4b9cd3f10bcf6abcb96347",
+      "auxiliary_sha256": "8ab4cbb7cc8222c9e778f5536430d96ba61b165b9b4b9cd3f10bcf6abcb96347",
+      "base_sha256": "f6421f6f6188a15a850fd96f00788a1b81287fe04d7f507a8654dd500973aae2"
+    },
+    "crates/eval_cli/src/lifecycle_managed_tests.rs": {
+      "sha256": "5430beeeff98032ba99aeceda09936b32cce175479ba2af1c3468ee25e723d82",
+      "auxiliary_sha256": "5430beeeff98032ba99aeceda09936b32cce175479ba2af1c3468ee25e723d82",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/lifecycle_probe.rs": {
+      "sha256": "406af6eb337edc1daddda4e0d3824472e6a1da285600bcbaaa90d790f27720bd",
+      "auxiliary_sha256": "406af6eb337edc1daddda4e0d3824472e6a1da285600bcbaaa90d790f27720bd",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/lifecycle_protocol.rs": {
+      "sha256": "fe6335ac7e8b5a0f7324044a213387a2b43deb8af0d4598373b6951fa0850110",
+      "auxiliary_sha256": "fe6335ac7e8b5a0f7324044a213387a2b43deb8af0d4598373b6951fa0850110",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/lifecycle_tests.rs": {
+      "sha256": "9afab56bd781f3f84b315ff98e9d7188e01154744e1eba2dabd4d37799157aef",
+      "auxiliary_sha256": "9afab56bd781f3f84b315ff98e9d7188e01154744e1eba2dabd4d37799157aef",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/main.rs": {
+      "sha256": "47f809eb827f8b76a2b0d9be6c67abab72e7302feba38d03d893ae93597db7ad",
+      "auxiliary_sha256": "47f809eb827f8b76a2b0d9be6c67abab72e7302feba38d03d893ae93597db7ad",
+      "base_sha256": "4635560b4b0ca98431f7d556600d6dba22db7a4de5e384b1075c30f787c0a73e"
+    },
+    "crates/eval_cli/src/managed_tool_files.rs": {
+      "sha256": "dfdc49b091cbf14d4b5437dd03072a5c3a5299c59f6060d938b6d71220b9c7f0",
+      "auxiliary_sha256": "dfdc49b091cbf14d4b5437dd03072a5c3a5299c59f6060d938b6d71220b9c7f0",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/managed_tool_project_fs.rs": {
+      "sha256": "477f395b659a33ce85ff9d9f45521b669f58dfe68fcf05901db8678a8de50196",
+      "auxiliary_sha256": "477f395b659a33ce85ff9d9f45521b669f58dfe68fcf05901db8678a8de50196",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/managed_tools.rs": {
+      "sha256": "3e69fe2174d7969f3720f60da265cb0770a8c57dc11bf1a44f8246b9e62181f7",
+      "auxiliary_sha256": "3e69fe2174d7969f3720f60da265cb0770a8c57dc11bf1a44f8246b9e62181f7",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/newnativeauth_usage.rs": {
+      "sha256": "b123731fcdc7129f6ab90fa6218d15c09f594d599396040bd2ac8ba151e15c3a",
+      "auxiliary_sha256": "b123731fcdc7129f6ab90fa6218d15c09f594d599396040bd2ac8ba151e15c3a",
+      "base_sha256": null
+    },
+    "crates/eval_cli/src/usage_probe.rs": {
+      "sha256": "05e5e631ad9917c3a325072b19318518f2c071e61c1c10f41a991b9ea050f7df",
+      "auxiliary_sha256": "05e5e631ad9917c3a325072b19318518f2c071e61c1c10f41a991b9ea050f7df",
+      "base_sha256": null
+    },
+    "crates/language_models/src/provider/openai_subscribed.rs": {
+      "sha256": "75127193598b8ad3d549d553d7cc612a548248f3a0c0529453cb68d82602a975",
+      "auxiliary_sha256": "75127193598b8ad3d549d553d7cc612a548248f3a0c0529453cb68d82602a975",
+      "base_sha256": "dde22018f729e814d4efc9b4f3d2e22595ef43512b993c81826f67cd53542aa7"
+    },
+    "crates/openai_subscribed/Cargo.toml": {
+      "sha256": "cc25b6b0e73ce25172cc1fab7f770d1f7696a83f418faf26ee63af1c46087815",
+      "auxiliary_sha256": "cc25b6b0e73ce25172cc1fab7f770d1f7696a83f418faf26ee63af1c46087815",
+      "base_sha256": "43218ddfc0eccd783a2f4cfe65680a624de275fbcdb4e0bfdbb9ff1c5ad6c6dc"
+    },
+    "crates/openai_subscribed/src/native_auth.rs": {
+      "sha256": "d98642949b60181de04d3cedc2422106ee2085de6c1c03fa60c78dae05dadfb0",
+      "auxiliary_sha256": "d98642949b60181de04d3cedc2422106ee2085de6c1c03fa60c78dae05dadfb0",
+      "base_sha256": null
+    },
+    "crates/openai_subscribed/src/native_auth/tests.rs": {
+      "sha256": "b5a78ce7915f846545b6243d18d97bc815207f08d4478fa8c22f573984bd5aed",
+      "auxiliary_sha256": "b5a78ce7915f846545b6243d18d97bc815207f08d4478fa8c22f573984bd5aed",
+      "base_sha256": null
+    },
+    "crates/openai_subscribed/src/openai_subscribed.rs": {
+      "sha256": "5d07bb605e6ccee689e0bdc1608d034b4b6640f0abf9b5faa72e9f26db2f5ad2",
+      "auxiliary_sha256": "5d07bb605e6ccee689e0bdc1608d034b4b6640f0abf9b5faa72e9f26db2f5ad2",
+      "base_sha256": "32966ac91fa9a452e296b3e6a78c63451e853ac012ee80d6491697afcca86600"
+    },
+    "crates/openai_subscribed/src/usage.rs": {
+      "sha256": "c5f9400a4425355f117bd1ae66321aaf1270618d99e2ee4e4f7f07fe9d6e9951",
+      "auxiliary_sha256": "c5f9400a4425355f117bd1ae66321aaf1270618d99e2ee4e4f7f07fe9d6e9951",
+      "base_sha256": null
+    },
+    "crates/openai_subscribed/src/usage/tests.rs": {
+      "sha256": "2c4c35b0c2c7ade75a8aef1b9824c69e76bc41c9d8c8c94d922e51f1f3ce56a8",
+      "auxiliary_sha256": "2c4c35b0c2c7ade75a8aef1b9824c69e76bc41c9d8c8c94d922e51f1f3ce56a8",
+      "base_sha256": null
+    }
+  },
+  "notices": {
+    "LICENSE": "0aa0322ea494da441088e4d9144c6720bf99d9e2e1eefcd29d1f58b19b5c4246",
+    "notices/LICENSE-APACHE": "752daf2fb234ca4a1fa372c073fe127f44b7b90fd2529ae44273a64f9d53da7a",
+    "notices/LICENSE-GPL": "0aa0322ea494da441088e4d9144c6720bf99d9e2e1eefcd29d1f58b19b5c4246"
+  },
+  "cargo_features": [
+    "util/debug-embed"
+  ]
+}

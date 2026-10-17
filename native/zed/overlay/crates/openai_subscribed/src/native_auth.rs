@@ -130,12 +130,15 @@ fn open_lock(_: &Path) -> Result<File, NativeAuthError> {
 pub const FACTORY_CREDENTIAL_NAMESPACE: &str = "factory-openai";
 const FACTORY_CREDENTIALS_KEY: &str = "https://factory.zed.native/openai-subscribed/v1";
 pub const CREDENTIAL_LOAD_TIMEOUT: Duration = Duration::from_secs(5);
+pub const KEYCHAIN_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeAuthError {
     InvalidNamespace,
     CredentialLoadTimeout,
+    KeychainAuthorizationTimeout,
+    KeychainAuthorizationUnavailable,
     CredentialReadFailed,
     InvalidCredentials,
     CredentialWriteFailed,
@@ -161,6 +164,13 @@ impl std::fmt::Display for NativeAuthError {
     }
 }
 impl std::error::Error for NativeAuthError {}
+
+/// Only proves this executable completed a factory-key read, not grant validity or quota.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KeychainAuthorization {
+    pub credential_namespace: &'static str,
+    pub expected_identity_checked: bool,
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct CredentialMetadata {
@@ -322,6 +332,12 @@ async fn read_stored(
         () = deadline.fuse() => return Err(NativeAuthError::CredentialLoadTimeout),
         result = read.fuse() => result.map_err(|_| NativeAuthError::CredentialReadFailed)?,
     };
+    decode_stored(stored)
+}
+
+fn decode_stored(
+    stored: Option<(String, Vec<u8>)>,
+) -> Result<Option<StoredGrant>, NativeAuthError> {
     stored
         .map(|(_, bytes)| {
             let record: StoredGrant =
@@ -399,6 +415,44 @@ impl NativeCredentials {
     /// Shutdown must retain this runtime until detached persistence has settled.
     pub fn has_pending_mutation(&self) -> bool {
         self.pending_mutations.load(Ordering::SeqCst) != 0 || durable_intent_exists(&self.lock_path)
+    }
+
+    /// Explicit, read-only first-use enrollment for the current executable.
+    /// Never reconciles intent, caches credentials, refreshes, writes, or launches a browser.
+    pub async fn authorize_keychain(
+        &self,
+        expected_identity: Option<&str>,
+        cx: &AsyncApp,
+    ) -> Result<KeychainAuthorization, NativeAuthError> {
+        if self.has_pending_mutation() {
+            return Err(NativeAuthError::MutationUncertain);
+        }
+        let deadline = cx
+            .background_executor()
+            .timer(KEYCHAIN_AUTHORIZATION_TIMEOUT);
+        let read = self.inner.read_credentials(FACTORY_CREDENTIALS_KEY, cx);
+        let value = futures::select_biased! {
+            () = deadline.fuse() => return Err(NativeAuthError::KeychainAuthorizationTimeout),
+            value = read.fuse() => value.map_err(|_| NativeAuthError::CredentialReadFailed)?,
+        };
+        if self.has_pending_mutation() {
+            return Err(NativeAuthError::MutationUncertain);
+        }
+        // The native provider merges not-found and user-cancelled into None.
+        // Neither confirms enrollment or justifies starting OAuth again.
+        let record =
+            decode_stored(value)?.ok_or(NativeAuthError::KeychainAuthorizationUnavailable)?;
+        if let Some(expected) = expected_identity {
+            let actual = Self::metadata_for(record.nonce, Self::account(&record.credentials)?)
+                .identity_binding;
+            if expected.is_empty() || expected != actual {
+                return Err(NativeAuthError::IdentityMismatch);
+            }
+        }
+        Ok(KeychainAuthorization {
+            credential_namespace: FACTORY_CREDENTIAL_NAMESPACE,
+            expected_identity_checked: expected_identity.is_some(),
+        })
     }
 
     pub fn metadata(&self) -> Option<CredentialMetadata> {

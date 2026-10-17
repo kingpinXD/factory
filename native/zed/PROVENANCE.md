@@ -56,21 +56,83 @@ portions and third-party dependencies retain their own terms. No binary is shipp
 Future native binary distribution needs a separate corresponding-source/license
 review; this source-only snapshot makes no license-compatibility promise.
 
-## Offline build verification of this freeze
+## Historical asset-regression build (superseded output)
 
-All 25 reconstructed overlay files agreed byte-for-byte with the package in a
-fresh owned detached worktree. The auxiliary inventory and all original input
-hashes were rechecked after the build and were unchanged. All 15 packaging tests
-passed. These are packaging tests, not the native runtime acceptance suite.
+The earlier all-executable compile succeeded without util/debug-embed, but that
+was not a valid portability check. A copied debug executable still searched for
+checkout assets at runtime. Stable channel did not change that debug-build rule.
+That earlier output is superseded by this freeze and must not be used for login.
 
-All four executables built successfully with Rust 1.98.1, Cargo --locked --offline,
-CARGO_NET_GIT_FETCH_WITH_CLI=true and two jobs. The selected deadline was 600 seconds;
-measured elapsed time was 523.63 seconds. No timeout occurred. The timing tool
-reported 4011933696 bytes maximum resident size, not an aggregate memory cap.
-The explicitly selected Cargo cache measured 38G before and 51G after the attempt.
-The retained local verification output measured 1.5G. Output, logs and binaries
-remain in ignored .verification/managed-refresh-build-20261016, not distribution.
+The only auxiliary source change for this fix is one asset-only test in
+crates/eval_cli/src/credential_probe.rs. It loads settings, keymaps, semantic rules
+and an agent template without GPUI, credentials, HTTP, models or native startup.
+No auth behavior or public CLI was changed. Upstream's mandatory manual-review
+notice remains intact. Cargo util's existing debug-embed feature supplies the fix;
+no util, Cargo manifest, Go adapter or reconcile source was modified.
 
-The build emitted existing dead-code warnings, a macOS linker unwind-size warning,
-and a future-Rust compatibility notice for block 0.1.6. No executable was run.
-No installs, IDE changes, login, live inference, quota or Docker calls occurred.
+Red: the focused test executable was built with the old package flags (Rust 1.98.1,
+--locked --offline --jobs 2, no embedding feature), copied away from its source,
+and run from an empty cwd with scratch HOME. It failed specifically on
+settings/default.json before any native startup. Elapsed time for red build/check
+was 371.41 seconds under a 600-second compilation bound. There was no timeout.
+
+Green: all four executables and the focused test executable were built with
+rustup run 1.98.1, --locked --offline --jobs 2 --features util/debug-embed and
+CARGO_NET_GIT_FETCH_WITH_CLI=true. The relocated asset test passed. Cwd and HOME
+remained empty. Measured total elapsed time was 501.02 seconds under the shared
+900-second deadline. No timeout occurred. The timing tool reported 3971497984
+bytes maximum resident size, not an aggregate memory cap. The selected Cargo
+cache measured 61G before green and 79G afterward; retained green output was 1.6G.
+
+Green output is ignored .verification/asset-relocation-green-20261016. The four
+binaries are under bin/; the safe repeatable asset-only test executable is under
+checks/. Reconstructed source matches all packaged hashes and auxiliary input
+hashes were rechecked after build. The one README privacy normalization remains
+the only packaged-versus-auxiliary difference. The regression source passed a
+file-scoped Rust 1.98.1 rustfmt check. Packaging tests cover the mandatory feature.
+
+No login, Keychain, usage, inference, Docker, IDE change, install, default toolchain
+change, commit or push was performed. Asset success does not establish live auth
+or production acceptance. Dependency/linker warnings remain outside this fix.
+
+## Final explicit-enrollment refresh
+
+This freeze supersedes the earlier asset-fix binary output for future enrollment.
+The original output remains unchanged. The auxiliary auth owner changed exactly
+five files: native_auth.rs and its tests, credential_probe.rs, lifecycle_probe.rs
+and newnativeauth_usage.rs. They add explicit read-only exact-executable Keychain
+enrollment and preserve emitted exit status without bypassing pending mutations.
+The auxiliary source was only read during this refresh; all changes were copied
+with tar. The manifest records the new auxiliary/overlay digests and freeze time.
+The existing README privacy normalization remains the only distributed difference.
+
+All four executables built with Rust 1.98.1, --locked --offline --jobs 2,
+--features util/debug-embed and CARGO_NET_GIT_FETCH_WITH_CLI=true. Total build plus
+relocated asset check took 488.16 seconds against a 900-second deadline. There was
+no timeout. The selected shared cache remained separate from copied final binaries;
+it measured 83G before and 96G afterward. Final output measured 1.6G. The timing
+tool reported 3861594112 bytes maximum resident size, not an aggregate memory cap.
+
+The new output is ignored .verification/keychain-enrollment-final-v1. Enroll only
+the exact executables under its bin/ directory, not shared-target executables or
+old output. binary-fingerprints.json records all four hashes; cli-metadata.json
+records bounded help/parser results. No automatic enrollment is performed.
+
+All 31 help/parser checks passed with a 60-second per-process bound. The copied
+lifecycle worker's first --help took 13.256 seconds and its warm repeat took 0.027
+seconds. eval-cli's first help took 13.549 seconds. Setup and usage help each took
+about one second. All three enrollment --help routes exited zero without native
+startup; forbidden combinations and unknown flags exited two. Empty cwd and
+scratch HOME remained empty. Do not interpret a ten-second help timeout as proof
+that native startup is unavailable.
+
+The credential-setup test executable's ten offline tests passed, including the
+relocated asset regression, strict enrollment parser and credential-free error-exit
+subprocess. Packaging includes a regression for the new source and unchanged
+five-second unattended versus 120-second explicit read deadlines. Reconstructed
+source was compared with all 25 packaged inputs and auxiliary hashes after build.
+The previous four copied asset-fix binaries retain their original fingerprints.
+
+These are offline packaging/CLI checks, not real Keychain approval, sign-in,
+provider/grant independence, refresh, usage, inference or managed acceptance.
+No install, original output overwrite, live auth, IDE change, commit or push occurred.

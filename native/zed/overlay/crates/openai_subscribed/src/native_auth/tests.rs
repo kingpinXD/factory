@@ -1441,3 +1441,257 @@ fn production_lock_location_uses_real_home_existing_factory_root() {
     );
     assert!(!path.to_string_lossy().contains(".anuma-factory"));
 }
+
+#[gpui::test]
+async fn explicit_keychain_authorization_allows_delayed_read_without_changing_ordinary_deadline(
+    cx: &mut TestAppContext,
+) {
+    let store = Arc::new(FakeStore::default());
+    seed(&store, "account", true);
+    let provider = new_credentials(store.clone(), FACTORY_CREDENTIAL_NAMESPACE).unwrap();
+    let (release, gate) = futures::channel::oneshot::channel();
+    *store.gate.lock().unwrap() = Some(gate);
+    let mut task = cx.spawn({
+        let provider = provider.clone();
+        async move |cx| provider.authorize_keychain(None, &cx).await
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(6));
+    cx.run_until_parked();
+    assert!((&mut task).now_or_never().is_none());
+    release.send(()).unwrap();
+    let result = task.await.unwrap();
+    assert_eq!(result.credential_namespace, "factory-openai");
+    assert!(!result.expected_identity_checked);
+    assert!(
+        provider.metadata().is_none(),
+        "enrollment must not populate native State credentials"
+    );
+    assert!(!provider.has_pending_mutation());
+    let (release, gate) = futures::channel::oneshot::channel();
+    *store.gate.lock().unwrap() = Some(gate);
+    let normal = provider
+        .read_credentials(CREDENTIALS_KEY, &cx.to_async())
+        .await
+        .unwrap_err();
+    assert_eq!(normal.to_string(), "CredentialLoadTimeout");
+    assert!(release.send(()).is_err());
+    assert!(
+        store
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(operation, key)| operation == "read" && key == FACTORY_CREDENTIALS_KEY)
+    );
+}
+
+#[gpui::test]
+async fn explicit_keychain_authorization_deadline_and_cancellation_drop_read(
+    cx: &mut TestAppContext,
+) {
+    let store = Arc::new(FakeStore::default());
+    seed(&store, "account", false);
+    let provider = new_credentials(store.clone(), FACTORY_CREDENTIAL_NAMESPACE).unwrap();
+    let (release, gate) = futures::channel::oneshot::channel();
+    *store.gate.lock().unwrap() = Some(gate);
+    let mut task = cx.spawn({
+        let provider = provider.clone();
+        async move |cx| provider.authorize_keychain(None, &cx).await
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(119999));
+    cx.run_until_parked();
+    assert!((&mut task).now_or_never().is_none());
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    assert_eq!(
+        task.now_or_never()
+            .expect("enrollment must stop at 120 seconds")
+            .unwrap_err(),
+        NativeAuthError::KeychainAuthorizationTimeout
+    );
+    assert!(release.send(()).is_err());
+    let (release, gate) = futures::channel::oneshot::channel();
+    *store.gate.lock().unwrap() = Some(gate);
+    let task = cx.spawn({
+        let provider = provider.clone();
+        async move |cx| provider.authorize_keychain(None, &cx).await
+    });
+    cx.run_until_parked();
+    drop(task);
+    cx.run_until_parked();
+    assert!(release.send(()).is_err());
+    assert!(provider.metadata().is_none());
+}
+
+#[gpui::test]
+async fn explicit_keychain_authorization_validates_pin_format_and_uncertainty_without_mutation(
+    cx: &mut TestAppContext,
+) {
+    let store = Arc::new(FakeStore::default());
+    seed(&store, "account", false);
+    let provider = new_credentials(store.clone(), FACTORY_CREDENTIAL_NAMESPACE).unwrap();
+    let pin = NativeCredentials::metadata_for("a".repeat(64), "account").identity_binding;
+    let result = provider
+        .authorize_keychain(Some(&pin), &cx.to_async())
+        .await
+        .unwrap();
+    assert!(result.expected_identity_checked);
+    assert_eq!(
+        provider
+            .authorize_keychain(Some("wrong"), &cx.to_async())
+            .await
+            .unwrap_err(),
+        NativeAuthError::IdentityMismatch
+    );
+    assert_eq!(
+        provider
+            .authorize_keychain(Some(""), &cx.to_async())
+            .await
+            .unwrap_err(),
+        NativeAuthError::IdentityMismatch
+    );
+    store
+        .values
+        .lock()
+        .unwrap()
+        .insert(FACTORY_CREDENTIALS_KEY.into(), b"SYNTHETIC_SECRET".to_vec());
+    let error = provider
+        .authorize_keychain(None, &cx.to_async())
+        .await
+        .unwrap_err();
+    assert_eq!(error, NativeAuthError::InvalidCredentials);
+    assert!(
+        !serde_json::to_string(&error)
+            .unwrap()
+            .contains("SYNTHETIC_SECRET")
+    );
+    seed(&store, "account", false);
+    provider
+        .read_credentials(CREDENTIALS_KEY, &cx.to_async())
+        .await
+        .unwrap();
+    let lock = provider.acquire_lock(&cx.to_async()).await.unwrap();
+    let intended = StoredGrant {
+        version: 1,
+        nonce: "b".repeat(64),
+        credentials: credentials("account", true),
+    };
+    provider
+        .journal_intent(MutationOperation::Write, Some(&intended))
+        .unwrap();
+    drop(lock);
+    let marker = std::fs::read(intent_path(&store.lock_path)).unwrap();
+    let reads = store.calls.lock().unwrap().len();
+    assert_eq!(
+        provider
+            .authorize_keychain(None, &cx.to_async())
+            .await
+            .unwrap_err(),
+        NativeAuthError::MutationUncertain
+    );
+    assert_eq!(store.calls.lock().unwrap().len(), reads);
+    assert_eq!(
+        std::fs::read(intent_path(&store.lock_path)).unwrap(),
+        marker
+    );
+    assert!(
+        store
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(operation, key)| operation == "read" && key == FACTORY_CREDENTIALS_KEY)
+    );
+}
+
+#[gpui::test]
+async fn explicit_keychain_authorization_refuses_late_intent_missing_and_failed_reads(
+    cx: &mut TestAppContext,
+) {
+    let missing = Arc::new(FakeStore::default());
+    missing
+        .values
+        .lock()
+        .unwrap()
+        .insert(CREDENTIALS_KEY.into(), b"desktop-sentinel".to_vec());
+    let provider = new_credentials(missing.clone(), FACTORY_CREDENTIAL_NAMESPACE).unwrap();
+    assert_eq!(
+        provider
+            .authorize_keychain(None, &cx.to_async())
+            .await
+            .unwrap_err(),
+        NativeAuthError::KeychainAuthorizationUnavailable
+    );
+    assert_eq!(
+        *missing.calls.lock().unwrap(),
+        vec![("read".into(), FACTORY_CREDENTIALS_KEY.into())]
+    );
+    let failed = Arc::new(FakeStore {
+        fail: true,
+        ..Default::default()
+    });
+    let provider = new_credentials(failed.clone(), FACTORY_CREDENTIAL_NAMESPACE).unwrap();
+    let error = provider
+        .authorize_keychain(None, &cx.to_async())
+        .await
+        .unwrap_err();
+    assert_eq!(error, NativeAuthError::CredentialReadFailed);
+    assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+    assert!(
+        failed
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(operation, _)| operation == "read")
+    );
+
+    let store = Arc::new(FakeStore::default());
+    seed(&store, "account", false);
+    let provider = new_credentials(store.clone(), FACTORY_CREDENTIAL_NAMESPACE).unwrap();
+    provider
+        .read_credentials(CREDENTIALS_KEY, &cx.to_async())
+        .await
+        .unwrap();
+    let metadata = provider.metadata();
+    let (release, gate) = futures::channel::oneshot::channel();
+    *store.gate.lock().unwrap() = Some(gate);
+    let task = cx.spawn({
+        let provider = provider.clone();
+        async move |cx| provider.authorize_keychain(None, &cx).await
+    });
+    cx.run_until_parked();
+    let lock = provider.acquire_lock(&cx.to_async()).await.unwrap();
+    let intended = StoredGrant {
+        version: 1,
+        nonce: "c".repeat(64),
+        credentials: credentials("account", false),
+    };
+    provider
+        .journal_intent(MutationOperation::Write, Some(&intended))
+        .unwrap();
+    // Even an already-provable intent must not be removed by enrollment.
+    store.values.lock().unwrap().insert(
+        FACTORY_CREDENTIALS_KEY.into(),
+        serde_json::to_vec(&intended).unwrap(),
+    );
+    drop(lock);
+    let marker = std::fs::read(intent_path(&store.lock_path)).unwrap();
+    release.send(()).unwrap();
+    assert_eq!(task.await.unwrap_err(), NativeAuthError::MutationUncertain);
+    assert_eq!(provider.metadata(), metadata);
+    assert_eq!(
+        std::fs::read(intent_path(&store.lock_path)).unwrap(),
+        marker
+    );
+    assert!(
+        store
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(operation, key)| operation == "read" && key == FACTORY_CREDENTIALS_KEY)
+    );
+}

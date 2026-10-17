@@ -13,7 +13,9 @@ import time
 
 PIN = 'fb69067729cb16a7f6135e2c1600c26a28c59659'
 RUST = '1.98.1'
-MANIFEST_SHA256 = 'ac671171b58a2f9fa9e4d4db6e1ec1c6800d547b12594316ae84ed565b39bc83'
+BUILD_FEATURE = 'util/debug-embed'
+ASSET_TEST = 'tests::runtime_assets_load_without_native_startup'
+MANIFEST_SHA256 = '10616b452adf8e1424319a997aebcc5936a821e8dc95ef20d4fa781404c3fba5'
 ROOT = Path(__file__).resolve().parent
 BINARIES = ('eval-cli', 'zed-native-usage-probe', 'zed-native-lifecycle-probe',
             'zed-native-credential-setup')
@@ -36,6 +38,8 @@ def verify_package(root=ROOT):
                             for name, record in sorted(manifest['overlay'].items()))
         if hashlib.sha256(inventory.encode()).hexdigest() != manifest[field]:
             raise ValueError('snapshot inventory hash mismatch: ' + field)
+    if manifest['cargo_features'] != [BUILD_FEATURE]:
+        raise ValueError('manifest portable asset feature mismatch')
     expected = {'overlay/' + name: record['sha256']
                 for name, record in manifest['overlay'].items()}
     expected.update(manifest['notices'])
@@ -117,6 +121,48 @@ def apply_overlay(source, manifest, root=ROOT):
             raise ValueError('applied overlay hash mismatch: ' + name)
 
 
+
+def cargo_flags(jobs, allow_network):
+    flags = ['--locked', '--jobs', str(jobs), '--features', BUILD_FEATURE]
+    if not allow_network:
+        flags.append('--offline')
+    return flags
+
+
+def check_runtime_assets(cargo, flags, source, output, env, runner):
+    with (output / 'asset-check-build.jsonl').open('w') as log:
+        runner.run(cargo + ['test', *flags, '-p', 'eval_cli', '--bin',
+                           'zed-native-credential-setup', '--no-run',
+                           '--message-format=json'], source, env, log)
+    artifacts = []
+    for line in (output / 'asset-check-build.jsonl').read_text().splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (item.get('reason') == 'compiler-artifact'
+                and item.get('target', {}).get('name') == 'zed-native-credential-setup'
+                and item.get('profile', {}).get('test') and item.get('executable')):
+            artifacts.append(item['executable'])
+    if len(artifacts) != 1:
+        raise ValueError('expected exactly one offline runtime asset test executable')
+    checks = output / 'checks'
+    empty = output / 'empty-cwd'
+    home = output / 'empty-home'
+    for directory in (checks, empty, home):
+        directory.mkdir(mode=0o700)
+    for location in (checks, empty):
+        if any((parent / 'assets/settings/default.json').exists()
+               for parent in (location, *location.parents)):
+            raise ValueError('relocated asset check must not have a Zed assets ancestor')
+    binary = checks / 'zed-native-runtime-assets-test'
+    shutil.copy2(artifacts[0], binary)
+    with (output / 'asset-check.log').open('w') as log:
+        runner.run([str(binary), '--exact', ASSET_TEST, '--test-threads=1'], empty,
+                   {'HOME': str(home), 'PATH': os.environ.get('PATH', '')}, log)
+    print('relocated settings/keymap/template asset-only check passed:', binary, flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--verify-only', action='store_true')
@@ -172,19 +218,18 @@ def main():
                    CARGO_NET_GIT_FETCH_WITH_CLI='true')
         runner.run(['rustup', 'run', RUST, 'rustc', '--version'], source, env, log)
         cargo = ['rustup', 'run', RUST, 'cargo']
-        flags = ['--locked', '--jobs', str(args.jobs)]
-        if not args.allow_network:
-            flags.append('--offline')
+        flags = cargo_flags(args.jobs, args.allow_network)
         runner.run(cargo + ['build', *flags, '-p', 'eval_cli', '--bins'], source, env, log)
         if args.test:
             runner.run(cargo + ['test', *flags, '-p', 'eval_cli', '--bins', '--',
                                 '--test-threads=' + str(args.jobs)], source, env, log)
             runner.run(cargo + ['test', *flags, '-p', 'openai_subscribed', '--lib', '--',
                                 '--test-threads=' + str(args.jobs)], source, env, log)
+        check_runtime_assets(cargo, flags, source, output, env, runner)
         (output / 'bin').mkdir()
         for name in BINARIES:
             shutil.copy2(target / 'debug' / name, output / 'bin' / name)
-        print('built native experiment executables; no runtime/auth command executed')
+        print('built native experiment executables; only offline asset regression executed')
 
 
 if __name__ == '__main__':

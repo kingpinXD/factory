@@ -22,8 +22,12 @@ struct Args {
     credential_namespace: Option<String>,
     #[arg(long, requires = "credential_namespace")]
     expected_identity: Option<String>,
+    /// Explicit read-only enrollment for this executable; identity pin is optional in this mode.
+    #[arg(long)]
+    authorize_keychain: bool,
 }
 fn main() {
+    credential_probe::authorize_keychain_if_requested();
     let args = Args::parse();
     if args.credential_namespace.is_some() {
         credential_probe::run(true);

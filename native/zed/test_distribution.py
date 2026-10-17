@@ -55,6 +55,29 @@ class DistributionTests(unittest.TestCase):
             shutil.copytree(build.ROOT / name, root / name)
         return root
 
+    def test_portable_build_flags_are_mandatory(self):
+        for network in (False, True):
+            flags = build.cargo_flags(2, network)
+            self.assertEqual(flags[flags.index('--features') + 1], 'util/debug-embed')
+            self.assertIn('--locked', flags)
+            self.assertEqual('--offline' in flags, not network)
+        self.assertEqual(build.verify_package()['cargo_features'], ['util/debug-embed'])
+        credential = (build.ROOT / 'overlay/crates/eval_cli/src/credential_probe.rs').read_text()
+        self.assertIn('fn runtime_assets_load_without_native_startup()', credential)
+
+    def test_final_enrollment_source_is_packaged(self):
+        source = build.ROOT / 'overlay'
+        auth = (source / 'crates/openai_subscribed/src/native_auth.rs').read_text()
+        self.assertIn('CREDENTIAL_LOAD_TIMEOUT: Duration = Duration::from_secs(5)', auth)
+        self.assertIn('KEYCHAIN_AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(120)', auth)
+        self.assertIn('pub async fn authorize_keychain(', auth)
+        for name in ('credential_probe.rs', 'newnativeauth_usage.rs', 'lifecycle_probe.rs'):
+            text = (source / 'crates/eval_cli/src' / name).read_text()
+            self.assertIn('authorize_keychain_if_requested()', text, name)
+        setup = (source / 'crates/eval_cli/src/credential_probe.rs').read_text()
+        self.assertIn('fn exit_if_settled(code: i32, pending_mutation: bool)', setup)
+        self.assertNotIn('cx.quit()', setup)
+
     def test_required_source_and_manual_notice(self):
         manifest = build.verify_package()
         self.assertEqual(set(manifest['overlay']), REQUIRED)

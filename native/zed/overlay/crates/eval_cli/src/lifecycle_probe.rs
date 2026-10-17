@@ -1,4 +1,7 @@
 //! Local, subscription-only native session lifecycle proof. Not a production daemon.
+#[allow(dead_code)]
+#[path = "credential_probe.rs"]
+mod credential_probe;
 mod headless;
 mod lifecycle_protocol;
 mod managed_tool_files;
@@ -1022,6 +1025,7 @@ async fn run(
 }
 
 fn main() {
+    credential_probe::authorize_keychain_if_requested();
     // Shell environment capture invokes this executable without the required probe flags.
     if std::env::args_os()
         .skip(1)

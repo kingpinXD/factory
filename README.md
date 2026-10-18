@@ -316,6 +316,21 @@ Offline Go tests and native-tool fixtures do not establish live readiness.
 Preflight can check configured local capabilities and scoped usage, but neither
 login nor inference is automatic.
 
+### Claude-only compatibility acceptance
+
+Merging requires a separate Claude-only trial, not just a successful native trial.
+Test both flagless intake and explicit `--executor claude` against the previous
+Claude-only baseline using isolated brains and disposable issues/PRs. Native
+credentials, profiles, binaries and Docker must not be required or invoked.
+Verify existing legacy state can resume, Claude model/effort overrides retain
+their behavior, and checkpoint, ownership, CI/review/dependency merge gates and
+cleanup still work. Do not copy a live epic into a writable test environment.
+
+After merge, build the exact merged revision and repeat the flagless and explicit
+Claude smoke checks without native dependencies. This does not authorize replacing
+the installed factory or services. Record actual results; these compatibility
+checks remain pending until executed. Both trial modes obey their account limits.
+
 ### Licensing
 
 The Go factory remains MIT-licensed (`LICENSE`). The separate source-derived Zed

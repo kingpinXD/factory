@@ -318,10 +318,25 @@ login nor inference is automatic.
 
 ### Claude-only compatibility acceptance
 
-Merging requires a separate Claude-only trial, not just a successful native trial.
-Test both flagless intake and explicit `--executor claude` against the previous
-Claude-only baseline using isolated brains and disposable issues/PRs. Native
-credentials, profiles, binaries and Docker must not be required or invoked.
+Merging requires execution-path compatibility with a freshly frozen `origin/main`
+revision, not just matching final code or passing tests. Record main and candidate
+SHAs. Candidate flagless intake and explicit `--executor claude` must both match
+main's flagless path using the same frozen brain/model settings and equivalent
+isolated repositories/issues. Native credentials, profiles, binaries and Docker
+must not be required or invoked.
+
+Deterministic differential tests replay identical agent/GitHub responses, clock
+and quota observations, and failures against both revisions. Compare substantive
+events, prompts, effective models/effort, delegation, repository actions and
+ordering constraints. Map only incidental IDs, paths, timestamps and fixture
+commit identities; reference behavior must come from main, never the candidate.
+Cover success, quota holds, failing CI, requested changes, restart and checkpoints.
+
+Paired live epics must also preserve issue-to-PR grouping, dependency releases,
+explore/plan/review/implement/verify phases, review continuation, ownership
+transfers, retries and merge gates. Claude wording and exact patches can vary,
+but matching final output cannot excuse an unexplained workflow difference.
+Retain the traces and artifacts used to compare each lane.
 Verify existing legacy state can resume, Claude model/effort overrides retain
 their behavior, and checkpoint, ownership, CI/review/dependency merge gates and
 cleanup still work. Do not copy a live epic into a writable test environment.

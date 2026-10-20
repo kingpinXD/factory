@@ -64,6 +64,8 @@ const (
 // overlap any clock that matters.
 const maxHolds = 20
 
+var errBabysitterRecoveryHeld = errors.New("babysitter recovery waits for account eligibility")
+
 // updateHolds opens a hold on the first tick the account holds work back,
 // and closes it on the first tick it does not. A hold is in one account
 // state: a change of state closes it and opens the next.
@@ -139,6 +141,8 @@ func (r *run) supervise() {
 		case !r.workAllowed(e):
 		case e.session != nil:
 			r.superviseSession(e)
+		case e.work != nil:
+			r.superviseBabysitter(e)
 		case e.epic != nil && slices.Contains(plannerStates, e.cur.State), e.set != nil && e.cur.State == setRunning:
 			r.superviseOwner(e)
 		}
@@ -228,6 +232,68 @@ func (r *run) superviseOwner(owner *entity) {
 		r.nudge(owner, subject, s, st.why)
 	case last.Kind == events.KindNudge && r.elapsed(owner, last.At) >= st.window:
 		r.restart(subject, sess, s, st.why)
+	}
+}
+
+// babysitterRecovery requires the newest open slot and fresh evidence that no
+// writer is active. A pending boundary denies recovery even with no helper jobs.
+func (r *run) babysitterRecovery(it, sess *entity) (claude.Session, bool) {
+	if !watched(it) || it.st.Unanswered == 0 || !r.workAllowed(it) ||
+		sess == nil || r.babysitterOf(it) != sess || !sess.open() ||
+		!slices.Contains([]string{sessionRunning, sessionTurnEnded}, sess.cur.State) ||
+		nativeBoundaryState(sess).pending() || r.helperBusy(it) || len(r.undelivered(it, sess)) > 0 {
+		return claude.Session{}, false
+	}
+	ctx, cancel := r.call()
+	listed, known, err := r.d.Claude.List(ctx)
+	cancel()
+	if err != nil {
+		r.fail("babysitter recovery listing: %v", err)
+	}
+	s, ok := claude.FindByName(listed, sess.session.Name)
+	if err != nil || !known || !ok || !s.Live() ||
+		(!turnEndedInListing(s) && r.transcriptTurnEnd(sess, s).IsZero()) {
+		return claude.Session{}, false
+	}
+	return s, !r.helperBusy(it) && r.accountAllows(sess, false)
+}
+
+func (r *run) superviseBabysitter(it *entity) {
+	sess := r.babysitterOf(it)
+	if !watched(it) || it.st.Unanswered == 0 || sess == nil || !sess.open() || !r.turnEnded(sess) {
+		return
+	}
+	s, ok := r.findSession(sess.session.Name)
+	if !ok {
+		return
+	}
+	if _, exhausted := r.babysitterDying(it); exhausted {
+		return
+	}
+	// Idle transitions, receipt acks and unchanged checkpoints are not progress.
+	// Retain the original window when a nudge merely produces another idle turn.
+	since := later(it.cur.Since, startedAt(sess))
+	seen := map[string]bool{}
+	for _, ev := range it.evs {
+		if ev.Sender != it.id || ev.SHA256 == "" || (ev.Kind != events.KindEnd && ev.Kind != events.KindCheckpoint) {
+			continue
+		}
+		key := ev.Kind + ":" + ev.SHA256
+		if !seen[key] {
+			since = later(since, ev.At)
+			seen[key] = true
+		}
+	}
+	if r.elapsed(it, since) < time.Duration(r.b.Values.Inbox.CheckEvery) {
+		return
+	}
+	last, acted := lastAction(it, since)
+	why := fmt.Sprintf("its turn ended with %d unanswered review threads", it.st.Unanswered)
+	switch {
+	case !acted:
+		r.nudge(it, it, s, why)
+	case last.Kind == events.KindNudge && r.elapsed(it, last.At) >= time.Duration(r.b.Values.Supervision.NoProgress):
+		r.restart(it, sess, s, why)
 	}
 }
 
@@ -353,6 +419,13 @@ func lastAction(e *entity, since time.Time) (events.Event, bool) {
 
 // nudge posts the session a reminder of its work, and counts it on subject.
 func (r *run) nudge(owner, subject *entity, s claude.Session, why string) {
+	if owner.work != nil {
+		var ok bool
+		s, ok = r.babysitterRecovery(owner, r.babysitterOf(owner))
+		if !ok {
+			return
+		}
+	}
 	text := r.nudgePrompt(owner, why)
 	if err := r.act(fmt.Sprintf("nudge %s: %s", s.Name, why), func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) }); err != nil {
 		r.fail("%v", err)
@@ -365,26 +438,64 @@ func (r *run) nudge(owner, subject *entity, s claude.Session, why string) {
 // then moves it to stopped and resumes it with no flags.
 func (r *run) restart(subject, sess *entity, s claude.Session, why string) {
 	key := "restart:" + strconv.Itoa(r.n)
+	if sess.session.Component == babysitterComponent {
+		var ok bool
+		s, ok = r.babysitterRecovery(subject, sess)
+		if _, exhausted := r.babysitterDying(subject); !ok || exhausted {
+			return
+		}
+		key = babysitterRestartPrefix + sess.id + ":" + strconv.Itoa(r.n)
+	}
 	if err := r.stopCoordinator(sess, s, key, fmt.Sprintf("restart %s: %s", s.Name, why)); err != nil {
+		if errors.Is(err, errBabysitterRecoveryHeld) {
+			return
+		}
 		r.fail("%v", err)
 		return
 	}
-	r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: why, Key: key}))
+	if sess.session.Component != babysitterComponent {
+		r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: why, Key: key}))
+	}
 }
 
 // stopSession stops a session and logs the stop in its log, so its machine
 // moves to stopped.
 func (r *run) stopSession(sess *entity, s claude.Session, key, what string) error {
-	if err := r.act(what, func(ctx context.Context) error { return r.d.Claude.Stop(ctx, s.ID) }); err != nil {
+	if err := r.act(what, func(ctx context.Context) error {
+		// Native fencing may have taken time since the recovery eligibility check.
+		if strings.HasPrefix(strings.TrimPrefix(key, nativeBoundaryPrefix), babysitterRestartPrefix) && !r.accountAllows(sess, false) {
+			return errBabysitterRecoveryHeld
+		}
+		return r.d.Claude.Stop(ctx, s.ID)
+	}); err != nil {
 		return err
 	}
-	_, err := r.append(sess, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: stopText, Key: "stop:" + key})
-	return err
+	if _, err := r.append(sess, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: stopText, Key: "stop:" + key}); err != nil {
+		return err
+	}
+	// Native boundary recovery calls stopSession directly, not restart. Charge
+	// the successful stop here, using the original recovery key in both paths.
+	recoveryKey := strings.TrimPrefix(key, nativeBoundaryPrefix)
+	if strings.HasPrefix(recoveryKey, babysitterRestartPrefix) {
+		owner := r.ents[sess.session.Task]
+		if owner == nil {
+			return fmt.Errorf("babysitter restart owner %s is not indexed", sess.session.Task)
+		}
+		_, err := r.append(owner, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: what, Key: recoveryKey})
+		return err
+	}
+	return nil
 }
 
 // nudgePrompt names why the session is nudged and what it works on.
 func (r *run) nudgePrompt(owner *entity, why string) string {
 	lead := fmt.Sprintf("Nudge: %s. Run `factory inbox %s`, then carry on from your newest event.", why, owner.id)
+	if owner.work != nil {
+		if r.stepOpen(owner) {
+			lead += " Finish or recover the unfinished babysit pass. Preserve its uncommitted work and run the remaining tests before pushing and answering review threads. Checkpoint only at a clean step boundary; do not invent an end or a report."
+		}
+		return r.babysitterPromptFor(owner, r.deliveries(owner)) + "\n" + lead + "\n"
+	}
 	if owner.set != nil {
 		return r.orchestratorPrompt(owner, lead, r.workingItems(owner), r.deliveries(owner))
 	}
@@ -737,9 +848,10 @@ const (
 // plan version, the error of a session that ran a denied model, and the
 // restart of a session found dead.
 const (
-	refusedPlanPrefix = "refused-plan:"
-	deniedModelPrefix = "fable:"
-	deadRestartPrefix = "restart:dead:"
+	refusedPlanPrefix       = "refused-plan:"
+	deniedModelPrefix       = "fable:"
+	deadRestartPrefix       = "restart:dead:"
+	babysitterRestartPrefix = "restart:babysitter:"
 )
 
 // deadLettered: an agent reported the same error the blueprint's number of
@@ -794,11 +906,15 @@ func (r *run) babysitterDying(it *entity) (string, bool) {
 	}
 	prefix := deadRestartPrefix + babysitterID(it.id, 1)
 	all := countedSince(it, lastLeft(it, stateNeedsYou), func(ev events.Event) bool {
-		return ev.Kind == events.KindRestart && strings.HasPrefix(ev.Key, prefix)
+		return ev.Kind == events.KindRestart && (strings.HasPrefix(ev.Key, prefix) || strings.HasPrefix(ev.Key, babysitterRestartPrefix+it.id+"-"))
 	})
 	hour := slices.DeleteFunc(slices.Clone(all), func(ev events.Event) bool { return !ev.At.After(r.now.Add(-time.Hour)) })
-	if len(hour) < r.restartLimit(babysitterComponent) && len(all) < r.b.Values.Supervision.RestartsPerItem {
+	if len(hour) < r.restartLimit(babysitterComponent) && len(itemRestarts(it)) < r.b.Values.Supervision.RestartsPerItem {
 		return "", false
+	}
+	if len(all) == 0 || slices.ContainsFunc(all, func(ev events.Event) bool { return strings.HasPrefix(ev.Key, babysitterRestartPrefix) }) {
+		counted := itemRestarts(it)
+		return "babysitter-stalled:" + seqRef(counted[len(counted)-1]), true
 	}
 	return fmt.Sprintf("%s%d:%s", babysitterDiedRef, len(all), seqRef(all[len(all)-1])), true
 }
@@ -879,6 +995,8 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	case strings.HasPrefix(ref, deniedModelRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, deniedModelRef))
 		return ev.Text
+	case strings.HasPrefix(ref, "babysitter-stalled:"):
+		return "its babysitter exhausted its recovery budget; the PR is not watched until you retry"
 	case strings.HasPrefix(ref, babysitterDiedRef):
 		n, _, _ := strings.Cut(strings.TrimPrefix(ref, babysitterDiedRef), ":")
 		return fmt.Sprintf("its babysitter died and was resumed %s times (the limit is %d an hour, %d in all); its PR %s is not watched until you retry",

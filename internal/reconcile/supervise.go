@@ -244,6 +244,10 @@ func (r *run) babysitterRecovery(it, sess *entity) (claude.Session, bool) {
 		nativeBoundaryState(sess).pending() || r.helperBusy(it) || len(r.undelivered(it, sess)) > 0 {
 		return claude.Session{}, false
 	}
+	observed, observedOK := r.findSession(sess.session.Name)
+	if !observedOK {
+		return claude.Session{}, false
+	}
 	ctx, cancel := r.call()
 	listed, known, err := r.d.Claude.List(ctx)
 	cancel()
@@ -251,8 +255,11 @@ func (r *run) babysitterRecovery(it, sess *entity) (claude.Session, bool) {
 		r.fail("babysitter recovery listing: %v", err)
 	}
 	s, ok := claude.FindByName(listed, sess.session.Name)
-	if err != nil || !known || !ok || !s.Live() ||
-		(!turnEndedInListing(s) && r.transcriptTurnEnd(sess, s).IsZero()) {
+	// An old transcript cannot authorize idle-only recovery of a fresh writer.
+	idle := s.State == listedWorking && s.Status == listedIdle
+	ended := s.State == listedTurnEnded && (s.Status == "" || s.Status == listedIdle)
+	if err != nil || !known || !ok || !s.Live() || (!idle && !ended) ||
+		s.ID != observed.ID || s.SessionID != observed.SessionID || s.PID != observed.PID {
 		return claude.Session{}, false
 	}
 	return s, !r.helperBusy(it) && r.accountAllows(sess, false)

@@ -639,3 +639,81 @@ func TestBabysitterStallRegressionDeferredNativeStopCountsOriginalRestartOnce(t 
 		t.Errorf("state after recovered stop plus dead restart = %s, want needs_you at hourly limit", got)
 	}
 }
+
+func TestBabysitterStallRegressionFreshWriterOverridesOldTurnEnd(t *testing.T) {
+	for _, action := range []string{"nudge", "restart"} {
+		for _, changed := range []string{"busy", "active", "done_but_busy", "status_missing", "different_id", "different_session", "different_pid"} {
+			t.Run(action+"/"+changed, func(t *testing.T) {
+				w, posted, baseline := stalledBabysitterWorld(t, true, true)
+				at := 10 * time.Minute
+				if action == "restart" {
+					babysitterTickAt(w, at)
+					baseline++
+					at = 55 * time.Minute
+				}
+				original := w.sessions[0]
+				ended := t0.Add(time.Minute)
+				w.transcript(original.SessionID, answer(ended.Add(-time.Second), opus, 1000), turnEnd(ended))
+				// Prove this transcript would pass the old fallback, even though it
+				// says nothing about the writer becoming busy after this turn ended.
+				r := boundaryRun(t, w, helper.Service{Brain: w.brain})
+				r.now = t0.Add(at)
+				if got := r.transcriptTurnEnd(r.ents[babysitterID(item, 1)], original); !got.Equal(ended) {
+					t.Fatalf("stale end-turn fixture is not accepted by generic fallback: %v", got)
+				}
+				before := len(itemRestarts(&entity{evs: w.log(item)}))
+				respond := w.fake.Respond
+				listings := 0
+				w.fake.Respond = func(c proc.Cmd) ([]byte, error) {
+					if c.Name == claudeBin && len(c.Args) > 0 && c.Args[0] == "agents" {
+						listings++
+						if listings >= 2 {
+							switch changed {
+							case "busy", "active":
+								w.sessions[0].Status = changed
+							case "done_but_busy":
+								w.sessions[0].State, w.sessions[0].Status = listedTurnEnded, "busy"
+							case "status_missing":
+								w.sessions[0].Status = ""
+							case "different_id":
+								w.sessions[0].ID = "unrecognized-id"
+							case "different_session":
+								w.sessions[0].SessionID = "unrecognized-session"
+							case "different_pid":
+								w.sessions[0].PID = 5394
+							}
+						}
+					}
+					return respond(c)
+				}
+				otherPosts := w.listen(5394)
+				babysitterTickAt(w, at)
+				if listings < 2 {
+					t.Fatal("recovery never checked a fresh listing")
+				}
+				if got := len(posted()) - baseline + len(otherPosts()); got != 0 {
+					t.Errorf("posted to fresh %s writer despite stale prior turn end: %d", changed, got)
+				}
+				if got := len(w.called("claude stop")); got != 0 {
+					t.Errorf("stopped fresh %s writer despite stale prior turn end: %d", changed, got)
+				}
+				if got := len(itemRestarts(&entity{evs: w.log(item)})); got != before {
+					t.Errorf("fresh %s writer consumed recovery budget: %d -> %d", changed, before, got)
+				}
+			})
+		}
+	}
+}
+
+func TestBabysitterStallRegressionExplicitDoneWithoutStatusCanRecover(t *testing.T) {
+	w, posted, baseline := stalledBabysitterWorld(t, true, true)
+	w.sessions[0].State, w.sessions[0].Status = listedTurnEnded, ""
+	babysitterTickAt(w, 10*time.Minute)
+	if got := len(posted()) - baseline; got != 1 {
+		t.Fatalf("explicit done listing without status got %d recovery wakes, want 1", got)
+	}
+	babysitterTickAt(w, 55*time.Minute)
+	if got := len(w.called("claude stop")); got != 1 {
+		t.Errorf("explicit done listing without status got %d recovery stops, want 1", got)
+	}
+}

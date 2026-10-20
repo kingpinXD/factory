@@ -297,8 +297,12 @@ func TestNodePreflightHoldsBeforeCreatingResources(t *testing.T) {
 	if c, err := e.read(); err != nil || c != nil {
 		t.Fatal("container created before missing-auth hold")
 	}
-	if _, err := os.Stat(filepath.Join(spec.RunDir, "adapter.json")); !os.IsNotExist(err) {
-		t.Fatal("worker launch attempted before missing-auth hold")
+	var a attempt
+	if err := readPrivate(filepath.Join(spec.RunDir, "adapter.json"), &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.PrelaunchError != "explicit container NPM_TOKEN required" || a.LaunchIntent || a.ContainerPhase != "" {
+		t.Fatalf("missing-auth rejection lacks prelaunch evidence: %+v", a)
 	}
 }
 

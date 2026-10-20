@@ -52,6 +52,7 @@ type attempt struct {
 	HostStopped      bool
 	ContainerRemoved bool
 	StartedAtMS      int64
+	PrelaunchError   string `json:"PrelaunchError,omitempty"`
 }
 
 func (b *Backend) directory(j helper.Job) (string, error) {
@@ -205,6 +206,15 @@ func (b *Backend) commit(dir string, a *attempt) error {
 	return nil
 }
 
+func prelaunchMessage(err error) string {
+	for _, message := range []string{"repository requirements rejected", "duplicate environment input", "explicit container GitHub authentication required", "explicit container NPM_TOKEN required"} {
+		if err != nil && err.Error() == safeError(message).Error() {
+			return message
+		}
+	}
+	return ""
+}
+
 func (b *Backend) Run(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (helper.RunResult, error) {
 	var result helper.RunResult
 	selection, err := b.validate(ctx, spec)
@@ -215,20 +225,9 @@ func (b *Backend) Run(ctx context.Context, spec helper.RunSpec, sink helper.Sink
 		return result, safeError("missing durable sink")
 	}
 	env := hostEnvironment(spec.Env)
-	requirements, err := repositoryRequirements(spec.Cwd)
-	if err != nil {
-		return result, err
-	}
-	environment, err := containerEnvironment(env, requirements)
-	if err != nil {
-		return result, err
-	}
-	if err = capabilityCheck(ctx, selection.Binaries["worker"], env); err != nil {
-		return result, err
-	}
 	dir := spec.RunDir
 	err = withAttempt(ctx, dir, func(a *attempt) error {
-		if a.SchemaVersion != 0 {
+		if _, e := os.Lstat(filepath.Join(dir, "adapter.json")); !os.IsNotExist(e) {
 			return safeError("existing attempt requires inspection; prompt not replayed")
 		}
 		bytes := make([]byte, 24)
@@ -238,6 +237,27 @@ func (b *Backend) Run(ctx context.Context, spec helper.RunSpec, sink helper.Sink
 		nonce := hex.EncodeToString(bytes)
 		*a = attempt{SchemaVersion: 1, Job: spec.Job, OutputPath: spec.OutputPath, Selection: selection, Token: nonce, StartedAtMS: time.Now().UnixMilli()}
 		if err = b.commit(dir, a); err != nil {
+			return err
+		}
+		requirements, e := repositoryRequirements(spec.Cwd)
+		if e != nil {
+			a.PrelaunchError = "repository requirements rejected"
+			if err = b.commit(dir, a); err != nil {
+				return err
+			}
+			return e
+		}
+		environment, e := containerEnvironment(env, requirements)
+		if e != nil {
+			a.PrelaunchError = prelaunchMessage(e)
+			if a.PrelaunchError != "" {
+				if err = b.commit(dir, a); err != nil {
+					return err
+				}
+			}
+			return e
+		}
+		if err = capabilityCheck(ctx, selection.Binaries["worker"], env); err != nil {
 			return err
 		}
 		a.Git, err = prepareGit(ctx, spec.Cwd, filepath.Join(dir, "git"))
@@ -553,6 +573,48 @@ func lockReleased(path string) error {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return nil
 }
+
+// This proof is checked by Fence itself: cancellation need not call Inspect.
+func (b *Backend) prelaunch(dir string, a attempt, j helper.Job) error {
+	if a.PrelaunchError == "" || prelaunchMessage(safeError(a.PrelaunchError)) != a.PrelaunchError {
+		return errUnknown
+	}
+	if a.SchemaVersion != 1 || a.Job.ID != j.ID || a.Job.Generation != j.Generation || a.Job.Round != j.Round || a.Job.Scope != j.Scope || !reflect.DeepEqual(a.Job.Request, j.Request) || a.Job.Route != j.Route {
+		return errUnknown
+	}
+	stored, err := b.job(j.ID)
+	if err != nil {
+		return err
+	}
+	if stored.ID != j.ID || stored.Generation != j.Generation || stored.Round != j.Round || stored.Scope != j.Scope || !reflect.DeepEqual(stored.Request, j.Request) || stored.Route != j.Route {
+		return errUnknown
+	}
+	var frozen executor.Selection
+	if err = readPrivate(filepath.Join(dir, "selection.json"), &frozen); err != nil {
+		return err
+	}
+	current, err := executor.ReadSelection(b.brain, j.Scope.EpicID)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(a.Selection, frozen) || !reflect.DeepEqual(frozen, current) || current.Executor != "z" || current.EpicID != j.Scope.EpicID {
+		return errUnknown
+	}
+	routes := current.Routes[j.Request.Component]
+	if len(routes) != 1 || routes[0] != j.Route || j.Route.Provider != "zed" || j.Route.Model != executor.NativeModel {
+		return errUnknown
+	}
+	if !token(a.Token) || a.StartedAtMS <= 0 || !reflect.DeepEqual(a.Container, containerIntent{}) || a.ContainerID != "" || a.ContainerPhase != "" || !reflect.DeepEqual(a.Git, gitView{}) || a.LaunchIntent || a.PID != 0 || a.Identity != nil || a.Conversation != "" || a.Turn != "" || a.TurnIntent || a.ShutdownAck || a.Closed != a.HostStopped || a.Closed != a.ContainerRemoved {
+		return errUnknown
+	}
+	for _, path := range []string{filepath.Join(dir, "identity.json"), filepath.Join(dir, "native.lock"), filepath.Join(dir, "result.json"), filepath.Join(dir, "git"), filepath.Join(dir, "tmp"), socketPath(dir)} {
+		if _, err = os.Lstat(path); !os.IsNotExist(err) {
+			return errUnknown
+		}
+	}
+	return nil
+}
+
 func (b *Backend) Fence(ctx context.Context, j helper.Job) error {
 	dir, err := b.directory(j)
 	if err != nil {
@@ -561,6 +623,13 @@ func (b *Backend) Fence(ctx context.Context, j helper.Job) error {
 	return withAttempt(ctx, dir, func(a *attempt) error {
 		if a.SchemaVersion != 1 || a.Job.ID != j.ID || a.Job.Generation != j.Generation || a.Job.Round != j.Round || a.Job.Scope != j.Scope {
 			return errUnknown
+		}
+		if a.PrelaunchError != "" || a.Container.Daemon == "" {
+			if e := b.prelaunch(dir, *a, j); e != nil {
+				return e
+			}
+			a.Closed, a.HostStopped, a.ContainerRemoved = true, true, true
+			return b.commit(dir, a)
 		}
 		a.Closed = true
 		if e := b.commit(dir, a); e != nil {
@@ -746,6 +815,17 @@ func (b *Backend) Inspect(ctx context.Context, spec helper.RunSpec, sink helper.
 	}
 	identified := false
 	err := withAttempt(ctx, spec.RunDir, func(a *attempt) error {
+		if a.PrelaunchError != "" {
+			if err := b.prelaunch(spec.RunDir, *a, spec.Job); err != nil {
+				return err
+			}
+			if !a.Closed || !a.HostStopped || !a.ContainerRemoved || a.OutputPath != spec.OutputPath {
+				return errUnknown
+			}
+			result = helper.RunResult{Outcome: "failed", ErrorCode: "native_prelaunch_failed", ErrorText: a.PrelaunchError}
+			identified = true
+			return nil
+		}
 		if a.SchemaVersion != 1 || a.Job.ID != spec.Job.ID || a.Job.Generation != spec.Job.Generation || a.Job.Scope != spec.Job.Scope || a.OutputPath != spec.OutputPath || a.Identity == nil || !a.TurnIntent || !a.Closed || !a.HostStopped || !a.ContainerRemoved || a.Git.Phase != "done" {
 			return errUnknown
 		}

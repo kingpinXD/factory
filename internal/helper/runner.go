@@ -198,6 +198,14 @@ func recoverAttempts(ctx context.Context, d RunnerDeps) error {
 	}
 	return nil
 }
+func nativeCancellationPending(r *jobRecord) bool {
+	if r.Job.Route.Provider != "zed" || r.Job.State != "unknown" {
+		return false
+	}
+	code := r.Rounds[r.Job.Round].Result.ErrorCode
+	return r.Job.HoldReason == "cancel_requested" || r.Job.HoldReason == "fencing" || code == "cancel_requested" || code == "fencing"
+}
+
 func recoverAttempt(ctx context.Context, d RunnerDeps, j Job) (err error) {
 	ctx, cancelAttempt := context.WithTimeout(ctx, 2*recoveryOperationTimeout)
 	defer cancelAttempt()
@@ -218,7 +226,7 @@ func recoverAttempt(ctx context.Context, d RunnerDeps, j Job) (err error) {
 			if r.Job.Generation != j.Generation {
 				return nil
 			}
-			if r.Job.State == "running" || r.Job.State == "yielding" || r.Job.State == "unknown" {
+			if !nativeCancellationPending(r) && (r.Job.State == "running" || r.Job.State == "yielding" || r.Job.State == "unknown") {
 				setState(r, "unknown", "reconciliation_unconfirmed")
 			}
 			return nil
@@ -264,7 +272,9 @@ func recoverAttempt(ctx context.Context, d RunnerDeps, j Job) (err error) {
 			return nil
 		}
 		if fenceErr != nil {
-			setState(r, "unknown", "writer_death_unconfirmed")
+			if !nativeCancellationPending(r) {
+				setState(r, "unknown", "writer_death_unconfirmed")
+			}
 			return nil
 		}
 		q.Stopped = true
@@ -290,7 +300,7 @@ func recoverAttempt(ctx context.Context, d RunnerDeps, j Job) (err error) {
 			if r.Job.Generation != j.Generation {
 				return ErrConflict
 			}
-			if r.Job.State == "running" || r.Job.State == "yielding" || r.Job.State == "unknown" {
+			if !nativeCancellationPending(r) && (r.Job.State == "running" || r.Job.State == "yielding" || r.Job.State == "unknown") {
 				setState(r, "unknown", "inspection_unconfirmed")
 			}
 			return nil
@@ -482,6 +492,12 @@ func finish(ctx context.Context, s Service, j Job, result RunResult, runErr, fen
 			setState(r, "unknown", "journal_identity_conflict")
 			return nil
 		}
+		if nativeCancellationPending(r) {
+			if fenceErr == nil {
+				q.Stopped = true
+			}
+			return nil
+		}
 		if r.Job.State != "running" && r.Job.State != "yielding" && !(inspection && r.Job.State == "unknown") {
 			if fenceErr == nil {
 				q.Stopped = true
@@ -502,6 +518,11 @@ func finish(ctx context.Context, s Service, j Job, result RunResult, runErr, fen
 		}
 		if runErr != nil {
 			setState(r, "unknown", "turn_result_unconfirmed")
+			return nil
+		}
+		if j.Route.Provider == "zed" && r.Job.Route.Provider == "zed" && inspection && result.Outcome == "failed" && result.ErrorCode == "native_prelaunch_failed" && result.ErrorText != "" && result.ConversationID == "" && result.TurnID == "" && result.ObservedModel == "" && reason == "" && q.InterruptReason == "" && q.Phase == "launch_attempted" && len(q.Evidence) == 0 && !q.Ended && q.Result.ConversationID == "" && q.Result.TurnID == "" && q.Result.ObservedModel == "" {
+			setState(r, "failed", result.ErrorCode)
+			q.Result.ErrorText = result.ErrorText
 			return nil
 		}
 		if result.Outcome == "unknown" {

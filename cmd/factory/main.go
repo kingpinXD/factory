@@ -15,7 +15,7 @@ var commands = []string{
 	"add", "tick", "status", "answer", "retry", "stop", "review-asked", "replan", "check",
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
-	"version",
+	"version", "ui",
 }
 
 var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
@@ -41,6 +41,7 @@ var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"review-asked": runReviewAsked,
 	"launchd":      runLaunchd,
 	"version":      runVersion,
+	"ui":           runUI,
 }
 
 func main() {
@@ -60,7 +61,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "factory: unknown command: %s (run factory --help)\n", name)
 		return 2
 	}
-	useSecretsToken(blueprint.Brain())
+	if name != "ui" {
+		useSecretsToken(blueprint.Brain())
+	}
 	return handlers[name](args[1:], stdout, stderr)
 }
 

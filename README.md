@@ -88,6 +88,9 @@ factory repo-worker
 
 # Prints the module version and the git commit the binary was built from; a missing part prints unknown. factory --version does the same.
 factory version
+
+# Opens a local browser control room without starting a manager.
+factory ui [--listen 127.0.0.1:0] [--brain /absolute/path] [--read-only]
 ```
 
 ## `factory status --json`
@@ -153,3 +156,55 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
   "problems": ["…"]                      // blueprint problems while the tick runs on the last good copy
 }
 ```
+
+
+## Local browser UI
+
+Run `factory ui` and open the authenticated loopback URL it prints. The one-use
+fragment is exchanged for a local browser cookie and removed from the address bar.
+Keep that startup URL private. The server binds a numeric loopback address only;
+remote access is unsupported.
+
+The UI shows jobs, current questions, delivery counts, dependencies, manager
+freshness and cached Claude capacity. Job details include activity, validated
+plans and explicit private inspection. Read errors retain the last good browser
+observation. A running manager or delivered message does not establish useful
+worker progress. Completed, cancelled and pending cleanup counts stay separate.
+
+`--brain` binds this server to that absolute brain directory. It does not change
+other processes or install a scheduler. `--read-only` disables job submission and
+factory controls. Neither startup nor polling probes authentication, queries
+GitHub or starts Claude. Submission loads runtime dependencies only when requested.
+The supported executor is Claude; experimental executor selections refuse writes.
+
+New jobs accept written text, GitHub issues/epics, or bounded UTF-8 plan uploads.
+Text is always text, even when it resembles a host file path. Submitting may start
+agents, create issues and PRs, and merge under the repository policy. Available
+controls are scoped to the selected job or task and revalidated under the manager
+lock. Cancellation previews descendant, PR, branch and worktree consequences;
+adopted PR preservation is shown explicitly. Recording deployment records a fact
+for the selected job and does not deploy software.
+
+Action receipts distinguish queued requests from applied, refused, failed and
+unknown outcomes. If a response is lost, the browser checks the same request id
+without replaying intake. Private receipts and uploads are stored under
+`<brain>/factory/ui/` with restrictive permissions. The browser stores only
+unresolved request ids and their scopes for reload recovery, never tokens, form
+text or diagnostic content. An unknown submission remains blocked for inspection;
+check the saved receipt and any resulting job before submitting it again.
+
+Browser answers require a fresh completed tick that advertises
+`ui_action_protocol=1`. An older installed manager leaves Answer disabled. Building
+or starting this UI does not upgrade the manager. Stop UI mutations before a
+manager downgrade; do not rely on a previous compatible tick after downgrading.
+
+Logs, conversations and output files load only on request and have bounded,
+server-redacted previews. Selected diagnostic export previews the same evidence
+before downloading JSON. It can still contain private code, prompts and issue
+text. Nothing is uploaded. The UI provides no shell, process control, generic file
+browser, force-merge or pause action. Closing the browser or stopping this HTTP
+server leaves the manager, workers and submitted work running independently.
+
+The frontend is embedded vanilla HTML/CSS/JavaScript with no build, external assets
+or runtime packages. Run its regression checks with
+`node --test internal/webui/frontend_test.mjs` in addition to the Go checks.

@@ -65,7 +65,7 @@ func consumedKey(req events.Event) string { return "signal:" + signalKey(req) }
 func pendingSignals(ep *entity) []events.Event {
 	var out []events.Event
 	for _, ev := range ep.evs {
-		if ev.Kind == events.KindRequest && ev.Recipient == recipientRecheck && !ep.has(consumedKey(ev)) {
+		if ev.Kind == events.KindRequest && ev.Recipient == recipientRecheck && !ep.has(consumedKey(ev)) && !ep.has("refused:"+seqRef(ev)) {
 			out = append(out, ev)
 		}
 	}
@@ -96,6 +96,12 @@ func (r *run) startRecheck(ep *entity, t events.Event) error {
 	}
 	var refs, lines []string
 	for _, sig := range pendingSignals(ep) {
+		if sig.UIBinding != "" && !r.uiBindingValid(ep, sig) {
+			if _, err := r.append(ep, events.Event{Kind: events.KindRefused, Sender: events.SenderProgram, Text: "question changed; refresh before answering", TriggerRef: seqRef(sig), Key: "refused:" + seqRef(sig)}); err != nil {
+				return err
+			}
+			continue
+		}
 		covers := signalCovers(sig)
 		if _, err := r.append(ep, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, TriggerRef: seqRef(t),
 			Text: strings.Join(covers, " "), Key: consumedKey(sig)}); err != nil {
@@ -708,7 +714,7 @@ const answerTakeOver = "take over"
 func tookOver(ep *entity, issue epic.Ref) bool {
 	for i := len(ep.evs) - 1; i >= 0; i-- {
 		ev := ep.evs[i]
-		if ev.Kind != events.KindRequest || ev.Recipient != recipientRecheck || ev.Request != signalAnswer {
+		if ev.Kind != events.KindRequest || ev.Recipient != recipientRecheck || ev.Request != signalAnswer || ep.has("refused:"+seqRef(ev)) {
 			continue
 		}
 		s, choice, _ := strings.Cut(ev.Text, " ")

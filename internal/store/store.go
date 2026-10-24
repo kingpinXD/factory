@@ -176,6 +176,7 @@ func WriteStatus(dir string, st Status) error { return WriteJSON(StatusPath(dir)
 
 // Overall is the factory's own status.json.
 type Overall struct {
+	UIActionProtocol int `json:"ui_action_protocol,omitempty"`
 	// LastTick is when the last tick finished, in UTC; zero, and left out,
 	// once `factory launchd remove` stopped the ticks.
 	LastTick time.Time `json:"last_tick,omitzero"`

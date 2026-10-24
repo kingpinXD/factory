@@ -45,6 +45,10 @@ func (r *run) applyRequests(e *entity) {
 // applyRequest makes the move req asks for, or logs one refused event with
 // the machine's reason.
 func (r *run) applyRequest(e *entity, req events.Event) error {
+	if req.UIBinding != "" && !r.uiBindingValid(e, req) {
+		_, err := r.append(e, events.Event{Kind: events.KindRefused, Sender: events.SenderProgram, Text: "question changed; refresh before answering", TriggerRef: seqRef(req), Key: "refused:" + seqRef(req)})
+		return err
+	}
 	next, err := r.tryRequest(e, req)
 	var refused fsm.ErrRefused
 	if errors.As(err, &refused) {

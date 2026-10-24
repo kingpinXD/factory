@@ -93,7 +93,8 @@ type Event struct {
 
 	// Request names what a request event asks for: the user command that
 	// wrote it (answer, retry, stop, …) or the repo work (worktree, cleanup).
-	Request string `json:"request,omitempty"`
+	Request   string `json:"request,omitempty"`
+	UIBinding string `json:"ui_binding,omitempty"`
 }
 
 // Key is a transition's once-only key. triggerRef names the occurrence

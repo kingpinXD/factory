@@ -40,11 +40,73 @@ func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error
 	if err != nil {
 		return "", err
 	}
+	return addParsed(ctx, d, input, kind, ov, b, tiers, false)
+}
+
+// UIIntake preserves the browser-selected input kind. PlanPath is a server-owned upload.
+type UIIntake struct {
+	Kind     string
+	Value    string
+	PlanPath string
+}
+
+// AddTyped never interprets browser text as a local file path.
+func AddTyped(ctx context.Context, d Deps, in UIIntake, ov Overrides) (string, error) {
+	if err := UIMutationsSupported(ctx, UIOptions{Brain: d.Brain, Now: d.Now}); err != nil {
+		return "", err
+	}
+	input, kind := strings.TrimSpace(in.Value), intake.InputKind(in.Kind)
+	switch in.Kind {
+	case "text":
+		if input == "" || in.PlanPath != "" {
+			return "", errors.New("a written goal is required")
+		}
+	case "issue", "epic":
+		if _, _, ok := intake.IssueRef(input); !ok || in.PlanPath != "" {
+			return "", errors.New("a GitHub issue or epic link is required")
+		}
+		callCtx, cancel := context.WithTimeout(ctx, d.CallTimeout)
+		actual, err := intake.Kind(callCtx, input, d.GitHub)
+		cancel()
+		if err != nil {
+			return "", err
+		}
+		if actual != kind {
+			return "", fmt.Errorf("selected %s input is actually %s", kind, actual)
+		}
+	case "plan_upload":
+		if input != "" || !filepath.IsAbs(in.PlanPath) {
+			return "", errors.New("a server-owned plan upload is required")
+		}
+		input, kind = in.PlanPath, intake.KindPlan
+	default:
+		return "", errors.New("unsupported input kind")
+	}
+	b, _, err := blueprint.Current(ctx, d.Brain, nil, d.Notify)
+	if err != nil {
+		return "", err
+	}
+	tiers, err := blueprint.ReadTiers(d.Brain)
+	if err != nil {
+		return "", err
+	}
+	if err := checkOverrides(b, tiers, ov); err != nil {
+		return "", err
+	}
+	return addParsed(ctx, d, input, kind, ov, b, tiers, true)
+}
+
+func addParsed(ctx context.Context, d Deps, input string, kind intake.InputKind, ov Overrides, b *blueprint.Blueprint, tiers blueprint.Tiers, browser bool) (string, error) {
 	unlock, err := waitLock(ctx, d.Brain, "tick")
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
+	if browser {
+		if err := UIMutationsSupported(ctx, UIOptions{Brain: d.Brain, Now: d.Now}); err != nil {
+			return "", err
+		}
+	}
 
 	r, err := newRun(ctx, d, false)
 	if err != nil {
@@ -54,7 +116,11 @@ func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error
 	r.attachMachines()
 	r.account()
 	id := r.newEpicID()
-	in := &EpicInputs{ID: id, Input: input, Kind: string(kind), RepoHint: intake.RepoHint(input), Overrides: ov, AddedAt: r.now}
+	hint := ""
+	if !browser || kind == intake.KindIssue || kind == intake.KindEpic {
+		hint = intake.RepoHint(input)
+	}
+	in := &EpicInputs{ID: id, Input: input, Kind: string(kind), RepoHint: hint, Overrides: ov, AddedAt: r.now}
 	if kind == intake.KindPlan {
 		if in.Path, err = filepath.Abs(intake.ExpandHome(input)); err != nil {
 			return "", err
@@ -73,7 +139,7 @@ func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error
 		r.say("%s: planner not started: the account holds new work back", id)
 	}
 	if err := r.save(); err != nil {
-		return "", err
+		return id, err
 	}
 	if len(r.errs) > 0 {
 		return id, errors.New(strings.Join(r.errs, "; "))

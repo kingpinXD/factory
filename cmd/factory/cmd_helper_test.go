@@ -473,20 +473,42 @@ func TestAttachInterruptJournalsIntentThenStartsRunnerAndReadsActualState(t *tes
 	case <-ctx.Done():
 		t.Fatal("turn not identified")
 	}
+	checkIntent := func(stopped bool) error {
+		data, err := os.ReadFile(filepath.Join(s.Brain, "factory", "helpers", "ledger.json"))
+		if err != nil {
+			return err
+		}
+		var journal struct {
+			Jobs map[string]struct {
+				Rounds map[int]struct {
+					InterruptReason string `json:"interrupt_reason"`
+					Stopped         bool   `json:"stopped"`
+				} `json:"rounds"`
+			} `json:"jobs"`
+		}
+		if err := json.Unmarshal(data, &journal); err != nil {
+			return err
+		}
+		round := journal.Jobs[a.JobID].Rounds[1]
+		if round.InterruptReason != "attach request" {
+			return fmt.Errorf("runner started before durable intent: round 1 interrupt_reason=%q", round.InterruptReason)
+		}
+		if stopped && !round.Stopped {
+			return fmt.Errorf("recovery result published before writer stopped")
+		}
+		return nil
+	}
 	oldStart := startHelperRunner
 	t.Cleanup(func() { startHelperRunner = oldStart })
 	startHelperRunner = func(_ context.Context, brain string) error {
 		if brain != s.Brain {
 			return fmt.Errorf("interrupt restarted wrong brain")
 		}
-		j, err := s.Job(a.JobID)
-		if err != nil {
+		if err := checkIntent(false); err != nil {
 			return err
 		}
-		if j.HoldReason != "interrupt_requested" {
-			return fmt.Errorf("runner started before durable intent")
-		}
-		_, err = awaitResult(ctx, s, a.JobID, "recovery_required")
+		// The active broker may finish the interrupt before the restart hint is read.
+		_, err := awaitResult(ctx, s, a.JobID, "recovery_required")
 		if err != nil {
 			result, _ := s.Result(a.JobID, 1)
 			select {
@@ -496,7 +518,7 @@ func TestAttachInterruptJournalsIntentThenStartsRunnerAndReadsActualState(t *tes
 				return fmt.Errorf("%w; result=%+v", err, result)
 			}
 		}
-		return nil
+		return checkIntent(true)
 	}
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"z-attach", a.JobID, "--brain", s.Brain, "--action", "interrupt", "--round", "1", "--reason", "attach request"}, &stdout, &stderr)

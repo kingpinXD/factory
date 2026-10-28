@@ -34,7 +34,10 @@ const (
 // newDeps returns what the tick and factory add act through. Sessions get
 // this binary as FACTORY_BIN. Tests replace it.
 var newDeps = func(out io.Writer) (reconcile.Deps, error) {
-	brain := blueprint.Brain()
+	return depsForBrain(blueprint.Brain(), out)
+}
+
+func depsForBrain(brain string, out io.Writer) (reconcile.Deps, error) {
 	cl, err := claude.New(brain)
 	if err != nil {
 		return reconcile.Deps{}, err

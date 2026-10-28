@@ -58,6 +58,10 @@ func planID(e *entity) string { return strings.TrimPrefix(e.id, e.entry.Epic+"-"
 // end event the newest applying move named (planning → planned, or a
 // re-check's end), and that end event. It is nil before the first plan.
 func (r *run) appliedPlan(ep *entity) (*epic.Plan, events.Event, error) {
+	if r.uiPlans != nil {
+		p := r.uiPlans[ep.id]
+		return p.plan, p.end, p.err
+	}
 	return appliedBefore(ep, math.MaxInt)
 }
 

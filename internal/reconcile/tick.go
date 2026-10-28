@@ -137,7 +137,7 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if err := r.save(); err != nil {
 		return err
 	}
-	overall := store.Overall{LastTick: r.now, Tick: r.n, Errors: r.errs, Repairs: r.repairs}
+	overall := store.Overall{UIActionProtocol: UIActionProtocol, LastTick: r.now, Tick: r.n, Errors: r.errs, Repairs: r.repairs}
 	for _, p := range r.problems {
 		overall.Problems = append(overall.Problems, p.String())
 	}
@@ -164,6 +164,9 @@ func (r *run) tickEntity(e *entity) {
 		r.observe(e)
 		r.measure(e)
 	}
+	if err := r.refuseStaleUIAnswers(e); err != nil {
+		r.fail("%s: UI answer: %v", e.id, err)
+	}
 	r.prepare(e)
 	r.applyRequests(e)
 	r.advance(e)
@@ -171,10 +174,11 @@ func (r *run) tickEntity(e *entity) {
 
 // run is one tick's view of the factory.
 type run struct {
-	d   Deps
-	ctx context.Context
-	dry bool
-	now time.Time
+	uiPlans map[string]uiPinnedPlan
+	d       Deps
+	ctx     context.Context
+	dry     bool
+	now     time.Time
 	// n is this tick's number; full is set on a full reconcile of GitHub.
 	n    int
 	full bool

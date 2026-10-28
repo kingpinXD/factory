@@ -145,3 +145,20 @@ responses, pipelined status requests, delivery receipts and a non-draining clien
 Only lifecycle_probe.rs and lifecycle_tests.rs differ from the auxiliary snapshot
 for this correction. Their distributed hashes and the overlay inventory are updated;
 auxiliary hashes remain historical. No enrolled executable or live runtime is changed.
+
+## Managed-command stdin EOF correction
+
+The packaged host executor drops its stdin owner inside the concurrent writer
+future after flushing. The pinned pipe's close operation only flushes; retaining
+the handle while waiting for output prevents EOF-dependent commands from replying.
+Real HostExecutor regressions cover empty/nonempty EOF, blocked-write cancellation,
+timeout, output limits, exact child reaping and concurrent large input/pre-output.
+Distributed hashes and the overlay inventory are updated; auxiliary hashes remain
+historical. No enrolled executable or live runtime is changed.
+
+The real-child fixture also has an independent future watchdog and panic cleanup.
+It joins the worker and recovers a separate PID witness before fixture removal,
+then kills/reaps that exact child if necessary. Readiness-failure and watchdog
+regressions cover this fallback; normal results must still prove executor-owned
+reaping. Forced future drops retain Activity uncertainty rather than claiming
+successful executor termination.

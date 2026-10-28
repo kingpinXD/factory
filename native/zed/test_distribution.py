@@ -156,7 +156,9 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(set(normalizations), {'crates/eval_cli/README.md'})
         # These overlay-only fixes retain the hashes of the sealed auxiliary snapshot.
         corrections = {'crates/eval_cli/src/lifecycle_probe.rs',
-                       'crates/eval_cli/src/lifecycle_tests.rs'}
+                       'crates/eval_cli/src/lifecycle_tests.rs',
+                       'crates/eval_cli/src/managed_tools.rs',
+                       'crates/eval_cli/src/lifecycle_managed_tests.rs'}
         for name, record in manifest['overlay'].items():
             if name in corrections:
                 self.assertNotEqual(record['sha256'], record['auxiliary_sha256'], name)

@@ -1551,3 +1551,251 @@ async fn managed_shutdown_retains_runtime_if_mutation_starts_during_response_del
     assert_eq!(response.try_recv().unwrap()["result"]["exiting"], true);
     assert!(quit.get());
 }
+
+fn real_host_command(
+    body: &str,
+    stdin: Vec<u8>,
+    timeout_ms: u64,
+    interrupt: bool,
+) -> anyhow::Result<String> {
+    real_host_command_fixture(body, stdin, timeout_ms, interrupt, true, 8000)
+}
+
+fn real_host_command_fixture(
+    body: &str,
+    stdin: Vec<u8>,
+    timeout_ms: u64,
+    interrupt: bool,
+    publish_ready: bool,
+    watchdog_ms: u64,
+) -> anyhow::Result<String> {
+    let directory = FixtureDir::new();
+    let script = directory.0.join("child.sh");
+    let ready = directory.0.join("ready");
+    let pid_file = directory.0.join("pid");
+    let read_pid = |file: &std::path::Path| std::fs::read_to_string(file).ok()?.parse::<i32>().ok();
+    // Keep an identity witness even when readiness fails before the caller learns
+    // the PID. exec preserves that PID for cat/wc.
+    let readiness = if publish_ready {
+        "printf '%s' \"$$\" > \"$1\""
+    } else {
+        ""
+    };
+    std::fs::write(
+        &script,
+        format!("printf '%s' \"$$\" > \"$2\"\n{readiness}\n{body}\n"),
+    )
+    .unwrap();
+    let activity = Arc::new(Mutex::new(Activity::default()));
+    let cancel = Arc::new(Cancellation::default());
+    let spec = CommandSpec {
+        executable: "/bin/sh".into(),
+        args: vec![
+            script.to_str().unwrap().into(),
+            ready.to_str().unwrap().into(),
+            pid_file.to_str().unwrap().into(),
+        ],
+        env: Default::default(),
+        cwd: directory.0.clone(),
+        stdin,
+        timeout_ms,
+    };
+    let future = HostExecutor.execute(spec, activity.clone(), cancel.clone());
+    assert_eq!(activity.lock().unwrap().active, 1);
+    let (stop, stopped) = oneshot::channel::<()>();
+    let worker = std::thread::spawn(move || {
+        smol::block_on(async {
+            let future = future.fuse();
+            let deadline =
+                futures::FutureExt::fuse(smol::Timer::after(Duration::from_millis(watchdog_ms)));
+            let stopped = stopped.fuse();
+            futures::pin_mut!(future, deadline, stopped);
+            // Drop the executor future even if its own cancellation/deadline is broken.
+            futures::select_biased! {
+                result = future => result,
+                _ = deadline => Err(anyhow::anyhow!("test host watchdog elapsed")),
+                _ = stopped => Err(anyhow::anyhow!("test host fixture stopped")),
+            }
+        })
+    });
+    let preparation = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let readiness_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let pid = loop {
+            if let Some(pid) = read_pid(&ready) {
+                break pid;
+            }
+            assert!(
+                std::time::Instant::now() < readiness_deadline,
+                "host child did not publish readiness"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        if interrupt {
+            // The child never reads stdin. Four MiB cannot fit in its pipe.
+            assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+            assert_eq!(activity.lock().unwrap().active, 1);
+            cancel.cancel();
+        }
+    }));
+    if preparation.is_err() && stop.send(()).is_err() {
+        // The independently bounded worker has already finished.
+    }
+    let completed = worker.join();
+    // No assertion/panic is allowed to escape before joining and recovering the
+    // PID witness. Reaping here must not make a broken normal executor pass.
+    let pid = read_pid(&pid_file);
+    let mut already_reaped = true;
+    if let Some(pid) = pid {
+        assert!(pid > 1);
+        already_reaped = unsafe { libc::kill(pid, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if !already_reaped {
+            let killed = unsafe { libc::kill(pid, libc::SIGKILL) };
+            assert!(
+                killed == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            );
+            let reap_deadline = std::time::Instant::now() + Duration::from_secs(2);
+            loop {
+                let waited = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+                assert!(
+                    waited >= 0
+                        || std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD)
+                );
+                if unsafe { libc::kill(pid, 0) } == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < reap_deadline,
+                    "owned child {pid} survived fixture cleanup"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        eprintln!(
+            "host fixture: exact child {pid} reaped; worker joined; independent_cleanup={}",
+            !already_reaped
+        );
+    }
+    assert_eq!(activity.lock().unwrap().active, 0);
+    if let Err(panic) = preparation {
+        std::panic::resume_unwind(panic);
+    }
+    let result = completed.unwrap();
+    let watchdog = result
+        .as_ref()
+        .is_err_and(|error| error.to_string() == "test host watchdog elapsed");
+    assert!(pid.is_some(), "host child never published its PID");
+    assert_eq!(activity.lock().unwrap().uncertain, watchdog);
+    assert!(
+        watchdog || already_reaped,
+        "executor left its owned child alive"
+    );
+    result
+}
+
+#[test]
+fn host_executor_delivers_eof_after_nonempty_stdin() {
+    let result = real_host_command(
+        "printf 'stderr' >&2; exec /bin/cat",
+        b"factory request\nwith payload".to_vec(),
+        1500,
+        false,
+    );
+    assert_eq!(result.unwrap(), "factory request\nwith payloadstderr");
+}
+
+#[test]
+fn host_executor_delivers_eof_after_empty_stdin() {
+    let result = real_host_command(
+        "printf 'stderr' >&2; exec /bin/cat",
+        Vec::new(),
+        1500,
+        false,
+    );
+    assert_eq!(result.unwrap(), "stderr");
+}
+
+#[test]
+fn host_executor_cancels_blocked_stdin_and_reaps_child() {
+    let error = real_host_command(
+        "while :; do :; done",
+        vec![b'x'; 4 * 1024 * 1024],
+        3000,
+        true,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "managed command interrupted");
+}
+
+#[test]
+fn host_executor_times_out_and_reaps_child() {
+    let error = real_host_command(
+        "while :; do :; done",
+        vec![b'x'; 4 * 1024 * 1024],
+        1000,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "host command timed out");
+}
+
+#[test]
+fn host_executor_limits_output_and_reaps_child() {
+    let error = real_host_command(
+        "while :; do printf '%01024d' 0; done",
+        Vec::new(),
+        3000,
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "command output too large");
+}
+
+#[test]
+fn host_executor_reads_preoutput_while_writing_large_stdin() {
+    let result = real_host_command(
+        "i=0; while [ \"$i\" -lt 80 ]; do printf '%01024d' 0; i=$((i+1)); done; exec /usr/bin/wc -c",
+        vec![b'x'; 4 * 1024 * 1024],
+        3000,
+        false,
+    )
+    .unwrap();
+    let expected = "0".repeat(80 * 1024) + " 4194304\n";
+    assert!(expected.len() < MAX_OUTPUT);
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn host_executor_fixture_watchdog_reaps_and_joins() {
+    let error = real_host_command_fixture(
+        "while :; do :; done",
+        vec![b'x'; 4 * 1024 * 1024],
+        30_000,
+        false,
+        true,
+        3000,
+    )
+    .unwrap_err();
+    assert_eq!(error.to_string(), "test host watchdog elapsed");
+}
+
+#[test]
+fn host_executor_fixture_readiness_failure_cleans_up_before_resuming_panic() {
+    let panic = std::panic::catch_unwind(|| {
+        real_host_command_fixture(
+            "while :; do :; done",
+            vec![b'x'; 4 * 1024 * 1024],
+            30_000,
+            false,
+            false,
+            8000,
+        )
+    })
+    .unwrap_err();
+    assert_eq!(
+        panic.downcast_ref::<&str>().copied(),
+        Some("host child did not publish readiness")
+    );
+}

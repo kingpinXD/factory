@@ -15,7 +15,7 @@ PIN = 'fb69067729cb16a7f6135e2c1600c26a28c59659'
 RUST = '1.98.1'
 BUILD_FEATURE = 'util/debug-embed'
 ASSET_TEST = 'tests::runtime_assets_load_without_native_startup'
-MANIFEST_SHA256 = 'd69c43b7ec306c809d18087978fd516e769acf5c0d4b66c225d653c8a4dc554a'
+MANIFEST_SHA256 = 'f51a73d9c225272ca7e9903ce690be8493c6fed61a3f1b4dd6d6ec00f1872810'
 ROOT = Path(__file__).resolve().parent
 BINARIES = ('eval-cli', 'zed-native-usage-probe', 'zed-native-lifecycle-probe',
             'zed-native-credential-setup')

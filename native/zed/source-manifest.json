@@ -6,7 +6,7 @@
   "auxiliary_branch": "feat/factory-native-probe",
   "snapshot_utc": "2026-10-17T05:26:07.296054+00:00",
   "auxiliary_snapshot_sha256": "8c2d29b45f7991ed4576751f2ae4da1b2d2253a335969ffcc95a9bf5014efe5e",
-  "overlay_snapshot_sha256": "86f6b43796e259efbb0d8b5233301909e5cfeb1c5e46a656b49d34d7aaecb31f",
+  "overlay_snapshot_sha256": "98e85de609042e1b33f3d15f880f71269c9a2c7357f0ce633d8eecb46027e022",
   "documentation_normalizations": {
     "crates/eval_cli/README.md": "Replace the single personal CARGO_TARGET_DIR example with /absolute/path/to/selected-cargo-target; executable source is unchanged."
   },
@@ -52,7 +52,7 @@
       "base_sha256": "f6421f6f6188a15a850fd96f00788a1b81287fe04d7f507a8654dd500973aae2"
     },
     "crates/eval_cli/src/lifecycle_managed_tests.rs": {
-      "sha256": "5430beeeff98032ba99aeceda09936b32cce175479ba2af1c3468ee25e723d82",
+      "sha256": "fa189b89494f72e8e3ce7b4bbb6f0da67dfb07e3d5afcd9e94fa1c55260cdb15",
       "auxiliary_sha256": "5430beeeff98032ba99aeceda09936b32cce175479ba2af1c3468ee25e723d82",
       "base_sha256": null
     },
@@ -87,7 +87,7 @@
       "base_sha256": null
     },
     "crates/eval_cli/src/managed_tools.rs": {
-      "sha256": "3e69fe2174d7969f3720f60da265cb0770a8c57dc11bf1a44f8246b9e62181f7",
+      "sha256": "8918bcad9094205fe339156236a036b1470535b666cbb84fd60b1d571514598b",
       "auxiliary_sha256": "3e69fe2174d7969f3720f60da265cb0770a8c57dc11bf1a44f8246b9e62181f7",
       "base_sha256": null
     },

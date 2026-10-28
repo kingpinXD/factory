@@ -310,6 +310,8 @@ async fn run_command(
             let write = async {
                 stdin.write_all(&spec.stdin).await?;
                 stdin.close().await?;
+                // close() only flushes this pipe; dropping its owner delivers EOF.
+                drop(stdin);
                 Ok::<_, anyhow::Error>(())
             };
             let (out, err, ()) =

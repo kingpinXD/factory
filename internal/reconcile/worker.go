@@ -41,6 +41,13 @@ func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Du
 		}
 		for _, j := range jobs {
 			tried[j.key()] = true
+			if j.req.Request == cleanupRequest {
+				// This independent worker can recover a request queued before a crash.
+				// Admission remains durably closed before any Git deletion starts.
+				if err := fenceCleanup(ctx, brain, j.id); err != nil {
+					return err
+				}
+			}
 			res := j.do(ctx, g, timeout)
 			if _, err := events.Append(store.EventsPath(j.dir), res); err != nil {
 				return err

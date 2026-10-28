@@ -146,6 +146,9 @@ func (r *run) closePR(it *entity, k, why string) error {
 // branch, if it ever had one: whatever they hold, except for an adopted PR,
 // whose work not in its PR is kept.
 func (r *run) queueCleanup(it *entity, k string) error {
+	if err := r.fenceHelpers(it, "cancel cleanup"); err != nil {
+		return err
+	}
 	if _, ok := lastRepoRequest(it, worktreeRequest); !ok {
 		return nil
 	}

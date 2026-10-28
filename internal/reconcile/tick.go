@@ -18,19 +18,24 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/fsm"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/notify"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
 // Deps are what the tick and `factory add` act through.
 type Deps struct {
-	Brain  string
-	Now    func() time.Time
-	GitHub gh.Client
-	Claude claude.Client
-	Notify notify.Notifier
+	NativePreflight func(context.Context, executor.Selection) error
+	Helpers         *helper.Service
+	StartHelpers    func(context.Context) error
+	Brain           string
+	Now             func() time.Time
+	GitHub          gh.Client
+	Claude          claude.Client
+	Notify          notify.Notifier
 	// Post posts the review requests in review_channel as the user.
 	Post notify.Poster
 	// Account is the tick's first step.
@@ -80,6 +85,10 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	// so a slow tick never delays a stop at the pause point. It runs before
 	// anything is read, so the tick sees the sessions it stopped and the
 	// resumes it asked for.
+	var helperErr error
+	if !dryRun && d.StartHelpers != nil {
+		helperErr = d.StartHelpers(ctx)
+	}
 	acctState, acctErr := stepAccount(ctx, d, dryRun)
 	if !dryRun {
 		unlock, err := store.Lock(d.Brain, "tick")
@@ -92,11 +101,15 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if err != nil {
 		return err
 	}
+	if helperErr != nil {
+		r.fail("native runner: %v", helperErr)
+	}
 	r.useAccount(acctState, acctErr)
 	if err := r.loadBlueprint(); err != nil {
 		return err
 	}
 	r.attachMachines()
+	r.recoverHelperOwnership()
 	if r.full {
 		r.reconcileGitHub()
 		r.watchBases()
@@ -448,10 +461,20 @@ func candidates(m blueprint.Machine, state string) []blueprint.Transition {
 // transition, so they are safe to repeat.
 func (r *run) move(e *entity, next fsm.Cur, trigger, ref string) (bool, error) {
 	from := e.cur.State
+	if next.State == workCancelled || (e.work != nil && e.m.States[next.State].End) {
+		if err := r.fenceHelpers(e, "state transition"); err != nil {
+			return false, err
+		}
+	}
 	next.Prev = returnFromMerging(e, from, next.Prev)
 	key := events.Key(e.id, from, next.State, ref, next.Attempt)
 	if e.has(key) {
 		return false, nil
+	}
+	if e.session != nil && next.State == sessionCompacting {
+		if _, err := r.beginNativeBoundary(e, "compact", key); err != nil {
+			return false, err
+		}
 	}
 	logged, err := r.append(e, events.Event{
 		Kind:       events.KindTransition,

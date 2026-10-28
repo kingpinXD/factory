@@ -158,6 +158,204 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
 ```
 
 
+## Native Zed executor (offline integration; not live-ready)
+
+The default remains all-Claude. Opt-in intake uses `factory add <input>
+--executor z --executor-profile <absolute-profile.yaml>`. Intake validates the
+profile, pinned binaries/image, managed capabilities and the scoped native grant.
+It writes the immutable selection and isolated prompts before publishing the epic.
+An interrupted snapshot reserves its epic ID; do not delete it to recycle that ID.
+A corrupt selection is an error, not permission to fall back to Claude.
+
+Native helpers use `openai-subscribed/gpt-6.1-sol`. Top-level planner, orchestrator
+and babysitter sessions use pinned `claude-opus-5-5`, with no Claude helper
+registrations. Stage model-table additions only in an isolated brain. Do not
+change a live brain or install this build over a running factory for a trial.
+`native/zed/README.md` describes building the separate native distribution.
+
+`factory z-preflight --brain <absolute-brain> --executor-profile <profile>` does
+not publish work, log in, or send an inference prompt. It checks local image
+availability, hashes, managed capability compatibility and scoped usage/grant
+identity. The usage check contacts the configured provider. A passing preflight
+is not evidence of live tool, credential-isolation or recovery readiness.
+
+### Helper CLI
+
+Use the current executable through `FACTORY_BIN` and the selected `FACTORY_BRAIN`.
+Every command also accepts `--brain <absolute-brain>`.
+
+- `helper submit --request <json-file|->` accepts the versioned helper Request.
+- `helper continue <job-id> --request <json-file|->` accepts ContinueRequest,
+  including `expected_round` and explicit failed-child acknowledgments for recovery.
+- `helper result <job-id> --round <n>` reads durable RoundResult, including
+  nonterminal state. A nonterminal result is not successful completion.
+- `helper yield <job-id> --request <json-file|->` accepts `{"children":["job-id"]}`.
+- `helper cancel <job-id> --request <json-file|->` accepts `{"reason":"..."}`.
+  Cancellation abandons the job; it is not a recoverable interrupt.
+- `helper status [job-id]` prints redacted model/state/hold/attach information.
+- `helper drain --brain <absolute-brain>` closes indexed native epics, fences
+  their helper writers and finishes durable result delivery. It abandons queued
+  and interrupted work; use recoverable interrupt instead when work must resume.
+- `z-runner --brain <absolute-brain>` runs the broker. Submission and tick also
+  start it detached, using the current executable. There is no new launchd job.
+- `z-attach <job-id> --action status|conversation` uses attested native APIs.
+  Conversation is an explicit private-content read, never part of normal status.
+- `z-attach <job-id> --action interrupt [--round <expected-round>] [--reason <text>]`
+  persists interrupt intent, ensures the selected runner, then reads the actual
+  RoundResult. The default expected round is the one observed by attach. The
+  response can still be running or unknown: checkpoint and writer death are not
+  inferred from the request acknowledgment. A matching saved checkpoint and
+  confirmed writer death settle the round as `recovery_required`, not cancelled.
+  Resume only through explicit `helper continue` with the expected round.
+
+Successful submit/continue returns schema-version-1 Accepted JSON. Reads of
+nonexistent jobs/rounds fail. Unknown fields, duplicate keys, trailing JSON and
+oversized requests fail. Never resubmit with a different request key merely
+because a runner restart or notification failed: admission is already durable.
+
+### Managed host control
+
+Native tools invoke only `FACTORY_BIN helper control --job <job-id> --generation
+<n> --brain <absolute-brain> --request -`. The envelope is `{"op":"...",
+"payload":{...}}`. It has no caller-selected executable, owner or lease.
+
+| Operation | Payload |
+| --- | --- |
+| `lease_check`, `inbox` | `{}` |
+| `submit` | `request_key`, `component`, `prompt`, `output_path` |
+| `continue` | `job_id`, `request` (the versioned ContinueRequest) |
+| `result` | `job_id`, `round` |
+| `yield` | `children` (every submitted child ID) |
+| `heartbeat`, `intent`, `done`, `error` | optional one-line `text` and `key` |
+| `brain_read` | `path` (canonical allowlisted markdown path), optional `max_bytes` |
+
+Submit derives child authority from the stored parent. Continue/result cannot
+address foreign jobs. Inbox is read-only. Managed start/end, inbox ack, login,
+arbitrary host commands and cancellation are not native tool operations.
+
+`lease_check` returns exactly `schema_version`, `op`, `job_id`, `generation`,
+`allowed`. Missing/stale authority or a revoking scope returns `allowed:false`.
+Result reads include checksummed inline `reply` and `report` text; private host
+file paths are blank. Each artifact is bounded to 384 KiB, and the full encoded
+result must fit 1 MiB. Oversized results require an explicit future chunked
+transport; they are not silently truncated or treated as completed delivery.
+
+`brain_read.max_bytes` is a positive integer through 65536, matching the Rust
+managed-tool contract. Omission defaults to 65536. Null, floating-point values,
+unknown keys and larger bounds fail. Files exceeding the selected byte limit
+fail rather than returning silently truncated knowledge. The Go endpoint test
+reuses the actual Rust native-tool input fixture with `max_bytes:128`.
+
+The detached broker observes and publishes without consulting Claude listings or
+Claude usage holds. Completion first persists a keyed owner inbox entry. Only
+normal tick policy wakes the Claude owner. Scope revocation closes admission
+before fencing writers and before persisting a replacement lease/ownership event.
+Legacy CLI start/end cannot publish a managed output reservation, even if a child
+omits all managed environment variables.
+
+### Ownership recovery and rollback
+
+The broker owns managed admission and output-reservation guards. CLI callbacks
+append only scoped events under those guards; they do not reenter Service or
+acquire tick. The integration never parses or edits the private helper ledger.
+
+Ownership changes fence each affected work ID before publishing its lease or
+handover/handback event. Authority reads sync those events before returning a
+new generation. `RecoverScope` then reopens only the matching stored generation,
+including scopes fenced before their first job. Tick retries recovery after a
+coordinator crash without replacing the writer or replaying its prompt. A valid
+new-owner Submit can also recover the matching closed fence atomically. Unchanged,
+revoking or uncertain scopes remain denied.
+
+Babysitter file helpers use the stored item's historical set directory through
+ArtifactResolver. That directory is pinned with the job for later rounds. It
+never supplies a current set lease: work-owned helpers retain empty `set_id`
+and lease zero. Old orchestrator requests remain unauthorized.
+
+Native coordinator restarts and requested checkpoints also have synced session
+records for intent, fresh authority and wake delivery. They close the broker
+barrier and confirm native descendant death before stopping the coordinator or
+committing the compacting transition. Set-owned coordinators receive a persisted
+new lease before reopening. Work-owned coordinators retain lease zero and derive
+their fresh generation from the completed program record. Checkpoint prompts
+include the renewed lease. A crash retains pending admission; recovery retries the
+fence and resumes the recorded handoff without granting the lease twice or
+replaying a confirmed wake. Uncertain writer death or unknown coordinator state
+keeps the boundary closed. Claude account holds do not create these boundaries;
+independent native work continues under its own provider policy. A planner's
+checkpoint does not revoke work owned by its orchestrators or babysitters.
+
+Epic-only helper grants are not enabled. The approved contract requires an
+explicit component-specific grant, but neither the plan nor the blueprint names
+one or assigns an epic helper a contained repository worktree. All helper
+submissions therefore still require a work item. This is a scope restriction,
+not an implicit grant to run against the brain directory.
+
+Before rollback, stop new intake and factory scheduling, and stop the top-level
+Claude sessions using this brain. Then run `helper drain` with the **current**
+factory binary and explicit brain. It holds tick while closing every indexed
+native epic, fencing descendants and running a broker pass to finish result
+publication/delivery. It starts no new inference. Failure to prove writer death
+or account for any native job fails the drain. Retrying is safe. Admission stays
+closed for the drained epics; use a new epic for new work.
+
+A successful drain reports `drained:true` for **native helpers only** and
+`downgrade_ready:false`. It does not stop Claude, change launchd, select an older
+binary, archive epics, or certify that an old binary understands native state.
+Keep drained native epics in an archived brain; use a fresh, separately configured
+legacy brain for an older factory. Do not point an older executable at active
+native work or delete helper/executor records to make it appear drained. Never
+overwrite a running binary during rollback.
+
+### Remaining live acceptance gates
+
+Dedicated native OAuth grant isolation, a suitable validated worker image, and
+real native managed-tool execution remain acceptance gates. A live nested-helper
+workflow must also survive broker restart at pool size one, reload the same
+conversation, and publish exactly one final result without an IDE coordinator.
+The isolated Docker writer-death and Git-promotion drills do not establish those
+end-to-end guarantees. A disposable live factory task remains a separate gate.
+Offline Go tests and native-tool fixtures do not establish live readiness.
+Preflight can check configured local capabilities and scoped usage, but neither
+login nor inference is automatic.
+
+### Claude-only compatibility acceptance
+
+Merging requires execution-path compatibility with a freshly frozen `origin/main`
+revision, not just matching final code or passing tests. Record main and candidate
+SHAs. Candidate flagless intake and explicit `--executor claude` must both match
+main's flagless path using the same frozen brain/model settings and equivalent
+isolated repositories/issues. Native credentials, profiles, binaries and Docker
+must not be required or invoked.
+
+Deterministic differential tests replay identical agent/GitHub responses, clock
+and quota observations, and failures against both revisions. Compare substantive
+events, prompts, effective models/effort, delegation, repository actions and
+ordering constraints. Map only incidental IDs, paths, timestamps and fixture
+commit identities; reference behavior must come from main, never the candidate.
+Cover success, quota holds, failing CI, requested changes, restart and checkpoints.
+
+Paired live epics must also preserve issue-to-PR grouping, dependency releases,
+explore/plan/review/implement/verify phases, review continuation, ownership
+transfers, retries and merge gates. Claude wording and exact patches can vary,
+but matching final output cannot excuse an unexplained workflow difference.
+Retain the traces and artifacts used to compare each lane.
+Verify existing legacy state can resume, Claude model/effort overrides retain
+their behavior, and checkpoint, ownership, CI/review/dependency merge gates and
+cleanup still work. Do not copy a live epic into a writable test environment.
+
+After merge, build the exact merged revision and repeat the flagless and explicit
+Claude smoke checks without native dependencies. This does not authorize replacing
+the installed factory or services. Record actual results; these compatibility
+checks remain pending until executed. Both trial modes obey their account limits.
+
+### Licensing
+
+The Go factory remains MIT-licensed (`LICENSE`). The separate source-derived Zed
+runtime in `native/zed/` is GPL-3.0-or-later, with its own `LICENSE`, provenance and
+third-party notices. It is launched as a separate executable, not linked into Go.
+Distributing that runtime requires preserving its source and licensing obligations.
+
 ## Local browser UI
 
 Run `factory ui` and open the authenticated loopback URL it prints. The one-use

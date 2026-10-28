@@ -15,7 +15,7 @@ var commands = []string{
 	"add", "tick", "status", "answer", "retry", "stop", "review-asked", "replan", "check",
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
-	"version", "ui",
+	"version", "helper", "z-runner", "z-attach", "z-preflight", "ui",
 }
 
 var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
@@ -41,6 +41,10 @@ var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
 	"review-asked": runReviewAsked,
 	"launchd":      runLaunchd,
 	"version":      runVersion,
+	"helper":       runHelper,
+	"z-runner":     runZRunner,
+	"z-attach":     runZAttach,
+	"z-preflight":  runZPreflight,
 	"ui":           runUI,
 }
 

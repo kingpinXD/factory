@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -12,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/agents"
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/intake"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -23,6 +26,10 @@ import (
 // empty or denied tier or an unknown effort are refused before anything is
 // written. It returns the epic's id.
 func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error) {
+	return AddWithOptions(ctx, d, input, ov, executor.Options{})
+}
+
+func AddWithOptions(ctx context.Context, d Deps, input string, ov Overrides, options executor.Options) (string, error) {
 	b, _, err := blueprint.Current(ctx, d.Brain, nil, d.Notify)
 	if err != nil {
 		return "", err
@@ -40,7 +47,7 @@ func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error
 	if err != nil {
 		return "", err
 	}
-	return addParsed(ctx, d, input, kind, ov, b, tiers, false)
+	return addParsed(ctx, d, input, kind, ov, b, tiers, options, false)
 }
 
 // UIIntake preserves the browser-selected input kind. PlanPath is a server-owned upload.
@@ -93,10 +100,10 @@ func AddTyped(ctx context.Context, d Deps, in UIIntake, ov Overrides) (string, e
 	if err := checkOverrides(b, tiers, ov); err != nil {
 		return "", err
 	}
-	return addParsed(ctx, d, input, kind, ov, b, tiers, true)
+	return addParsed(ctx, d, input, kind, ov, b, tiers, executor.Options{}, true)
 }
 
-func addParsed(ctx context.Context, d Deps, input string, kind intake.InputKind, ov Overrides, b *blueprint.Blueprint, tiers blueprint.Tiers, browser bool) (string, error) {
+func addParsed(ctx context.Context, d Deps, input string, kind intake.InputKind, ov Overrides, b *blueprint.Blueprint, tiers blueprint.Tiers, options executor.Options, browser bool) (string, error) {
 	unlock, err := waitLock(ctx, d.Brain, "tick")
 	if err != nil {
 		return "", err
@@ -115,7 +122,33 @@ func addParsed(ctx context.Context, d Deps, input string, kind intake.InputKind,
 	r.b, r.tiers = b, tiers
 	r.attachMachines()
 	r.account()
-	id := r.newEpicID()
+	id, err := r.newEpicID()
+	if err != nil {
+		return "", err
+	}
+	selection, err := executor.Prepare(d.Brain, id, b, options)
+	if err != nil {
+		return "", err
+	}
+	if selection.Executor == "z" {
+		for name, tier := range ov.Tier {
+			if routes := selection.Routes[name]; len(routes) != 1 || routes[0].Tier != tier {
+				return "", fmt.Errorf("tier override %s conflicts with pinned route", name)
+			}
+		}
+		if d.NativePreflight == nil {
+			return "", fmt.Errorf("native intake preflight unavailable")
+		}
+		if err := d.NativePreflight(ctx, selection); err != nil {
+			return "", err
+		}
+		if err := executor.WriteSelection(d.Brain, selection); err != nil {
+			return "", err
+		}
+		if _, _, err := agents.BuildFor(d.Brain, filepath.Join(store.Factory(d.Brain), "executors", id), b, ov.Tier); err != nil {
+			return "", err
+		}
+	}
 	hint := ""
 	if !browser || kind == intake.KindIssue || kind == intake.KindEpic {
 		hint = intake.RepoHint(input)
@@ -188,16 +221,26 @@ var epicIDRule = regexp.MustCompile(`^e(\d{6})(\d+)$`)
 // newEpicID returns e<yymmdd><n>: today's date, and n one past the highest
 // number of today's epics in the index. The date keeps a reset index from
 // reusing an old id, and with it an old work item's factory/<work-id> branch.
-func (r *run) newEpicID() string {
+func (r *run) newEpicID() (string, error) {
 	day := r.now.Format("060102")
 	n := 0
-	for id := range r.ix {
+	ids := maps.Clone(r.ix)
+	// Failed intake snapshots also reserve their IDs permanently.
+	entries, err := os.ReadDir(filepath.Join(store.Factory(r.d.Brain), "executors"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("read epic ID reservations: %w", err)
+	}
+	for _, e := range entries {
+		ids[e.Name()] = store.Entry{}
+	}
+
+	for id := range ids {
 		if m := epicIDRule.FindStringSubmatch(id); m != nil && m[1] == day {
 			k, _ := strconv.Atoi(m[2])
 			n = max(n, k)
 		}
 	}
-	return "e" + day + strconv.Itoa(n+1)
+	return "e" + day + strconv.Itoa(n+1), nil
 }
 
 // waitLock takes the lock called name, waiting while another holds it.

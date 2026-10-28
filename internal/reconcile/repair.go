@@ -368,7 +368,10 @@ func (r *run) startRepair(ep *store.RepairEpisode) error {
 		r.dm(recent[len(recent)-1], "repair-gave-up:"+episodeBase(*ep).String(), fmt.Sprintf("factory: repair gave up on %s: %s", episodeBase(*ep), strings.Join(ids, ", ")))
 		return nil
 	}
-	id := r.newEpicID()
+	id, err := r.newEpicID()
+	if err != nil {
+		return err
+	}
 	in := &EpicInputs{ID: id, Kind: epicKindRepair, Repo: ep.Repo, Base: ep.Base, RepoHint: ep.Repo, Input: r.repairText(*ep, past), AddedAt: r.now}
 	dir := filepath.Join(store.Factory(r.d.Brain), "work", id)
 	e, err := r.create(id, store.Entry{Kind: blueprint.MachineEpic, Dir: dir, Epic: id}, in, blueprint.TriggerTick)

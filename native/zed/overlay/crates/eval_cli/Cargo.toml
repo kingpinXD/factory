@@ -1,0 +1,90 @@
+[package]
+name = "eval_cli"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "eval-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "zed-native-usage-probe"
+path = "src/newnativeauth_usage.rs"
+
+[[bin]]
+name = "zed-native-lifecycle-probe"
+path = "src/lifecycle_probe.rs"
+
+[[bin]]
+name = "zed-native-credential-setup"
+path = "src/credential_probe.rs"
+
+[dependencies]
+async-process.workspace = true
+async-tar.workspace = true
+async-trait.workspace = true
+acp_thread.workspace = true
+agent.workspace = true
+agent-client-protocol.workspace = true
+agent_ui.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+client.workspace = true
+credentials_provider.workspace = true
+ctrlc = { version = "3.5", features = ["termination"] }
+db.workspace = true
+debug_adapter_extension.workspace = true
+env_logger.workspace = true
+extension.workspace = true
+feature_flags.workspace = true
+fs.workspace = true
+futures.workspace = true
+git.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui_tokio.workspace = true
+http_client.workspace = true
+language.workspace = true
+language_extension.workspace = true
+language_model.workspace = true
+language_models.workspace = true
+languages = { workspace = true, features = ["load-grammars"] }
+libc.workspace = true
+node_runtime.workspace = true
+openai_subscribed.workspace = true
+paths.workspace = true
+project.workspace = true
+prompt_store.workspace = true
+release_channel.workspace = true
+reqwest_client.workspace = true
+rope.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+settings.workspace = true
+shellexpand.workspace = true
+smol.workspace = true
+terminal_view.workspace = true
+text.workspace = true
+theme.workspace = true
+theme_settings.workspace = true
+util.workspace = true
+watch.workspace = true
+zed_credentials_provider.workspace = true
+
+[dev-dependencies]
+clock = { workspace = true, features = ["test-support"] }
+db = { workspace = true, features = ["test-support"] }
+fs = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["test-support"] }
+http_client = { workspace = true, features = ["test-support"] }
+language_model = { workspace = true, features = ["test-support"] }
+project = { workspace = true, features = ["test-support"] }
+remote_connection = { workspace = true, features = ["test-support"] }
+settings = { workspace = true, features = ["test-support"] }
+workspace = { workspace = true, features = ["test-support"] }

@@ -73,6 +73,11 @@ func repoKey(kind string, t events.Event) string { return fmt.Sprintf("repo:%s:%
 // once per key: a worktree, or the cleanup of one. The tick never runs it
 // itself.
 func (r *run) queueRepoWork(e *entity, kind, key string) error {
+	if kind == cleanupRequest {
+		if err := r.fenceHelpers(e, "cleanup"); err != nil {
+			return err
+		}
+	}
 	_, err := r.append(e, events.Event{
 		At: r.now, Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker,
 		Request: kind, Key: key,

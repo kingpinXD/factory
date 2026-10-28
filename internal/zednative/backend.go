@@ -53,6 +53,11 @@ type attempt struct {
 	ContainerRemoved bool
 	StartedAtMS      int64
 	PrelaunchError   string `json:"PrelaunchError,omitempty"`
+
+	StartupIdentityVerified bool   `json:"StartupIdentityVerified,omitempty"`
+	StartupLockDevice       uint64 `json:"StartupLockDevice,omitempty"`
+	StartupLockInode        uint64 `json:"StartupLockInode,omitempty"`
+	StartupError            string `json:"StartupError,omitempty"`
 }
 
 func (b *Backend) directory(j helper.Job) (string, error) {
@@ -386,6 +391,7 @@ func (b *Backend) Run(ctx context.Context, spec helper.RunSpec, sink helper.Sink
 				return e
 			}
 			a.Identity = &id
+			captureStartupIdentity(dir, a)
 			if e := b.commit(dir, a); e != nil {
 				return e
 			}
@@ -574,11 +580,7 @@ func lockReleased(path string) error {
 	return nil
 }
 
-// This proof is checked by Fence itself: cancellation need not call Inspect.
-func (b *Backend) prelaunch(dir string, a attempt, j helper.Job) error {
-	if a.PrelaunchError == "" || prelaunchMessage(safeError(a.PrelaunchError)) != a.PrelaunchError {
-		return errUnknown
-	}
+func (b *Backend) boundAttempt(dir string, a attempt, j helper.Job) error {
 	if a.SchemaVersion != 1 || a.Job.ID != j.ID || a.Job.Generation != j.Generation || a.Job.Round != j.Round || a.Job.Scope != j.Scope || !reflect.DeepEqual(a.Job.Request, j.Request) || a.Job.Route != j.Route {
 		return errUnknown
 	}
@@ -604,11 +606,22 @@ func (b *Backend) prelaunch(dir string, a attempt, j helper.Job) error {
 	if len(routes) != 1 || routes[0] != j.Route || j.Route.Provider != "zed" || j.Route.Model != executor.NativeModel {
 		return errUnknown
 	}
+	return nil
+}
+
+// This proof is checked by Fence itself: cancellation need not call Inspect.
+func (b *Backend) prelaunch(dir string, a attempt, j helper.Job) error {
+	if a.PrelaunchError == "" || prelaunchMessage(safeError(a.PrelaunchError)) != a.PrelaunchError {
+		return errUnknown
+	}
+	if err := b.boundAttempt(dir, a, j); err != nil {
+		return err
+	}
 	if !token(a.Token) || a.StartedAtMS <= 0 || !reflect.DeepEqual(a.Container, containerIntent{}) || a.ContainerID != "" || a.ContainerPhase != "" || !reflect.DeepEqual(a.Git, gitView{}) || a.LaunchIntent || a.PID != 0 || a.Identity != nil || a.Conversation != "" || a.Turn != "" || a.TurnIntent || a.ShutdownAck || a.Closed != a.HostStopped || a.Closed != a.ContainerRemoved {
 		return errUnknown
 	}
 	for _, path := range []string{filepath.Join(dir, "identity.json"), filepath.Join(dir, "native.lock"), filepath.Join(dir, "result.json"), filepath.Join(dir, "git"), filepath.Join(dir, "tmp"), socketPath(dir)} {
-		if _, err = os.Lstat(path); !os.IsNotExist(err) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			return errUnknown
 		}
 	}
@@ -714,10 +727,25 @@ func (b *Backend) Fence(ctx context.Context, j helper.Job) error {
 		if !a.ContainerRemoved || !a.HostStopped {
 			return errUnknown
 		}
+		if a.LaunchIntent && a.HostStopped && !a.ShutdownAck && !a.TurnIntent && a.Conversation == "" && a.Turn == "" && a.StartupError == "" {
+			return errUnknown
+		}
+		var startupLock *os.File
+		if a.StartupError != "" {
+			var e error
+			startupLock, e = b.startupProof(ctx, dir, *a, j)
+			if e != nil {
+				return e
+			}
+			defer startupLock.Close()
+		}
 		if a.Git.Phase != "" {
 			if e := promoteGit(ctx, &a.Git, func() error { return b.commit(dir, a) }); e != nil {
 				return e
 			}
+		}
+		if startupLock != nil {
+			return sameStartupLock(dir, *a, startupLock)
 		}
 		return nil
 	})
@@ -734,6 +762,18 @@ func (b *Backend) stopNative(ctx context.Context, dir string, a *attempt) error 
 			return err
 		}
 		if lockReleased(filepath.Join(dir, "native.lock")) == nil {
+			if !a.ShutdownAck && !a.TurnIntent && a.Conversation == "" && a.Turn == "" {
+				f, err := b.startupProof(ctx, dir, *a, a.Job)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				a.StartupError = startupFailure
+				if err = sameStartupLock(dir, *a, f); err != nil {
+					return err
+				}
+				return b.commit(dir, a)
+			}
 			if a.ShutdownAck {
 				if a.Conversation == "" || !shutdownTurnMatches(*a, a.Turn) || (a.Job.ConversationID != "" && a.Conversation != a.Job.ConversationID) {
 					return errUnknown
@@ -747,6 +787,18 @@ func (b *Backend) stopNative(ctx context.Context, dir string, a *attempt) error 
 		}
 		st, err := readStatus(ctx, dir, *a)
 		if err == nil {
+			// Even rejected status must not later look like an unobserved startup.
+			if (a.Conversation == "" && st.SessionID != "") || (a.Turn == "" && st.TurnID != "") {
+				if a.Conversation == "" {
+					a.Conversation = st.SessionID
+				}
+				if a.Turn == "" {
+					a.Turn = st.TurnID
+				}
+				if err = b.commit(dir, a); err != nil {
+					return err
+				}
+			}
 			if st.SessionID == "" || (a.Conversation != "" && st.SessionID != a.Conversation) || (a.Job.ConversationID != "" && st.SessionID != a.Job.ConversationID) {
 				return errUnknown
 			}
@@ -815,6 +867,25 @@ func (b *Backend) Inspect(ctx context.Context, spec helper.RunSpec, sink helper.
 	}
 	identified := false
 	err := withAttempt(ctx, spec.RunDir, func(a *attempt) error {
+		if a.StartupError != "" {
+			f, err := b.startupProof(ctx, spec.RunDir, *a, spec.Job)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			if !a.HostStopped || a.Git.Phase != "done" || a.OutputPath != spec.OutputPath {
+				return errUnknown
+			}
+			if err = sink.Record(ctx, helper.EventProcessOwned, processEvidence(*a.Identity)); err != nil {
+				return err
+			}
+			if err = sameStartupLock(spec.RunDir, *a, f); err != nil {
+				return err
+			}
+			result = helper.RunResult{Outcome: "failed", ErrorCode: "native_startup_failed", ErrorText: startupFailure}
+			identified = true
+			return nil
+		}
 		if a.PrelaunchError != "" {
 			if err := b.prelaunch(spec.RunDir, *a, spec.Job); err != nil {
 				return err

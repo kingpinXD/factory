@@ -73,7 +73,9 @@ func (s Service) stopJobs(ctx context.Context, ids []string, reason string) erro
 			}
 			q := r.Rounds[r.Job.Round]
 			if fenceErr != nil {
-				setState(r, "unknown", "writer_death_unconfirmed")
+				if !nativeCancellationPending(r) {
+					setState(r, "unknown", "writer_death_unconfirmed")
+				}
 				return nil
 			}
 			q.Stopped = true

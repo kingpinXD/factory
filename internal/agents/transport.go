@@ -87,4 +87,73 @@ explicitly selected FACTORY_BIN and FACTORY_BRAIN. Normal inbox, lease, heartbea
 and event commands remain host CLI operations. Brain knowledge remains available
 through normal host reads. Never substitute a Claude helper definition for a
 native-routed job. Native helpers use their tool transport, not this host CLI.
+
+Use the current FACTORY_BIN and FACTORY_BRAIN supplied in your factory instructions;
+never use a different installed binary or brain. These commands run on the host:
+
+"$FACTORY_BIN" helper submit --brain "$FACTORY_BRAIN" --request request.json
+"$FACTORY_BIN" helper continue --brain "$FACTORY_BRAIN" --job "$JOB_ID" --request continue.json
+"$FACTORY_BIN" helper result --brain "$FACTORY_BRAIN" --job "$JOB_ID" --round 1
+"$FACTORY_BIN" helper yield --brain "$FACTORY_BRAIN" --job "$JOB_ID" --request yield.json
+
+Write the JSON file before invoking its command; --request - reads JSON from stdin.
+Use the returned job_id as JOB_ID, and the returned round for --round.
+Examples below show field names and types, not authority to use sample values.
+Copy owner_id, work_id, set_id and lease from the current factory instructions.
+Never guess IDs or lease values. Replace OWNER_ID, WORK_ID, SET_ID and the sample
+lease 1 with those actual values. Use lease 0 when set_id is empty; a nonempty
+set_id requires its current positive lease. Preserve empty work_id or set_id when
+supplied. parent_job_id is empty for a top-level dispatch; a nested dispatch must
+use its actual executing parent job ID in the same scope.
+
+Submit Request (request.json):
+~~~json
+{
+  "schema_version": 1,
+  "request_key": "review-round-1",
+  "owner_id": "OWNER_ID",
+  "work_id": "WORK_ID",
+  "set_id": "SET_ID",
+  "lease": 1,
+  "parent_job_id": "",
+  "component": "plan-reviewer",
+  "prompt": "Review the supplied plan; return findings in your reply.",
+  "output_path": ""
+}
+~~~
+
+Choose component from the immutable selection and supply its actual task/context.
+request_key must be a nonempty stable token of letters, digits, hyphen, underscore or dot
+(not just . or ..), not a timestamp regenerated on retry. Use a distinct key for
+each new logical request. After a lost acknowledgment, resend the identical JSON with the same request_key;
+changing fields under that key conflicts. This applies to submit and continue.
+For reply-only work, output_path is "". Otherwise use only the exact reserved output
+path from the factory instructions; never invent a path or reuse a published one.
+
+ContinueRequest (continue.json):
+~~~json
+{
+  "schema_version": 1,
+  "request_key": "review-round-2",
+  "expected_round": 1,
+  "prompt": "Review the revised plan in the same conversation.",
+  "output_path": "",
+  "acknowledged_children": []
+}
+~~~
+
+expected_round is the job's current stopped round, not the next round. Continue the
+returned job_id to retain the same conversation, only after a confirmed stopped
+checkpoint. acknowledged_children must name exactly the failed, stopped children
+being accepted for that round; use [] when none failed. Never acknowledge an active
+or unknown child. Keep an unpublished output reservation; use a new reserved path
+for a new published report version.
+
+For yield.json the shape is {"children":["CHILD_JOB_ID"]}. Use actual child job IDs
+and name every submitted child exactly once. Yield applies to the active parent
+helper job, not the top-level Claude session. Native helpers use their tool for it.
+The manager owns helper start/end through the runner and publishes durable results.
+Do not emit those lifecycle events yourself. Never fall back to an external Claude Agent,
+Claude helper definition or direct model call when native admission fails; report
+the CLI error and keep the selected route.
 `

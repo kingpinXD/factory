@@ -70,8 +70,45 @@ func fakeNative() {
 	}
 	gen, _ := strconv.Atoi(args["--generation"])
 	id := identity{1, args["--job-id"], gen, args["--instance-token"], os.Getpid(), syscall.Getpgrp(), "test-process-start", "test-epoch"}
+	startupRoot := filepath.Dir(args["--identity-file"])
+	startupModeValue, startupMode := os.ReadFile(filepath.Join(startupRoot, "fake-startup-exit"))
+	if startupMode == nil {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			data, err := os.ReadFile(filepath.Join(startupRoot, "fake-startup-start"))
+			if err == nil {
+				id.StartIdentity = strings.TrimSpace(string(data))
+				break
+			}
+			if time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	if durable(args["--identity-file"], id) != nil {
 		os.Exit(4)
+	}
+	if startupMode == nil && string(startupModeValue) != "serve" {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(filepath.Join(startupRoot, "fake-startup-release")); err == nil {
+				if string(startupModeValue) == "group-child" {
+					self, _ := os.Executable()
+					cmd := exec.Command(self, "--fake-writer", filepath.Join(startupRoot, "fake-startup-child-writes"))
+					if err := cmd.Start(); err != nil {
+						return
+					}
+					_ = durableBytes(filepath.Join(startupRoot, "fake-startup-child-pid"), []byte(strconv.Itoa(cmd.Process.Pid)))
+					_ = cmd.Process.Release()
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 	listener, err := net.Listen("unix", args["--socket"])
 	if err != nil {

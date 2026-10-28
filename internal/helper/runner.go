@@ -476,6 +476,16 @@ func execute(ctx context.Context, d RunnerDeps, j Job, quotas *quotaMonitor, ret
 	defer commitCancel()
 	return finish(commitCtx, d.Service, j, fin.result, fin.err, fenceErr, reason, inspection)
 }
+func startupProcessOnly(r *jobRecord) bool {
+	q := r.Rounds[r.Job.Round]
+	if r.Job.Round != 1 || r.Job.ConversationID != "" || r.Job.TurnID != "" || q.Phase != EventProcessOwned || len(q.Evidence) != 6 || q.Ended || q.Result.ConversationID != "" || q.Result.TurnID != "" || q.Result.ObservedModel != "" {
+		return false
+	}
+	prefix := EventProcessOwned + ":"
+	pid, err := strconv.Atoi(q.Evidence[prefix+"pid"])
+	return err == nil && pid > 0 && q.Evidence[prefix+"process_group"] == q.Evidence[prefix+"pid"] && q.Evidence[prefix+"recorded"] == "true" && q.Evidence[prefix+"start_identity"] != "" && q.Evidence[prefix+"generation"] == strconv.Itoa(r.Job.Generation) && validToken(q.Evidence[prefix+"epoch"])
+}
+
 func finish(ctx context.Context, s Service, j Job, result RunResult, runErr, fenceErr error, reason string, inspection bool) error {
 	stored := false
 	err := s.transaction(ctx, true, func(db *ledger) error {
@@ -521,6 +531,11 @@ func finish(ctx context.Context, s Service, j Job, result RunResult, runErr, fen
 			return nil
 		}
 		if j.Route.Provider == "zed" && r.Job.Route.Provider == "zed" && inspection && result.Outcome == "failed" && result.ErrorCode == "native_prelaunch_failed" && result.ErrorText != "" && result.ConversationID == "" && result.TurnID == "" && result.ObservedModel == "" && reason == "" && q.InterruptReason == "" && q.Phase == "launch_attempted" && len(q.Evidence) == 0 && !q.Ended && q.Result.ConversationID == "" && q.Result.TurnID == "" && q.Result.ObservedModel == "" {
+			setState(r, "failed", result.ErrorCode)
+			q.Result.ErrorText = result.ErrorText
+			return nil
+		}
+		if j.Route.Provider == "zed" && r.Job.Route.Provider == "zed" && inspection && result.Outcome == "failed" && result.ErrorCode == "native_startup_failed" && result.ErrorText == "native worker exited before conversation acknowledgment" && result.ConversationID == "" && result.TurnID == "" && result.ObservedModel == "" && reason == "" && q.InterruptReason == "" && startupProcessOnly(r) {
 			setState(r, "failed", result.ErrorCode)
 			q.Result.ErrorText = result.ErrorText
 			return nil

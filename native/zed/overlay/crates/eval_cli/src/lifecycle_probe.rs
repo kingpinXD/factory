@@ -143,6 +143,8 @@ struct Command {
 }
 
 fn serve_client(mut stream: UnixStream, queue: Arc<Mutex<mpsc::Sender<Command>>>) -> Result<()> {
+    // Darwin inherits the nonblocking listener mode; socket timeouts require blocking I/O.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut reader = BufReader::new(stream.try_clone()?);

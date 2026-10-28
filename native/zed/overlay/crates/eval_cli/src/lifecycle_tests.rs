@@ -297,6 +297,198 @@ fn socket_transport_rejects_bad_frames_and_survives_a_disconnected_waiter() {
     assert!(worker.join().unwrap().is_err());
 }
 
+fn accepted_socket_status_exchange(drain: bool) {
+    use std::io::{Read as _, Write as _};
+    use std::os::fd::AsRawFd as _;
+    use std::time::Instant;
+
+    let directory = Path::new("/tmp").join(format!(
+        "nlp-transport-{}-{drain}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    private_directory(&directory).unwrap();
+    let socket = directory.join("s");
+    let listener = bind_private_socket(&socket).unwrap();
+    let mut client = UnixStream::connect(&socket).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    // Queue all requests before accept so an inherited nonblocking read cannot mask the write bug.
+    client.write_all(b"{\"v\":1,\"id\":\"small\",\"op\":\"status\"}\n{\"v\":1,\"id\":\"large\",\"op\":\"status\"}\n{\"v\":1,\"id\":\"last\",\"op\":\"status\"}\n").unwrap();
+    client.shutdown(std::net::Shutdown::Write).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    drop(listener);
+    std::fs::remove_file(&socket).unwrap();
+    std::fs::remove_dir(&directory).unwrap();
+    #[cfg(target_os = "macos")]
+    {
+        let flags = unsafe { libc::fcntl(server.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_ne!(
+            flags & libc::O_NONBLOCK,
+            0,
+            "Darwin inherits the listener mode"
+        );
+    }
+    // Exercise the same entry condition on platforms that do not inherit listener flags.
+    server.set_nonblocking(true).unwrap();
+    let mut send_buffer: libc::c_int = 4096;
+    let mut option_size = std::mem::size_of_val(&send_buffer) as libc::socklen_t;
+    assert_eq!(
+        unsafe {
+            libc::setsockopt(
+                server.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                (&send_buffer as *const libc::c_int).cast(),
+                option_size,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            libc::getsockopt(
+                server.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                (&mut send_buffer as *mut libc::c_int).cast(),
+                &mut option_size,
+            )
+        },
+        0
+    );
+    let expected: Vec<Value> = [("small", 128), ("large", 96 * 1024), ("last", 256)]
+        .into_iter()
+        .map(|(id, size)| {
+            json!({"v":1,"id":id,"ok":true,"result":{
+            "state":"running","transcript":"x".repeat(size),"reply":""}})
+        })
+        .collect();
+    let large_size = serde_json::to_vec(&expected[1]).unwrap().len();
+    assert!(send_buffer > 0 && large_size > 4 * send_buffer as usize);
+    assert!(large_size < MAX_RESPONSE);
+    let responses = expected.clone();
+    let (sender, mut receiver) = mpsc::channel(QUEUE_LIMIT);
+    let (finished, completion) = sync_mpsc::sync_channel(1);
+    let worker = std::thread::spawn(move || {
+        finished
+            .send(serve_client(server, Arc::new(Mutex::new(sender))))
+            .unwrap();
+    });
+    let (ready, writing_large) = sync_mpsc::sync_channel(1);
+    let (receipts, delivered) = sync_mpsc::sync_channel(1);
+    let responder = std::thread::spawn(move || {
+        let mut outcomes = Vec::new();
+        for response in responses {
+            let command = futures::executor::block_on(async {
+                futures::select! {
+                    command = receiver.next().fuse() => command.expect("status command"),
+                    _ = futures::FutureExt::fuse(smol::Timer::after(Duration::from_secs(5))) => panic!("command timeout"),
+                }
+            });
+            assert_eq!(
+                command.request,
+                Request {
+                    v: 1,
+                    id: response["id"].as_str().unwrap().into(),
+                    op: Operation::Status,
+                    text: None,
+                }
+            );
+            if command.request.id == "large" {
+                ready.send(Instant::now()).unwrap();
+            }
+            reply(&command, response);
+            let outcome = futures::executor::block_on(async {
+                futures::select! {
+                    receipt = command.delivered.fuse() => receipt.unwrap(),
+                    _ = futures::FutureExt::fuse(smol::Timer::after(Duration::from_secs(5))) => panic!("delivery timeout"),
+                }
+            });
+            outcomes.push(outcome);
+            if !outcome {
+                break;
+            }
+        }
+        receipts.send(outcomes).unwrap();
+    });
+    let started = writing_large.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Withhold every read while the response exceeds the send buffer. This interval tests
+    // backpressure, rather than hoping the reader happens to lose a scheduling race.
+    let early = completion.recv_timeout(if drain {
+        Duration::from_millis(100)
+    } else {
+        Duration::from_secs(5)
+    });
+    let elapsed = started.elapsed();
+    let mut bytes = Vec::new();
+    let read = client.read_to_end(&mut bytes);
+    let result = match early {
+        Ok(result) => result,
+        Err(sync_mpsc::RecvTimeoutError::Timeout) => {
+            completion.recv_timeout(Duration::from_secs(5)).unwrap()
+        }
+        Err(error) => panic!("handler completion: {error}"),
+    };
+    let outcomes = delivered.recv_timeout(Duration::from_secs(5)).unwrap();
+    worker.join().unwrap();
+    responder.join().unwrap();
+    read.unwrap();
+    eprintln!(
+        "drain={drain} send_buffer={send_buffer} large_size={large_size} received={} elapsed={elapsed:?} result={result:?} delivered={outcomes:?}",
+        bytes.len()
+    );
+    if drain {
+        assert!(
+            bytes.ends_with(b"\n"),
+            "truncated JSONL frame: {} bytes; {result:?}",
+            bytes.len()
+        );
+        let actual: Vec<Value> = bytes
+            .split_inclusive(|byte| *byte == b'\n')
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(outcomes, [true, true, true]);
+        result.unwrap();
+    } else {
+        let error = result.unwrap_err();
+        let error = error.downcast_ref::<std::io::Error>().unwrap();
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ),
+            "{error}"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(1500) && elapsed < Duration::from_secs(5),
+            "write timeout: {elapsed:?}"
+        );
+        assert_eq!(outcomes, [true, false]);
+        assert!(!bytes.is_empty() && bytes.len() < large_size);
+        assert!(!bytes.ends_with(b"\n"));
+    }
+}
+
+#[test]
+fn accepted_socket_status_frames_survive_backpressure() {
+    accepted_socket_status_exchange(true);
+}
+
+#[test]
+fn accepted_socket_non_draining_client_times_out() {
+    accepted_socket_status_exchange(false);
+}
+
 #[test]
 fn submission_outcomes_are_not_false_success() {
     assert_eq!(turn_result(Ok(None)), "no_response");

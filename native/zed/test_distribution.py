@@ -154,8 +154,13 @@ class DistributionTests(unittest.TestCase):
                          'zed-native-lifecycle-probe', 'zed-native-credential-setup'})
         normalizations = manifest['documentation_normalizations']
         self.assertEqual(set(normalizations), {'crates/eval_cli/README.md'})
+        # These overlay-only fixes retain the hashes of the sealed auxiliary snapshot.
+        corrections = {'crates/eval_cli/src/lifecycle_probe.rs',
+                       'crates/eval_cli/src/lifecycle_tests.rs'}
         for name, record in manifest['overlay'].items():
-            if name not in normalizations:
+            if name in corrections:
+                self.assertNotEqual(record['sha256'], record['auxiliary_sha256'], name)
+            elif name not in normalizations:
                 self.assertEqual(record['sha256'], record['auxiliary_sha256'], name)
         cargo = (build.ROOT / 'overlay/crates/eval_cli/Cargo.toml').read_text()
         for binary in build.BINARIES:

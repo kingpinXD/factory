@@ -26,8 +26,8 @@ with tar and compared against the auxiliary hashes before and after copying.
 One documentation-only privacy normalization is recorded: the crate README's
 single personal CARGO_TARGET_DIR example becomes
 `/absolute/path/to/selected-cargo-target`. Its original content hash is preserved,
-not the personal path. All other source files are byte-identical to the auxiliary
-snapshot. All executable source is unchanged. Generic `/home/user` strings in
+not the personal path. Later overlay-only corrections are documented below. The
+auxiliary hashes preserve the original snapshot. Generic `/home/user` strings in
 upstream Rust test fixtures are synthetic, not personal source paths.
 
 The distributed source includes:
@@ -136,3 +136,12 @@ The previous four copied asset-fix binaries retain their original fingerprints.
 These are offline packaging/CLI checks, not real Keychain approval, sign-in,
 provider/grant independence, refresh, usage, inference or managed acceptance.
 No install, original output overwrite, live auth, IDE change, commit or push occurred.
+
+## Accepted-socket correction
+
+The packaged lifecycle handler now clears inherited nonblocking mode before setting
+its existing socket timeouts. Real accepted-socket tests cover small and large JSONL
+responses, pipelined status requests, delivery receipts and a non-draining client.
+Only lifecycle_probe.rs and lifecycle_tests.rs differ from the auxiliary snapshot
+for this correction. Their distributed hashes and the overlay inventory are updated;
+auxiliary hashes remain historical. No enrolled executable or live runtime is changed.

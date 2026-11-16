@@ -36,9 +36,9 @@ INVENTORY = {
     "reconcile": {
         "epic_lifecycle": ("intake", "planned", "prepared", "phases", "review_merge", "cleanup"),
         "configuration": ("defaults", "overrides"),
-        "usage_policy": ("hold", "pause", "reset", "stale"),
+        "usage_policy": ("hold", "pause", "reset", "stale", "long_wait", "needs_you_reason"),
         "review_and_ci": ("checks_failed", "changes_requested", "reviews_resolved", "head_changed", "merge"),
-        "restart": ("start", "reload", "unknown_listing", "resume"),
+        "restart": ("start", "reload", "unknown_listing", "resume", "long_outage"),
         "checkpoint": ("open_step", "checkpoint", "compact", "readback"),
         "legacy_state": ("before_restart", "after_restart"),
         "worker_failures": ("prepare_failed", "prepare_retry", "cleanup"),

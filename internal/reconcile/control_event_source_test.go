@@ -653,6 +653,7 @@ func TestControlEventLawfulHTMLWireStoresActualOutcome(t *testing.T) {
 	t.Parallel()
 	for _, size := range []int{174000, 175000} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			w, _, _, old := isolatedReadSourceFixture(t)
 			id := old.Control.Control

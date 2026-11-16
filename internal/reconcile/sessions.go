@@ -104,6 +104,9 @@ func (r *run) validateInventory(provider string, inventory *session.Inventory) e
 func (r *run) lookupSession(epic, name string) session.Lookup {
 	provider := r.providerForEpic(epic)
 	lookup := r.inventory(provider).Lookup(name)
+	if provider == "claude" {
+		r.observeClaudeCoordinator(epic, name, lookup)
+	}
 	if provider == "codex" && lookup.Presence == session.Present && lookup.Session.EpicID != epic {
 		return session.Lookup{Presence: session.Quarantined, Reservation: session.Reservation{Executor: provider, ID: lookup.Session.ID, Name: name, Reason: "requested_epic_conflict"}}
 	}
@@ -687,5 +690,5 @@ func (r *run) quietTurnElapsed(e *entity, since time.Time) time.Duration {
 		}
 		return r.eligibleElapsed(e, since).Eligible
 	}
-	return r.now.Sub(since)
+	return r.claudeQuietElapsed(e, since)
 }

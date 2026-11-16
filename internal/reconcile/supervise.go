@@ -34,7 +34,8 @@ import (
 // supervision is what one tick learns for supervising.
 type supervision struct {
 	// prev is the overall status.json as the last tick left it.
-	prev store.Overall
+	prev             store.Overall
+	coordinatorHolds []store.CoordinatorHold
 	// holds are the account's holds, this tick's included.
 	holds        []store.Hold
 	unknown      int
@@ -99,25 +100,20 @@ func (r *run) elapsed(e *entity, since time.Time) time.Duration {
 }
 
 func (r *run) legacyElapsed(e *entity, since time.Time) time.Duration {
+	holds := r.claudeHeldIntervals(e)
 	repair := r.isRepair(e)
-	d := r.now.Sub(since)
 	for _, h := range r.sup.holds {
 		if repair && h.State == stateNearLimit {
 			continue
 		}
-		to := h.To
-		if to.IsZero() {
-			to = r.now
-		}
-		if from := later(h.From, since); to.After(from) {
-			d -= to.Sub(from)
-		}
+		holds = append(holds, h)
 	}
-	return d
+	return store.EligibleElapsed(since, r.now, holds, nil, since).Eligible
 }
 
 // supervised adds what supervision keeps to the overall status.
 func (r *run) supervised(o *store.Overall) {
+	o.CoordinatorHolds = r.coordinatorHolds()
 	if r.availability != nil {
 		o.AvailabilityHolds = r.availability.holds
 		o.AvailabilityCoverage = r.availability.coverage
@@ -157,7 +153,7 @@ func (r *run) supervise() {
 	for _, id := range r.order() {
 		e := r.ents[id]
 		switch {
-		case !r.workAllowed(e) || r.managedClock(e) && r.clockHeld(e):
+		case !r.workAllowed(e) || r.claudeCoordinatorHeld(e) || r.managedClock(e) && r.clockHeld(e):
 		case e.session != nil:
 			r.superviseSession(e)
 		case e.work != nil:
@@ -373,7 +369,7 @@ type stall struct {
 // shows no progress; a session whose turn ended stalls when its work is
 // open and nothing came for an inbox check interval.
 func (r *run) stalled(owner, subject, sess *entity, s session.Session) (stall, bool) {
-	if r.managedClock(owner) && r.clockHeld(owner) || subject != nil && r.managedClock(subject) && r.clockHeld(subject) {
+	if r.claudeCoordinatorHeld(owner) || r.managedClock(owner) && r.clockHeld(owner) || subject != nil && (r.claudeCoordinatorHeld(subject) || r.managedClock(subject) && r.clockHeld(subject)) {
 		return stall{}, false
 	}
 	if r.nativeBusy(owner.id) {

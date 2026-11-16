@@ -482,7 +482,7 @@ func (r *run) held(e *entity) bool {
 	if e.entry.Kind == blueprint.MachineAccount {
 		return r.sup.usage.idle
 	}
-	return !r.workAllowed(e)
+	return !r.workAllowed(e) || r.claudeCoordinatorHeld(e)
 }
 
 // step tries each move out of the entity's state, in blueprint order, and

@@ -1302,6 +1302,21 @@ func compatUsage(c *compatCapture) {
 	x.tick()
 	x.check("stale holds new work without immediate stop", x.accountStatus().State == stateStale && len(x.called("claude stop")) == stops)
 	x.step("stale")
+	x.input("long wait: fresh near-limit usage keeps work held for a day")
+	x.now = x.now.Add(25 * time.Hour)
+	x.usage("long-wait", x.now, 81, 40, x.now.Add(5*time.Hour), x.now.Add(72*time.Hour))
+	x.full()
+	x.check("long wait digest retains account waits", len(x.digests()) == 1 && strings.Contains(x.digests()[0], "waiting on the account"))
+	x.step("long_wait")
+	x.input("needs-you long wait: repeated error requires an operator decision")
+	errEvent := x.inject("e1-w2", events.Event{Kind: events.KindError, Sender: "fixture-agent", Text: "fixture requires an operator decision"})
+	from := x.status("e1-w2").State
+	x.inject("e1-w2", events.Event{Kind: events.KindTransition, From: from, To: stateNeedsYou, Prev: []string{from}, Trigger: "tick", TriggerRef: deadLetterRef + seqRef(errEvent)})
+	x.now = x.now.Add(25 * time.Hour)
+	x.usage("needs-you-wait", x.now, 81, 40, x.now.Add(5*time.Hour), x.now.Add(72*time.Hour))
+	x.full()
+	x.check("long wait digest retains user waits", len(x.digests()) == 2 && strings.Contains(x.digests()[1], "waiting on you"))
+	x.step("needs_you_reason")
 }
 func (x *compatWorld) prepareReview() {
 	x.seedWork("queued")
@@ -1702,6 +1717,13 @@ func compatRestart(c *compatCapture) {
 	x.check("restart resumes existing conversation flaglessly", len(x.called("claude --bg --resume")) == resumes+1 && len(x.called("claude --bg --model")) == starts)
 	x.check("resume retains valid lease", x.status("e1-s1").Lease >= lease)
 	x.step("resume")
+	x.input("fixture:listing unavailable for 61 minutes with account eligible")
+	x.listingUnknown = true
+	x.tick()
+	x.now = x.now.Add(61 * time.Minute)
+	x.tick()
+	x.check("long unknown listing cannot start a duplicate coordinator", len(x.called("claude --bg --model")) == starts)
+	x.step("long_outage")
 }
 func compatCheckpoint(c *compatCapture) {
 	x := c.newWorld("checkpoint")

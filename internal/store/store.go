@@ -175,6 +175,14 @@ func ReadStatus(dir string) (Status, error) {
 // WriteStatus replaces the status.json in dir.
 func WriteStatus(dir string, st Status) error { return WriteJSON(StatusPath(dir), st) }
 
+// CoordinatorHold records when an owner could not dispatch its Claude session.
+type CoordinatorHold struct {
+	OwnerID string    `json:"owner_id"`
+	From    time.Time `json:"from"`
+	To      time.Time `json:"to,omitzero"`
+	Reason  string    `json:"reason"`
+}
+
 // Overall is the factory's own status.json.
 type Overall struct {
 	UIActionProtocol int `json:"ui_action_protocol,omitempty"`
@@ -192,6 +200,7 @@ type Overall struct {
 	Errors []string `json:"errors,omitempty"`
 	// Holds are the recent times the account held work back, oldest first;
 	// the last has no To while it lasts. Clocks of held-back work skip them.
+	CoordinatorHolds     []CoordinatorHold      `json:"coordinator_holds,omitempty"`
 	Holds                []Hold                 `json:"holds,omitempty"`
 	AvailabilityHolds    []AvailabilityHold     `json:"availability_holds,omitempty"`
 	AvailabilityCoverage []AvailabilityCoverage `json:"availability_coverage,omitempty"`

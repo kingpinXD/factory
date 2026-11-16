@@ -771,8 +771,8 @@ func threeWaiting(t *testing.T) *world {
 	w.registry()
 	w.planned("e1", threeItemsWith("[]"))
 	w.at(0)
-	w.toNeedsYou("e1-w1", workQueued, deadLetterRef+"1")
-	w.toNeedsYou("e1-w2", workQueued, deadLetterRef+"1")
+	w.toNeedsYou("e1-w1", workQueued, "user:1")
+	w.toNeedsYou("e1-w2", workQueued, "user:1")
 	w.tick(false)
 	return w
 }
@@ -785,7 +785,7 @@ func (w *world) digests() []string { return w.dmsWith("factory: long waits:") }
 func TestLongWaitsGoInADigestAtMostSixHoursApartThenDaily(t *testing.T) {
 	w := threeWaiting(t)
 	w.at(3 * time.Hour)
-	w.toNeedsYou("e1-w3", workQueued, deadLetterRef+"1")
+	w.toNeedsYou("e1-w3", workQueued, "user:1")
 	w.fullTickAt(23*time.Hour + 59*time.Minute)
 	if got := w.digests(); len(got) != 0 {
 		t.Fatalf("digests before 24h = %q, want none", got)

@@ -6,6 +6,8 @@ package git
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/zednative"
 )
 
 // Client runs git.
@@ -43,6 +46,175 @@ func (c Client) git(ctx context.Context, args ...string) ([]byte, error) {
 // without its worktree is checked out again as it is.
 func (c Client) Worktree(ctx context.Context, clone, base, workID string) (string, error) {
 	return c.worktree(ctx, clone, workID, base, "origin/"+base, false)
+}
+
+// WorktreeFromCommit creates a proof worktree from an already verified local
+// commit. An existing path or branch is reused only when it still matches.
+func (c Client) WorktreeFromCommit(ctx context.Context, clone, commit, workID string) (string, error) {
+	if err := checkWork(clone, workID); err != nil {
+		return "", err
+	}
+	if _, err := hex.DecodeString(commit); err != nil || len(commit) != 40 && len(commit) != 64 || strings.ToLower(commit) != commit {
+		return "", fmt.Errorf("exact local commit required")
+	}
+	unlock, err := lock(ctx, clone)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	resolved, err := c.git(ctx, "-C", clone, "rev-parse", "--verify", commit+"^{commit}")
+	if err != nil || strings.TrimSpace(string(resolved)) != commit {
+		return "", fmt.Errorf("verified local commit is unavailable")
+	}
+	path, branch := WorktreePath(clone, workID), Branch(workID)
+	wt, registered, err := c.worktreeEntry(ctx, clone, path)
+	if err != nil {
+		return "", err
+	}
+	tip, err := c.tip(ctx, clone, branch)
+	if err != nil {
+		return "", err
+	}
+	if tip != "" && tip != commit {
+		return "", fmt.Errorf("proof branch differs from the verified commit")
+	}
+	if registered {
+		if wt.locked || wt.branch != "refs/heads/"+branch || tip != commit || !c.clean(ctx, path) {
+			return "", fmt.Errorf("existing proof worktree is changed or locked")
+		}
+		head, err := c.git(ctx, "-C", path, "rev-parse", "HEAD")
+		if err != nil || strings.TrimSpace(string(head)) != commit {
+			return "", fmt.Errorf("existing proof worktree head differs")
+		}
+		return path, nil
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("proof worktree path already exists or cannot be inspected")
+	}
+	add := []string{"-C", clone, "-c", "core.hooksPath=/dev/null", "worktree", "add", path, "-b", branch, commit}
+	if tip != "" {
+		add = []string{"-C", clone, "-c", "core.hooksPath=/dev/null", "worktree", "add", path, branch}
+	}
+	if _, err := c.git(ctx, add...); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// ImportProgramCommit appends selected objects to the registry clone. The clone
+// lock excludes programme repository setup; contained promotion may still append
+// objects and advance refs independently. This method never writes those refs.
+func (c Client) ImportProgramCommit(ctx context.Context, clone, worktree, trustedBare, commit string) (zednative.ProgramGitImport, error) {
+	var result zednative.ProgramGitImport
+	if err := checkClone(clone); err != nil {
+		return result, err
+	}
+	unlock, err := lock(ctx, clone)
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
+	common, cloneTopology, err := programGitCommon(clone)
+	if err != nil {
+		return result, err
+	}
+	workCommon, workTopology, err := programGitCommon(worktree)
+	if err != nil || common != workCommon {
+		return result, fmt.Errorf("programme import worktree is outside its registry clone")
+	}
+	result, err = zednative.ImportProgramCommit(ctx, trustedBare, common, commit)
+	if err != nil {
+		return zednative.ProgramGitImport{}, err
+	}
+	nowCommon, nowClone, err := programGitCommon(clone)
+	if err != nil || nowCommon != common || nowClone != cloneTopology {
+		return zednative.ProgramGitImport{}, fmt.Errorf("registry clone Git topology changed during import")
+	}
+	nowCommon, nowWork, err := programGitCommon(worktree)
+	if err != nil || nowCommon != common || nowWork != workTopology {
+		return zednative.ProgramGitImport{}, fmt.Errorf("assigned worktree Git topology changed during import")
+	}
+	return result, nil
+}
+
+func programGitCommon(worktree string) (string, string, error) {
+	if !filepath.IsAbs(worktree) || filepath.Clean(worktree) != worktree {
+		return "", "", fmt.Errorf("canonical programme worktree required")
+	}
+	real, err := filepath.EvalSymlinks(worktree)
+	if err != nil || real != worktree {
+		return "", "", fmt.Errorf("aliased programme worktree")
+	}
+	read := func(name string) ([]byte, error) {
+		st, err := os.Lstat(name)
+		if err != nil {
+			return nil, err
+		}
+		stat, ok := st.Sys().(*syscall.Stat_t)
+		if !ok || stat.Nlink != 1 || !st.Mode().IsRegular() || st.Size() > 4096 {
+			return nil, fmt.Errorf("invalid programme Git topology file")
+		}
+		return os.ReadFile(name)
+	}
+	gitdir := filepath.Join(worktree, ".git")
+	var pointer []byte
+	st, err := os.Lstat(gitdir)
+	if err == nil && st.Mode().IsRegular() {
+		pointer, err = read(gitdir)
+		if err != nil || !bytes.HasPrefix(pointer, []byte("gitdir: ")) {
+			return "", "", fmt.Errorf("invalid programme Git pointer")
+		}
+		gitdir = strings.TrimSpace(strings.TrimPrefix(string(pointer), "gitdir: "))
+		if gitdir == "" || strings.ContainsAny(gitdir, "\x00\r\n") {
+			return "", "", fmt.Errorf("invalid programme Git pointer path")
+		}
+		if !filepath.IsAbs(gitdir) {
+			gitdir = filepath.Join(worktree, gitdir)
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		// Qualification creates an actual bare repository before a linked tree.
+		if _, err := read(filepath.Join(worktree, "HEAD")); err != nil {
+			return "", "", err
+		}
+		gitdir = worktree
+	} else if err != nil || !st.IsDir() {
+		return "", "", fmt.Errorf("invalid programme Git directory")
+	}
+	gitdir = filepath.Clean(gitdir)
+	if actual, err := filepath.EvalSymlinks(gitdir); err != nil || actual != gitdir {
+		return "", "", fmt.Errorf("aliased programme Git directory")
+	}
+	common := gitdir
+	commonBytes, err := read(filepath.Join(gitdir, "commondir"))
+	if err == nil {
+		common = strings.TrimSpace(string(commonBytes))
+		if common == "" || strings.ContainsAny(common, "\x00\r\n") {
+			return "", "", fmt.Errorf("invalid programme Git common directory")
+		}
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitdir, common)
+		}
+		common = filepath.Clean(common)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", "", err
+	}
+	if actual, err := filepath.EvalSymlinks(common); err != nil || actual != common {
+		return "", "", fmt.Errorf("aliased programme Git common directory")
+	}
+	objects := filepath.Join(common, "objects")
+	if actual, err := filepath.EvalSymlinks(objects); err != nil || actual != objects {
+		return "", "", fmt.Errorf("aliased programme Git object directory")
+	}
+	st, err = os.Stat(objects)
+	if err != nil || !st.IsDir() {
+		return "", "", fmt.Errorf("missing programme Git object directory")
+	}
+	stat, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", "", fmt.Errorf("unknown programme Git object identity")
+	}
+	facts := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d:%d", worktree, pointer, gitdir, commonBytes, common, stat.Dev, stat.Ino)
+	return common, fmt.Sprintf("%x", sha256.Sum256([]byte(facts))), nil
 }
 
 // WorktreeAtPR makes a work item's worktree for the adopted pull request pr,

@@ -13,6 +13,7 @@ import (
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/session"
 )
 
 // Stalls. On each full reconcile, after the PRs are watched, the tick looks
@@ -245,6 +246,9 @@ func (r *run) noteMover(it *entity) {
 // stalled: in a state it stalls in, with no mover now and at every full
 // reconcile since one first found none, for stall_after.
 func (r *run) stalledFor(it *entity) (time.Duration, bool) {
+	if r.managedClock(it) && r.clockHeld(it) {
+		return 0, false
+	}
 	if it.work == nil || !slices.Contains(stallStates, it.cur.State) || it.st.NoMoverSince.IsZero() || r.mover(it) != "" {
 		return 0, false
 	}
@@ -307,6 +311,9 @@ const (
 // no one. It reads only what this tick read already: a session's listing,
 // the merge hold watchPRs kept, the blockers and bases read so far.
 func (r *run) mover(it *entity) string {
+	if r.nativeBusy(it.id) {
+		return "its native helper"
+	}
 	ep := r.ents[it.entry.Epic]
 	switch {
 	case it.cur.State == stateNeedsYou, it.cur.State == stateWaitingUser, ep != nil && ep.cur.State == stateNeedsYou:
@@ -395,7 +402,8 @@ func (r *run) working(sess *entity) bool {
 	if sess == nil || !sess.open() {
 		return false
 	}
-	if _, known := r.listing(); !known {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
 		return true
 	}
 	ok, _, _ := r.listedWorking(sess)
@@ -460,13 +468,20 @@ func digested(who string) bool {
 // on: once a wait crossed wait_dm since the last digest and that one is
 // digestMinGap old, or wait_dm after it while any remain. The last digest
 // is the newest digest done in any epic's log.
+func (r *run) digestAge(e *entity) time.Duration {
+	if r.managedClock(e) {
+		return r.eligibleElapsed(e, e.cur.Since).Eligible
+	}
+	return r.now.Sub(e.cur.Since)
+}
+
 func (r *run) digestWaits() {
 	limit := time.Duration(r.b.Values.WaitDM)
 	var waits []*entity
 	movers := map[*entity]string{}
 	for _, id := range r.order() {
 		it := r.ents[id]
-		if it.work == nil || !it.open() || r.now.Sub(it.cur.Since) <= limit {
+		if it.work == nil || !it.open() || r.digestAge(it) <= limit {
 			continue
 		}
 		if who := r.mover(it); digested(who) {
@@ -489,7 +504,7 @@ func (r *run) digestWaits() {
 	lines := []string{"factory: long waits:"}
 	for _, it := range waits {
 		line := fmt.Sprintf(" - %s (%s) in %s for %s, waiting on %s", it.id, issueRef(it), it.cur.State,
-			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(movers[it], "no one"))
+			r.digestAge(it).Round(time.Hour), cmp.Or(movers[it], "no one"))
 		if from := r.deployedWait(it); from != "" {
 			line += fmt.Sprintf("; once %s is deployed, run: factory deployed <its PR URL>", from)
 		}

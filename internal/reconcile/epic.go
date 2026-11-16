@@ -13,11 +13,11 @@ import (
 	"strings"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
-	"github.com/kingpinXD/factory/internal/claude"
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/repos"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -459,6 +459,9 @@ func (r *run) ensureSet(ep *entity, id, dir string, items []string) error {
 	if slices.Equal(items, set.set.Items) {
 		return nil
 	}
+	if err := r.checkCoordinatorTerminalAdmission(set); err != nil {
+		return err
+	}
 	set.set.Items = items
 	r.say("%s: items now %s", id, strings.Join(items, ", "))
 	if r.dry {
@@ -475,22 +478,10 @@ func (r *run) ensureItem(ep *entity, setID, setDir string, it epic.Item) error {
 		}
 		return nil
 	}
-	repo, err := repos.Read(r.d.Brain, it.Repo)
+	in, err := r.workInputsForPlan(ep, setID, it)
 	if err != nil {
 		return err
 	}
-	if !filepath.IsAbs(repo.Path) {
-		return fmt.Errorf("item %s: repo %s has no absolute **Path:** in its registry file", id, it.Repo)
-	}
-	ref, err := epic.ParseRef(it.Issue)
-	if err != nil {
-		return err
-	}
-	base := it.Base
-	if base == "" {
-		base = repo.Default
-	}
-	in := &WorkInputs{ID: id, Epic: ep.id, Set: setID, Repo: repo.FullName, Clone: repo.Path, Base: base, Issue: ref.Number, PR: it.PR}
 	_, err = r.create(id, store.Entry{Kind: blueprint.MachineWork, Dir: filepath.Join(setDir, id), Epic: ep.id}, in, blueprint.TriggerFile)
 	return err
 }
@@ -771,19 +762,46 @@ func (r *run) rebase(from, to string) {
 // folder: its planner mid-turn, or any other of its sessions live. An
 // unknown listing counts as busy.
 func (r *run) epicBusy(ep *entity) bool {
-	sessions, known := r.listing()
-	if !known {
+	inventory := r.inventory(r.providerForEpic(ep.id))
+	if !inventory.Complete {
 		return true
+	}
+	for _, q := range inventory.Quarantined {
+		if q.EpicID == ep.id {
+			return true
+		}
 	}
 	for _, id := range r.order() {
 		sess := r.ents[id]
 		if sess.session == nil || sess.entry.Epic != ep.id {
 			continue
 		}
-		s, ok := claude.FindByName(sessions, sess.session.Name)
-		if ok && s.Live() && (sess.session.Component != componentPlanner || s.State == listedWorking && !turnEndedInListing(s)) {
+		lookup := inventory.Lookup(sess.session.Name)
+		s := lookup.Session
+		if lookup.Presence == session.Present && s.Live() && (sess.session.Component != componentPlanner || s.State == listedWorking && !turnEndedInListing(s)) {
 			return true
 		}
 	}
 	return false
+}
+
+func (r *run) workInputsForPlan(ep *entity, setID string, it epic.Item) (*WorkInputs, error) {
+	id := entityID(ep.id, it.ID)
+	repo, err := repos.Read(r.d.Brain, it.Repo)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(repo.Path) {
+		return nil, fmt.Errorf("item %s: repo %s has no absolute **Path:** in its registry file", id, it.Repo)
+	}
+	ref, err := epic.ParseRef(it.Issue)
+	if err != nil {
+		return nil, err
+	}
+	base := it.Base
+	if base == "" {
+		base = repo.Default
+	}
+	in := &WorkInputs{ID: id, Epic: ep.id, Set: setID, Repo: repo.FullName, Clone: repo.Path, Base: base, Issue: ref.Number, PR: it.PR}
+	return in, nil
 }

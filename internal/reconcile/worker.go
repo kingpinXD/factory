@@ -29,6 +29,15 @@ func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Du
 		return err
 	}
 	defer unlock()
+	if err := runEffectJobs(ctx, brain, out); err != nil {
+		return err
+	}
+	if err := runVerificationObservationJobs(ctx, brain, out); err != nil {
+		return err
+	}
+	if err := runProgramReadJobs(ctx, brain, out); err != nil {
+		return err
+	}
 	tried := map[string]bool{}
 	for {
 		jobs, err := repoJobs(brain)
@@ -41,6 +50,13 @@ func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Du
 		}
 		for _, j := range jobs {
 			tried[j.key()] = true
+			if j.req.Request == cleanupRequest {
+				// This independent worker can recover a request queued before a crash.
+				// Admission remains durably closed before any Git deletion starts.
+				if err := fenceCleanup(ctx, brain, j.id); err != nil {
+					return err
+				}
+			}
 			res := j.do(ctx, g, timeout)
 			if _, err := events.Append(store.EventsPath(j.dir), res); err != nil {
 				return err
@@ -78,7 +94,7 @@ func repoJobs(brain string) ([]repoJob, error) {
 		}
 		it := &entity{id: id, entry: entry, evs: evs}
 		for _, ev := range evs {
-			if ev.Kind != events.KindRequest || ev.Recipient != events.RecipientRepoWorker {
+			if ev.Kind != events.KindRequest || ev.Recipient != events.RecipientRepoWorker || (ev.Request != worktreeRequest && ev.Request != cleanupRequest) {
 				continue
 			}
 			if _, answered := repoResult(it, ev); answered {

@@ -98,7 +98,7 @@ func TestIssueCommands(t *testing.T) {
 	f := fakeDeps(t)
 	ghReplies(f, map[string]string{
 		"pr view 10":                   `{"number":10,"state":"OPEN"}`,
-		"api -X POST repos/o/r/issues": `{"id":7,"number":7}`,
+		"api -X POST repos/o/r/issues": `{"id":7,"number":7,"title":"T","body":"Do the thing.\n\n\n<!-- factory:e1:text -->","repository_url":"https://api.github.com/repos/o/r"}`,
 		"issues?state=all":             `[]`,
 		"api user":                     `{"login":"me"}`,
 	})
@@ -129,7 +129,7 @@ func TestIssueCommands(t *testing.T) {
 	for _, ev := range logOf(t, dir) {
 		kinds = append(kinds, ev.Kind+" "+ev.Key)
 	}
-	if want := []string{events.KindIntent + " intent:issue-create:o/r:text", events.KindDone + " done:issue-create:o/r:text"}; strings.Join(kinds, ",") != strings.Join(want, ",") {
+	if want := []string{events.KindRequest + " issue-request:issue-create:o/r:text", events.KindIntent + " intent:issue-create:o/r:text", events.KindRequest + " issue-proof:issue-create:o/r:text", events.KindDone + " done:issue-create:o/r:text"}; strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Errorf("e1 log = %q, want %q", kinds, want)
 	}
 

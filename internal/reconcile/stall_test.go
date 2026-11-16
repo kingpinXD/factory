@@ -620,7 +620,7 @@ func TestFindingStallsCallsNothing(t *testing.T) {
 	w.planned("e2", oneItem("\n  - {from: o/r#99, to: w1, gate: start, when: merged, rollback: none}"))
 	w.moveTo("e2-s1", setRunning)
 	w.now = w.now.Add(31 * time.Minute)
-	r := moverRun(t, w, func(r *run) { r.listing() })
+	r := moverRun(t, w, func(r *run) { r.inventory("claude") })
 	before := len(w.fake.Calls())
 	r.findStalls()
 	if got := w.calls()[before:]; len(got) != 0 {

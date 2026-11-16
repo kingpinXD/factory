@@ -22,10 +22,7 @@ import (
 
 // agentKinds are the kinds `factory event` writes. Every other kind is
 // written by the program itself.
-var agentKinds = []string{
-	events.KindStart, events.KindEnd, events.KindError, events.KindIntent, events.KindDone,
-	events.KindIssueStale, events.KindBlockedBy, events.KindInstruction, events.KindMessage, events.KindCheckpoint,
-}
+var agentKinds = events.AgentEventKinds()
 
 // contextLine opens every inbox and heartbeat reply: the context use of the
 // session working for id.
@@ -101,6 +98,14 @@ func logEvent(id string, ev events.Event, file, to string) (events.Event, error)
 	}
 	if file != "" {
 		var err error
+		file, err = filepath.Abs(file)
+		if err != nil {
+			return events.Event{}, err
+		}
+	}
+
+	if file != "" {
+		var err error
 		if ev.File, err = filepath.Abs(file); err != nil {
 			return events.Event{}, err
 		}
@@ -113,7 +118,7 @@ func logEvent(id string, ev events.Event, file, to string) (events.Event, error)
 			}
 		}
 	}
-	return store.AppendTo(blueprint.Brain(), id, ev)
+	return helperService(blueprint.Brain()).WithUnmanagedEvent(context.Background(), id, ev.Kind, file, func() (events.Event, error) { return store.AppendTo(blueprint.Brain(), id, ev) })
 }
 
 // checkOwnFile refuses an end event's file outside the folder of the entity
@@ -138,21 +143,7 @@ func checkOwnFile(id, file string) error {
 }
 
 func checkEvent(kind, file, text, to string) error {
-	switch {
-	case !slices.Contains(events.Kinds, kind):
-		return fmt.Errorf("unknown event kind: %s", kind)
-	case !slices.Contains(agentKinds, kind):
-		return fmt.Errorf("%s events are written by the program, not by factory event", kind)
-	case (kind == events.KindEnd || kind == events.KindCheckpoint) && file == "":
-		return fmt.Errorf("%s needs --file <path>", kind)
-	case (kind == events.KindMessage || kind == events.KindInstruction || kind == events.KindBlockedBy) && text == "":
-		return fmt.Errorf("%s needs --text", kind)
-	case strings.ContainsAny(text, "\r\n"):
-		return errors.New("--text must be one line")
-	case to != "" && kind != events.KindMessage:
-		return errors.New("--to applies only to message events")
-	}
-	return nil
+	return events.ValidateAgentEvent(kind, file, text, to)
 }
 
 // runInbox prints the unacknowledged messages for an id, or acks one:

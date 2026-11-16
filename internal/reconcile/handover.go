@@ -10,6 +10,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/session"
 )
 
 // assignedText is the text of the done event that logs the factory
@@ -82,13 +83,25 @@ func (r *run) handOver(it *entity) error {
 	if it.cur.State != workPROpen || it.st.PR == 0 || handedOver(it) {
 		return nil
 	}
+	if !skipsOrchestrator(it) {
+		lookup := r.lookupSession(it.entry.Epic, sessionName(it.work.Set, componentOrchestrator))
+		if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+			return nil
+		}
+	}
 	why := r.handoverDue(it)
 	if why == "" {
 		return nil
 	}
+	if err := r.fenceHelpers(it, "handover"); err != nil {
+		return err
+	}
 	r.say("%s: worktree handed over to the babysitter: %s", it.id, why)
 	_, err := r.append(it, events.Event{Kind: events.KindHandover, Sender: events.SenderProgram, Text: why, Key: "handover:" + strconv.Itoa(it.entered)})
-	return err
+	if err != nil {
+		return err
+	}
+	return r.reopenHelpers(it)
 }
 
 func (r *run) handoverDue(it *entity) string {
@@ -132,10 +145,20 @@ func (r *run) handBack(it *entity) error {
 	if it.cur.State != workImplementing || !strings.HasPrefix(t.TriggerRef, "scope:") || it.has(key) {
 		return nil
 	}
+	lookup := r.babysitterLookup(it)
+	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+		return fmt.Errorf("%s: handback waits for writer observation", it.id)
+	}
+	if err := r.fenceHelpers(it, "handback"); err != nil {
+		return err
+	}
 	if err := r.stopBabysitter(it, key, "the scope changed"); err != nil {
 		return err
 	}
 	if _, err := r.append(it, events.Event{At: r.now, Kind: events.KindHandback, Sender: events.SenderProgram, Text: "the scope changed", Key: key}); err != nil {
+		return err
+	}
+	if err := r.reopenHelpers(it); err != nil {
 		return err
 	}
 	ready, _ := worktreeReady(it)
@@ -145,15 +168,34 @@ func (r *run) handBack(it *entity) error {
 // babysitterComponent is the session that looks after a work item's PR.
 const babysitterComponent = "babysitter"
 
+func (r *run) babysitterLookup(it *entity) session.Lookup {
+	sess := r.babysitterOf(it)
+	if sess != nil && sess.session != nil {
+		return r.lookupSession(it.entry.Epic, sess.session.Name)
+	}
+	_, name := r.sessionSlot(it, babysitterComponent)
+	return r.lookupSession(it.entry.Epic, name)
+}
+
 // stopBabysitter stops the item's babysitter, when it has a live one; key
 // names the occurrence that stops it.
 func (r *run) stopBabysitter(it *entity, key, why string) error {
 	sess := r.babysitterOf(it)
+	lookup := r.babysitterLookup(it)
 	if sess == nil || sess.session == nil {
+		if lookup.Presence == session.Absent {
+			return nil
+		}
+		return fmt.Errorf("%s: no indexed stopped babysitter", it.id)
+	}
+	switch lookup.Presence {
+	case session.Unknown, session.Quarantined:
+		return fmt.Errorf("%s: stopped writer is unknown", sess.session.Name)
+	case session.Absent:
 		return nil
 	}
-	s, ok := r.findSession(sess.session.Name)
-	if !ok || !s.Live() {
+	s := lookup.Session
+	if !s.Live() {
 		return nil
 	}
 	return r.stopSession(sess, s, key, fmt.Sprintf("stop %s: %s", s.Name, why))

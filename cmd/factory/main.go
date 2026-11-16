@@ -15,33 +15,40 @@ var commands = []string{
 	"add", "tick", "status", "answer", "retry", "stop", "review-asked", "replan", "check",
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
-	"version", "ui",
+	"version", "helper", "z-runner", "z-attach", "z-preflight", "ui", "codex-host", "codex-control", "codex-verify",
 }
 
 var handlers = map[string]func(args []string, stdout, stderr io.Writer) int{
-	"check":        runCheck,
-	"blueprint":    runBlueprint,
-	"agents":       runAgents,
-	"event":        runEvent,
-	"inbox":        runInbox,
-	"heartbeat":    runHeartbeat,
-	"lease-ok":     runLeaseOK,
-	"query":        runQuery,
-	"tick":         runTick,
-	"repo-worker":  runRepoWorker,
-	"add":          runAdd,
-	"may-merge":    runMayMerge,
-	"deployed":     runDeployed,
-	"replan":       runReplan,
-	"answer":       runAnswer,
-	"issue":        runIssue,
-	"status":       runStatus,
-	"stop":         runStop,
-	"retry":        runRetry,
-	"review-asked": runReviewAsked,
-	"launchd":      runLaunchd,
-	"version":      runVersion,
-	"ui":           runUI,
+	"check":         runCheck,
+	"blueprint":     runBlueprint,
+	"agents":        runAgents,
+	"event":         runEvent,
+	"inbox":         runInbox,
+	"heartbeat":     runHeartbeat,
+	"lease-ok":      runLeaseOK,
+	"query":         runQuery,
+	"tick":          runTick,
+	"repo-worker":   runRepoWorker,
+	"add":           runAdd,
+	"may-merge":     runMayMerge,
+	"deployed":      runDeployed,
+	"replan":        runReplan,
+	"answer":        runAnswer,
+	"issue":         runIssue,
+	"status":        runStatus,
+	"stop":          runStop,
+	"retry":         runRetry,
+	"review-asked":  runReviewAsked,
+	"launchd":       runLaunchd,
+	"version":       runVersion,
+	"helper":        runHelper,
+	"z-runner":      runZRunner,
+	"z-attach":      runZAttach,
+	"z-preflight":   runZPreflight,
+	"ui":            runUI,
+	"codex-control": runCodexControl,
+	"codex-verify":  runCodexVerify,
+	"codex-host":    runCodexHost,
 }
 
 func main() {
@@ -57,14 +64,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if name == "--version" {
 		name = "version"
 	}
-	if _, ok := handlers[name]; !ok {
+	handler, ok := handlers[name]
+	if !ok && name == "effect-dispatch" {
+		handler, ok = runEffectDispatch, true
+	}
+	if !ok {
 		fmt.Fprintf(stderr, "factory: unknown command: %s (run factory --help)\n", name)
 		return 2
 	}
-	if name != "ui" {
-		useSecretsToken(blueprint.Brain())
-	}
-	return handlers[name](args[1:], stdout, stderr)
+	bootstrapCredentials(name, args[1:])
+	return handler(args[1:], stdout, stderr)
 }
 
 // runBlueprint prints the brain's blueprint as JSON.

@@ -113,3 +113,28 @@ func tableCells(line string) []string {
 	}
 	return parts
 }
+
+// ModelFor resolves an explicit product without falling back to another column.
+func (t Tiers) ModelFor(product, tier string, deny []string) (string, error) {
+	if product == ProductClaude {
+		return t.Model(tier, deny)
+	}
+	if product == "" {
+		return "", errors.New("the product is empty")
+	}
+	if tier == "" {
+		return "", errors.New("the tier is empty")
+	}
+	row, ok := t[tier]
+	if !ok {
+		return "", fmt.Errorf("tier %q is not in the Model tiers table of AGENTS.md", tier)
+	}
+	model := row[product]
+	if strings.TrimSpace(model) == "" {
+		return "", fmt.Errorf("tier %q has no %s model in AGENTS.md", tier, product)
+	}
+	if denied, ok := DeniedModel(model, deny); ok {
+		return "", fmt.Errorf("tier %q resolves to %q, which is denied (%s)", tier, model, denied)
+	}
+	return model, nil
+}

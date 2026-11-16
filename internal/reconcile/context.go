@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -29,12 +31,13 @@ import (
 // as compacted; from the checkpoint point its owner is reminded once per
 // compaction cycle.
 func (r *run) measure(sess *entity) {
-	s, ok := r.findSession(sess.session.Name)
-	if !ok || !s.Live() || s.SessionID == "" {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present || !s.Live() || s.ConversationID == "" {
 		return
 	}
 	ctx, cancel := r.call()
-	pct, compactedAt, err := r.d.Claude.Context(ctx, s.SessionID, r.b.Values.Context.Window)
+	pct, compactedAt, err := r.runtimeFor(s.Executor).Context(ctx, s.Ref, r.b.Values.Context.Window)
 	cancel()
 	if errors.Is(err, claude.ErrNoTranscript) {
 		return
@@ -99,7 +102,7 @@ func (r *run) checkpointReady(sess *entity) (bool, string, error) {
 		return false, "", nil
 	}
 	ref := eventRef(owner.id, cp)
-	if usedRef(sess, ref) || r.stepOpen(owner) || !r.accountAllows(sess, false) {
+	if usedRef(sess, ref) || r.nativeBusy(owner.id) || r.stepOpen(owner) || !r.accountAllows(sess, false) {
 		return false, "", nil
 	}
 	return true, ref, nil
@@ -156,11 +159,17 @@ func (r *run) stepOpen(owner *entity) bool {
 // compact runs as the session enters compacting: it stops the session,
 // waits for its pid to go, and resumes it with /compact and no flags.
 func (r *run) compact(sess *entity) error {
-	s, ok := r.findSession(sess.session.Name)
-	if !ok {
-		return fmt.Errorf("%s is not listed", sess.session.Name)
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present {
+		return fmt.Errorf("%s has no usable session observation", sess.session.Name)
 	}
-	return r.act("compact "+s.Name, func(ctx context.Context) error { return r.d.Claude.Compact(ctx, s.ID) })
+	if _, err := r.beginNativeBoundary(sess, "compact", "compact:"+sess.id+":"+strconv.Itoa(sess.entered)); err != nil {
+		return err
+	}
+	return r.act("compact "+s.Name, func(ctx context.Context) error {
+		return r.runtimeFor(s.Executor).Compact(ctx, deliveryRef(s.Ref, transitionDeliveryKey("compact", sess)))
+	})
 }
 
 // compactionRecorded: the account allows the session's work, the transcript
@@ -186,6 +195,9 @@ func (r *run) afterCompaction(sess *entity, t events.Event) error {
 	if owner == nil {
 		return fmt.Errorf("owner %s is not indexed", sess.session.Task)
 	}
+	if err := r.finishNativeBoundary(sess, true); err != nil {
+		return err
+	}
 	start, _ := newestTransitionTo(sess, sessionCompacting)
 	file := ""
 	if id, seq, ok := strings.Cut(start.TriggerRef, "#"); ok && id == owner.id {
@@ -197,7 +209,15 @@ func (r *run) afterCompaction(sess *entity, t events.Event) error {
 			Text: "no compaction record 10m after /compact; resumed without compacting", Key: "compact-timeout:" + seqRef(t)}))
 		r.dmCompactFailures(sess, t)
 	}
-	return r.deliver(sess, compactedPrompt(owner.id, file))
+	text := compactedPrompt(owner.id, file)
+	if b := nativeBoundaryState(sess); b.ready.Seq != 0 && owner.set != nil {
+		text += fmt.Sprintf("set: %s\nlease: %d\nThe program renewed your lease at the checkpoint boundary. Discard earlier lease values.\n", owner.id, owner.st.Lease)
+	}
+	delivered, err := r.deliver(sess, text)
+	if err != nil || !delivered {
+		return err
+	}
+	return r.nativeBoundaryDelivered(sess)
 }
 
 // dmCompactFailures DMs once when the compaction failed the blueprint's
@@ -221,18 +241,28 @@ func (r *run) dmCompactFailures(sess *entity, t events.Event) {
 
 // deliver gives the session text: posted when it has a process, as a
 // flagless resume when it is stopped.
-func (r *run) deliver(sess *entity, text string) error {
-	s, ok := r.findSession(sess.session.Name)
-	switch {
-	case !ok:
-		return fmt.Errorf("%s is not listed", sess.session.Name)
-	case s.Live():
-		return r.act("post to "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
-	case !r.accountAllows(sess, false):
-		r.say("%s: not resumed after its compaction: the account holds work back", s.Name)
-		return nil
+func (r *run) deliver(sess *entity, text string) (bool, error) {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present {
+		return false, fmt.Errorf("%s has no usable session observation", sess.session.Name)
 	}
-	return r.act("resume "+s.Name+" after its compaction", func(ctx context.Context) error { return r.d.Claude.Resume(ctx, s.ID, text) })
+	// Posting to a live session also starts work. Recheck the account after the
+	// potentially slow listing, before either Post or Resume, not just on resume.
+	if !r.workAllowed(sess) || !r.accountAllows(sess, false) {
+		r.say("%s: checkpoint delivery waits for Claude account eligibility", s.Name)
+		return false, nil
+	}
+	if s.Live() && s.Executor != "codex" {
+		err := r.act("post to "+s.Name+" after its compaction", func(ctx context.Context) error {
+			return r.runtimeFor(s.Executor).Post(ctx, deliveryRef(s.Ref, transitionDeliveryKey("checkpoint", sess)), coordinatorText(s.Executor, text))
+		})
+		return err == nil, err
+	}
+	err := r.act("resume "+s.Name+" after its compaction", func(ctx context.Context) error {
+		return r.runtimeFor(s.Executor).Resume(ctx, deliveryRef(r.resumeRef(s), transitionDeliveryKey("checkpoint", sess)), coordinatorText(s.Executor, text))
+	})
+	return err == nil, err
 }
 
 // compactedPrompt tells a compacted session how to pick up its work: from
@@ -247,7 +277,7 @@ func compactedPrompt(id, checkpoint string) string {
 // postCompactions posts the "you were compacted" message once after each
 // compaction Claude Code made by itself, naming the newest checkpoint the
 // session wrote since its previous compaction.
-func (r *run) postCompactions(sess *entity, s claude.Session) {
+func (r *run) postCompactions(sess *entity, s session.Session) {
 	owner := r.ents[sess.session.Task]
 	if owner == nil {
 		return
@@ -274,7 +304,9 @@ func (r *run) postCompactions(sess *entity, s claude.Session) {
 		}
 	}
 	text := compactedPrompt(owner.id, file)
-	if err := r.act("post to "+s.Name+" after its automatic compaction", func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) }); err != nil {
+	if err := r.act("post to "+s.Name+" after its automatic compaction", func(ctx context.Context) error {
+		return r.runtimeFor(s.Executor).Post(ctx, deliveryRef(s.Ref, inboxDeliveryKey(sess, news)), coordinatorText(s.Executor, text))
+	}); err != nil {
 		r.fail("%v", err)
 		return
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -17,6 +18,7 @@ import (
 // on the user, as the files the tick writes say. README.md documents its
 // JSON.
 type Report struct {
+	Native   []NativeLoad  `json:"native_helpers,omitempty"`
 	At       time.Time     `json:"at"`
 	LastTick time.Time     `json:"last_tick,omitzero"`
 	Tick     int           `json:"tick"`
@@ -90,10 +92,12 @@ type RepairLoad struct {
 
 // EpicLoad is an open epic's state and its re-checks so far.
 type EpicLoad struct {
-	ID       string    `json:"id"`
-	State    string    `json:"state"`
-	Since    time.Time `json:"since"`
-	Rechecks int       `json:"rechecks"`
+	Executor     string    `json:"executor,omitempty"`
+	ExecutorHold string    `json:"executor_hold,omitempty"`
+	ID           string    `json:"id"`
+	State        string    `json:"state"`
+	Since        time.Time `json:"since"`
+	Rechecks     int       `json:"rechecks"`
 }
 
 // Agent is a session the factory started and that is not finished, with
@@ -102,9 +106,10 @@ type EpicLoad struct {
 type Agent struct {
 	Name string `json:"name"`
 	// ID is the short id the tick last saw it listed under; "" until then.
-	ID    string `json:"id"`
-	Task  string `json:"task"`
-	State string `json:"state"`
+	ID          string `json:"id"`
+	Task        string `json:"task"`
+	State       string `json:"state"`
+	Observation string `json:"observation,omitempty"`
 	// Context is in percent of the window, nil until measured.
 	Context      *int      `json:"context"`
 	Unread       int       `json:"unread"`
@@ -146,6 +151,30 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 	}
 	for _, id := range r.order() {
 		r.report(&rep, r.ents[id])
+	}
+	jobs, err := (helper.Service{Brain: d.Brain}).Jobs()
+	if err != nil {
+		return Report{}, err
+	}
+	for _, j := range jobs {
+		provider, attach := "z", "factory z-attach "+j.ID
+		if j.Route.Provider == "codex" {
+			provider = "codex"
+			attach = "factory helper status " + j.ID
+		}
+		rep.Native = append(rep.Native, NativeLoad{j.ID, j.Scope.EpicID, j.Route.Model, j.State, j.HoldReason, attach, provider})
+	}
+	for i := range rep.Epics {
+		s, err := NativeSelection(d.Brain, rep.Epics[i].ID)
+		if err != nil {
+			return Report{}, err
+		}
+		if s.Executor == "z" || s.Executor == "codex" {
+			rep.Epics[i].Executor = s.Executor
+			if s.Executor == "codex" {
+				rep.Epics[i].ExecutorHold = r.ents[rep.Epics[i].ID].st.ExecutorHold
+			}
+		}
 	}
 	for _, ep := range o.Repairs {
 		rep.Repairs = append(rep.Repairs, r.repairLoad(ep))
@@ -223,6 +252,10 @@ func (r *run) reportWork(rep *Report, it *entity) {
 
 func (r *run) reportSession(rep *Report, sess *entity) {
 	a := Agent{Name: sess.session.Name, ID: sess.st.ShortID, Task: sess.session.Task, State: sess.cur.State}
+	uncertain := unknownSessionObservation(sess.st.Listed)
+	if uncertain {
+		a.Observation = sess.st.Listed
+	}
 	if !sess.st.ContextAt.IsZero() {
 		a.Context = &sess.st.Context
 	}
@@ -233,7 +266,7 @@ func (r *run) reportSession(rep *Report, sess *entity) {
 		}
 	}
 	rep.Agents = append(rep.Agents, a)
-	if sess.cur.State == sessionStopped || sess.cur.State == sessionDead {
+	if uncertain || sess.cur.State == sessionStopped || sess.cur.State == sessionDead {
 		return
 	}
 	rep.Sessions.Running++
@@ -260,7 +293,20 @@ func (r *run) repoOf(owner *entity) string {
 }
 
 // WriteText prints the report for a person, ages counted to rep.At.
+type NativeLoad struct {
+	JobID    string `json:"job_id"`
+	EpicID   string `json:"epic_id"`
+	Model    string `json:"model"`
+	State    string `json:"state"`
+	Hold     string `json:"hold_reason"`
+	Attach   string `json:"attach"`
+	Executor string `json:"executor"`
+}
+
 func (rep Report) WriteText(w io.Writer) {
+	for _, n := range rep.Native {
+		fmt.Fprintf(w, "native %s: %s %s %s hold=%s attach=%s\n", n.Executor, n.JobID, n.Model, n.State, n.Hold, n.Attach)
+	}
 	age := func(t time.Time) time.Duration { return rep.At.Sub(t).Truncate(time.Second) }
 	if rep.LastTick.IsZero() {
 		fmt.Fprintln(w, "last tick: none (the factory is not running)")
@@ -297,7 +343,14 @@ func (rep Report) WriteText(w io.Writer) {
 		return line
 	})
 	section(w, "epics", rep.Epics, func(x EpicLoad) string {
-		return fmt.Sprintf("%s  %s for %s, re-checks %d", x.ID, x.State, age(x.Since), x.Rechecks)
+		line := fmt.Sprintf("%s  %s for %s, re-checks %d", x.ID, x.State, age(x.Since), x.Rechecks)
+		if x.Executor == "codex" {
+			line += ", executor codex"
+			if x.ExecutorHold != "" {
+				line += ", held: " + x.ExecutorHold
+			}
+		}
+		return line
 	})
 	section(w, "agents", rep.Agents, func(x Agent) string {
 		ctx := "?"
@@ -309,6 +362,9 @@ func (rep Report) WriteText(w io.Writer) {
 			id = "?"
 		}
 		line := fmt.Sprintf("%s  id %s  %s, context %s, %d unread", x.Name, id, x.State, ctx, x.Unread)
+		if x.Observation != "" {
+			line += ", observation " + x.Observation
+		}
 		if x.Unread > 0 {
 			line += fmt.Sprintf(", oldest %s", age(x.OldestUnread))
 		}

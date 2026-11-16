@@ -10,13 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kingpinXD/factory/internal/agents"
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
+	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -43,39 +47,116 @@ func sessionComponent(e *entity) string {
 // plannerStates are the epic states in which its planner works.
 var plannerStates = []string{"checking", "planning"}
 
-// listing returns `claude agents`, read once per tick. known is false when
-// it failed, or came back empty while a session record expects a live
-// session: then no session is started or moved. An empty listing with none
-// expected is known, or a fresh machine would never start its first planner.
-func (r *run) listing() ([]claude.Session, bool) {
-	if !r.listed {
-		r.listed = true
-		ctx, cancel := r.call()
-		defer cancel()
-		sessions, known, err := r.d.Claude.List(ctx)
-		if err != nil {
-			r.fail("claude agents: %v", err)
-		}
-		r.sessions, r.sessionsKnown = sessions, err == nil && (known || !r.expectsLiveSession())
+// inventory caches one complete provider observation per tick. Per-session
+// uncertainty remains a reservation, never evidence that its name is absent.
+func (r *run) inventory(provider string) session.Inventory {
+	if r.inventories == nil {
+		r.inventories = map[string]session.Inventory{}
+		r.inventoryErrors = map[string]error{}
 	}
-	return r.sessions, r.sessionsKnown
+	if inventory, ok := r.inventories[provider]; ok {
+		return inventory
+	}
+	r.listed = true
+	ctx, cancel := r.call()
+	inventory, err := r.runtimeFor(provider).List(ctx)
+	cancel()
+	if err == nil {
+		err = r.validateInventory(provider, &inventory)
+	}
+	if err != nil {
+		r.fail("%s agents: %v", provider, err)
+		inventory.Complete = false
+	}
+	r.inventories[provider], r.inventoryErrors[provider] = inventory, err
+	return inventory
 }
 
-// findSession returns the session listed under name; false when it is not
-// listed or the listing is unknown.
-func (r *run) findSession(name string) (claude.Session, bool) {
-	sessions, known := r.listing()
-	if !known {
-		return claude.Session{}, false
+func (r *run) validateInventory(provider string, inventory *session.Inventory) error {
+	if err := inventory.Validate(provider); err != nil {
+		return err
 	}
-	return claude.FindByName(sessions, name)
+	if provider == "claude" && len(inventory.Sessions) == 0 && r.expectsLiveSession(provider) {
+		inventory.Complete = false
+	}
+	if provider != "codex" {
+		return nil
+	}
+	check := func(name, epic, owner string) error {
+		for _, e := range r.ents {
+			if e.session != nil && e.session.Name == name && (e.entry.Epic != epic || e.session.Task != owner) {
+				return fmt.Errorf("Codex inventory conflicts with indexed ownership")
+			}
+		}
+		return nil
+	}
+	for _, row := range inventory.Sessions {
+		if err := check(row.Name, row.EpicID, row.OwnerID); err != nil {
+			return err
+		}
+	}
+	for _, q := range inventory.Quarantined {
+		if err := check(q.Name, q.EpicID, q.OwnerID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *run) rejectInventory(provider string, err error) {
+	inventory := r.inventories[provider]
+	inventory.Complete = false
+	r.inventories[provider], r.inventoryErrors[provider] = inventory, err
+	r.fail("%v", err)
+}
+
+func (r *run) lookupSession(epic, name string) session.Lookup {
+	provider := r.providerForEpic(epic)
+	lookup := r.inventory(provider).Lookup(name)
+	if provider == "codex" && ((lookup.Presence == session.Present && lookup.Session.EpicID != epic) || (lookup.Presence == session.Quarantined && lookup.Reservation.EpicID != epic)) {
+		r.rejectInventory(provider, fmt.Errorf("Codex inventory conflicts with requested epic"))
+		return session.Lookup{Presence: session.Unknown}
+	}
+	return lookup
+}
+
+func (r *run) invalidateInventory(provider string) {
+	delete(r.inventories, provider)
+	delete(r.inventoryErrors, provider)
+}
+
+func (r *run) inventoriesComplete() bool {
+	for _, inventory := range r.inventories {
+		if !inventory.Complete {
+			return false
+		}
+	}
+	return true
+}
+
+func unknownSessionObservation(listed string) bool {
+	return listed == "unknown" || strings.HasPrefix(listed, "quarantined (")
+}
+
+func (r *run) notePresence(sess *entity, lookup session.Lookup) {
+	switch lookup.Presence {
+	case session.Unknown:
+		r.noteListedText(sess, "unknown")
+	case session.Quarantined:
+		r.noteListedText(sess, "quarantined ("+lookup.Reservation.Reason+")")
+	}
 }
 
 // observe keeps the session's short id, how it is listed, and when it was
 // first seen without a pid. For a live session whose listing does not show
 // its turn ended, it reads whether its transcript does.
 func (r *run) observe(e *entity) {
-	s, ok := r.findSession(e.session.Name)
+	lookup := r.lookupSession(e.entry.Epic, e.session.Name)
+	r.notePresence(e, lookup)
+	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+		return
+	}
+	s, ok := lookup.Session, lookup.Presence == session.Present
 	if ok {
 		e.st.ShortID = s.ID
 	}
@@ -93,8 +174,11 @@ func (r *run) observe(e *entity) {
 
 // noteListed keeps how the session is listed, and logs each change, so the
 // tick log shows what the listing said around a stall.
-func (r *run) noteListed(sess *entity, s claude.Session, ok bool) {
-	now := listedAs(s, ok)
+func (r *run) noteListed(sess *entity, s session.Session, ok bool) {
+	r.noteListedText(sess, listedAs(s, ok))
+}
+
+func (r *run) noteListedText(sess *entity, now string) {
 	switch sess.st.Listed {
 	case now:
 		return
@@ -108,7 +192,7 @@ func (r *run) noteListed(sess *entity, s claude.Session, ok bool) {
 
 // listedAs names how a session is listed: its state, with its status in
 // brackets when it has one.
-func listedAs(s claude.Session, ok bool) string {
+func listedAs(s session.Session, ok bool) string {
 	switch {
 	case !ok:
 		return "not listed"
@@ -126,12 +210,12 @@ const quietTurn = 2 * time.Minute
 // transcriptTurnEnd returns when the session's transcript shows its turn
 // ended, at least quietTurn ago and after the program last started or
 // resumed it; zero otherwise.
-func (r *run) transcriptTurnEnd(sess *entity, s claude.Session) time.Time {
-	if s.SessionID == "" {
+func (r *run) transcriptTurnEnd(sess *entity, s session.Session) time.Time {
+	if s.ConversationID == "" {
 		return time.Time{}
 	}
 	ctx, cancel := r.call()
-	at, err := r.d.Claude.TurnEndedAt(ctx, s.SessionID)
+	at, err := r.runtimeFor(s.Executor).TurnEndedAt(ctx, s.Ref)
 	cancel()
 	switch {
 	case errors.Is(err, claude.ErrNoTranscript):
@@ -139,7 +223,7 @@ func (r *run) transcriptTurnEnd(sess *entity, s claude.Session) time.Time {
 	case err != nil:
 		r.fail("%s: %v", sess.id, err)
 		return time.Time{}
-	case at.IsZero() || !at.After(startedAt(sess)) || r.now.Sub(at) < quietTurn:
+	case at.IsZero() || !at.After(startedAt(sess)) || r.quietTurnElapsed(sess, at) < quietTurn:
 		return time.Time{}
 	}
 	return at
@@ -148,14 +232,15 @@ func (r *run) transcriptTurnEnd(sess *entity, s claude.Session) time.Time {
 // turnEnded reports whether the session is listed with a pid and its turn
 // ended: its listing shows that, or its transcript does.
 func (r *run) turnEnded(sess *entity) bool {
-	s, ok := r.findSession(sess.session.Name)
-	return ok && s.Live() && (turnEndedInListing(s) || !sess.turnEndedAt.IsZero())
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	return lookup.Presence == session.Present && s.Live() && (turnEndedInListing(s) || !sess.turnEndedAt.IsZero())
 }
 
 // turnEndedInListing reports whether the listing shows the session's turn
 // ended: listed done, or idle. A session a post woke is listed working
 // again, and stays so after that turn, idle.
-func turnEndedInListing(s claude.Session) bool {
+func turnEndedInListing(s session.Session) bool {
 	return s.State == listedTurnEnded || s.Status == listedIdle
 }
 
@@ -277,8 +362,9 @@ func (r *run) drive(owner *entity, component string) error {
 	if len(news) == 0 {
 		return nil
 	}
-	s, ok := r.findSession(sess.session.Name)
-	if !ok || !s.Live() {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present || !s.Live() {
 		return nil
 	}
 	return r.post(owner, sess, s, news)
@@ -288,9 +374,17 @@ func (r *run) drive(owner *entity, component string) error {
 // unless the listing is unknown, or a session is listed under its name: one
 // listed is never started again, only adopted.
 func (r *run) startSession(owner *entity, component, id, name string) error {
-	sessions, known := r.listing()
-	if !known {
+	lookup := r.lookupSession(owner.entry.Epic, name)
+	if r.providerForEpic(owner.entry.Epic) == "codex" && ((lookup.Presence == session.Present && lookup.Session.OwnerID != owner.id) || (lookup.Presence == session.Quarantined && lookup.Reservation.OwnerID != owner.id)) {
+		r.rejectInventory("codex", fmt.Errorf("Codex inventory conflicts with new owner"))
+		return nil
+	}
+	if lookup.Presence == session.Unknown {
 		r.say("%s: not started: the session listing is unknown", name)
+		return nil
+	}
+	if lookup.Presence == session.Quarantined {
+		r.say("%s: not started: its name is reserved while execution is uncertain", name)
 		return nil
 	}
 	if !r.accountAllows(owner, false) {
@@ -305,7 +399,7 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 	if err != nil {
 		return err
 	}
-	if _, listed := claude.FindByName(sessions, name); listed {
+	if lookup.Presence == session.Present {
 		r.say("%s: listed already, so not started again", name)
 		return nil
 	}
@@ -317,7 +411,21 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 // session's index entry are written before the start, so a tick killed
 // after it loses neither.
 func (r *run) launch(owner *entity, sess *entity) error {
+	if r.providerForEpic(owner.entry.Epic) == "codex" {
+		if _, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
+			return r.manageCodexCoordinator(owner, sess)
+		}
+	}
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	if lookup.Presence != session.Absent {
+		return fmt.Errorf("%s: launch requires proved absence", sess.session.Name)
+	}
 	component := sess.session.Component
+	if owner.set != nil {
+		if err := r.fenceHelpers(owner, "lease replacement"); err != nil {
+			return err
+		}
+	}
 	if owner.set != nil {
 		owner.st.Lease++
 	}
@@ -331,15 +439,28 @@ func (r *run) launch(owner *entity, sess *entity) error {
 			return err
 		}
 	}
+	if err := r.finishNativeBoundary(sess, false); err != nil {
+		return err
+	}
+	if owner.set != nil {
+		if err := r.reopenHelpers(owner); err != nil {
+			return err
+		}
+	}
 	if err := r.writeIndex(); err != nil {
 		return err
 	}
 	what := fmt.Sprintf("start %s on %s at %s effort", spec.Name, spec.Model, spec.Effort)
-	err = r.act(what, func(ctx context.Context) error { return r.d.Claude.Start(ctx, spec) })
+	err = r.act(what, func(ctx context.Context) error {
+		return r.runtimeFor(r.providerForEpic(owner.entry.Epic)).Start(ctx, spec)
+	})
 	if err != nil {
 		return err
 	}
 	markDelivered(sess, r.deliveries(owner))
+	if err := r.nativeBoundaryDelivered(sess); err != nil {
+		return err
+	}
 	if component == babysitterComponent {
 		return r.renewPRLine(owner)
 	}
@@ -347,10 +468,19 @@ func (r *run) launch(owner *entity, sess *entity) error {
 }
 
 // post gives a live session its new work through its socket.
-func (r *run) post(owner, sess *entity, s claude.Session, news []delivery) error {
-	text := r.wakePrompt(owner, sess.session.Component, news)
+func (r *run) post(owner, sess *entity, s session.Session, news []delivery) error {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	if lookup.Presence != session.Present {
+		return nil
+	}
+	if nativeBoundaryState(sess).pending() {
+		return nil
+	}
+	text := coordinatorText(s.Executor, r.wakePrompt(owner, sess.session.Component, news))
 	what := fmt.Sprintf("post %d new to %s (pid %d)", len(news), sess.session.Name, s.PID)
-	err := r.act(what, func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) })
+	err := r.act(what, func(ctx context.Context) error {
+		return r.runtimeFor(s.Executor).Post(ctx, deliveryRef(s.Ref, inboxDeliveryKey(sess, news)), text)
+	})
 	if err == nil {
 		markDelivered(sess, news)
 	}
@@ -363,30 +493,70 @@ func (r *run) post(owner, sess *entity, s claude.Session, news []delivery) error
 // so the resume does not run a second copy; a live one is posted to, never
 // resumed.
 func (r *run) wake(sess *entity) error {
+	if r.providerForEpic(sess.entry.Epic) == "codex" {
+		if _, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
+			owner := r.ents[sess.session.Task]
+			if owner == nil {
+				return fmt.Errorf("owner missing")
+			}
+			return r.manageCodexCoordinator(owner, sess)
+		}
+	}
+	if _, err := NativeSelection(r.d.Brain, sess.entry.Epic); err != nil {
+		return err
+	}
 	owner := r.ents[sess.session.Task]
 	if owner == nil {
 		return fmt.Errorf("owner %s is not indexed", sess.session.Task)
 	}
-	sess.st.NoPIDSince = time.Time{}
-	s, listed := r.findSession(sess.session.Name)
-	if !listed {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	switch lookup.Presence {
+	case session.Unknown, session.Quarantined:
+		return nil
+	case session.Absent:
 		return r.launch(owner, sess)
 	}
+	sess.st.NoPIDSince = time.Time{}
+	s := lookup.Session
+	if sess.enteredBy.From == sessionDead || (!s.Live() && s.State == listedWorking) {
+		b, err := r.beginNativeBoundary(sess, "restart", "wake:"+sess.id+":"+strconv.Itoa(sess.entered))
+		if err != nil {
+			return err
+		}
+		if b.intent.Seq != 0 {
+			if s.Live() {
+				return r.stopCoordinator(sess, s, b.intent.Key, "stop restarted coordinator before native authority transfer")
+			}
+			if s.State == listedWorking {
+				if err := r.act("stop restarting "+s.Name, func(ctx context.Context) error { return r.runtimeFor(s.Executor).Stop(ctx, s.Ref) }); err != nil {
+					return err
+				}
+				s.State = "stopped"
+			}
+		}
+	}
 	if s.Live() {
+		if b := nativeBoundaryState(sess); b.pending() {
+			return r.stopCoordinator(sess, s, b.intent.Key, "wait for native coordinator boundary stop")
+		}
 		return r.post(owner, sess, s, r.undelivered(owner, sess))
 	}
+	if err := r.finishNativeBoundary(sess, true); err != nil {
+		return err
+	}
 	news := r.unacknowledged(owner, sess)
-	prompt := r.resumePrompt(owner, sess.session.Component, news)
+	prompt := coordinatorText(s.Executor, r.resumePrompt(owner, sess.session.Component, news))
 	err := r.act("resume "+sess.session.Name, func(ctx context.Context) error {
 		if s.State == listedWorking {
-			if err := r.d.Claude.Stop(ctx, s.ID); err != nil {
+			if err := r.runtimeFor(s.Executor).Stop(ctx, s.Ref); err != nil {
 				return err
 			}
 		}
-		return r.d.Claude.Resume(ctx, s.ID, prompt)
+		return r.runtimeFor(s.Executor).Resume(ctx, deliveryRef(r.resumeRef(s), transitionDeliveryKey("wake", sess)), prompt)
 	})
 	if err == nil {
 		markDelivered(sess, news)
+		return r.nativeBoundaryDelivered(sess)
 	}
 	return err
 }
@@ -394,9 +564,33 @@ func (r *run) wake(sess *entity) error {
 // spec returns the session's launch spec: its name, its component's tier
 // and effort or the epic's overrides of them, the joined prompt file and the
 // helpers.
-func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (claude.Spec, error) {
+func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (session.Spec, error) {
 	component := sess.Component
 	ov := r.overrides(owner)
+	selection, err := executor.ReadSelection(r.d.Brain, owner.entry.Epic)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return session.Spec{}, err
+	}
+	if err == nil && (selection.Executor == "z" || selection.Executor == "codex") {
+		routes := selection.Routes[component]
+		if len(routes) != 1 || routes[0].Provider != coordinatorProvider(selection) || (selection.Executor == "z" && routes[0].Model != executor.ClaudeModel) {
+			return session.Spec{}, fmt.Errorf("invalid pinned top route")
+		}
+		dir := filepath.Join(store.Factory(r.d.Brain), "executors", owner.entry.Epic)
+		if !r.dry {
+			if _, _, err := agents.BuildFor(r.d.Brain, dir, r.b, ov.Tier); err != nil {
+				return session.Spec{}, err
+			}
+		}
+		effort := routes[0].Effort
+		if v, ok := ov.Effort[component]; ok {
+			if selection.Executor == "codex" && v != effort {
+				return session.Spec{}, fmt.Errorf("effort override conflicts with pinned Codex route")
+			}
+			effort = v
+		}
+		return session.Spec{EpicID: owner.entry.Epic, Generation: fmt.Sprintf("%s:%d:%s", owner.id, owner.st.Lease, component), Cwd: owner.entry.Dir, SelectionHash: selectionHash(selection), InstructionsHash: fileHash(agents.PromptPathFor(dir, component)), Name: sess.Name, Model: routes[0].Model, Effort: effort, PromptFile: agents.PromptPathFor(dir, component), Agents: "{}", Task: owner.id, GHToken: r.d.GHToken, AutoCompactPct: r.b.Values.Context.AutoCompactAt, AutoCompactWindow: r.b.Values.Context.Window, Prompt: coordinatorText(selection.Executor, prompt)}, nil
+	}
 	c := r.b.Components[component]
 	tier, effort := c.Tier, c.Effort
 	if t, ok := ov.Tier[component]; ok {
@@ -407,13 +601,13 @@ func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (claude.Sp
 	}
 	model, err := r.tiers.Model(tier, r.b.Deny.Models)
 	if err != nil {
-		return claude.Spec{}, fmt.Errorf("%s: %w", component, err)
+		return session.Spec{}, fmt.Errorf("%s: %w", component, err)
 	}
 	helpers, err := r.agentsFor(ov)
 	if err != nil {
-		return claude.Spec{}, err
+		return session.Spec{}, err
 	}
-	return claude.Spec{
+	return session.Spec{
 		Name:              sess.Name,
 		Model:             model,
 		Effort:            effort,
@@ -479,4 +673,14 @@ func (r *run) agentsFor(ov Overrides) (string, error) {
 		return "", err
 	}
 	return string(bytes.TrimSpace(buf.Bytes())), nil
+}
+
+func (r *run) quietTurnElapsed(e *entity, since time.Time) time.Duration {
+	if r.managedClock(e) {
+		if r.clockHeld(e) {
+			return 0
+		}
+		return r.eligibleElapsed(e, since).Eligible
+	}
+	return r.now.Sub(since)
 }

@@ -99,7 +99,8 @@ func (ix Index) Lookup(id string) (Entry, error) {
 // Status is an entity's status.json: a projection of its events, written by
 // the tick.
 type Status struct {
-	State string `json:"state"`
+	ExecutorHold string `json:"executor_hold,omitempty"`
+	State        string `json:"state"`
 	// Prev is the stack of states `to: previous` moves return to,
 	// innermost last.
 	Prev []string `json:"prev,omitempty"`
@@ -191,10 +192,14 @@ type Overall struct {
 	Errors []string `json:"errors,omitempty"`
 	// Holds are the recent times the account held work back, oldest first;
 	// the last has no To while it lasts. Clocks of held-back work skip them.
-	Holds []Hold `json:"holds,omitempty"`
+	Holds                []Hold                 `json:"holds,omitempty"`
+	AvailabilityHolds    []AvailabilityHold     `json:"availability_holds,omitempty"`
+	AvailabilityCoverage []AvailabilityCoverage `json:"availability_coverage,omitempty"`
 	// UnknownListings counts the ticks in a row whose session listing
 	// failed or came back empty while a session was expected.
 	UnknownListings int `json:"unknown_listings,omitempty"`
+	// Nil uses legacy observation rules; an empty map proves no provider known.
+	ProviderListings map[string]bool `json:"provider_listings"`
 	// PausedRepos are the repo@base branches whose checks were red: no new
 	// item starts in them.
 	PausedRepos []string `json:"paused_repos,omitempty"`

@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/agents"
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -368,7 +370,27 @@ func (r *run) startRepair(ep *store.RepairEpisode) error {
 		r.dm(recent[len(recent)-1], "repair-gave-up:"+episodeBase(*ep).String(), fmt.Sprintf("factory: repair gave up on %s: %s", episodeBase(*ep), strings.Join(ids, ", ")))
 		return nil
 	}
-	id := r.newEpicID()
+	id, err := r.newEpicID()
+	if err != nil {
+		return err
+	}
+	source := r.repairExecutorSource(ep.Repo, ep.Base)
+	if source != "" {
+		selected, err := NativeSelection(r.d.Brain, source)
+		if err != nil {
+			return err
+		}
+		if selected.Executor != "claude" {
+			selected.EpicID = id
+			selected.CreatedAt = r.now
+			if err = executor.WriteSelection(r.d.Brain, selected); err != nil {
+				return err
+			}
+			if _, _, err = agents.BuildFor(r.d.Brain, filepath.Join(store.Factory(r.d.Brain), "executors", id), r.b, nil); err != nil {
+				return err
+			}
+		}
+	}
 	in := &EpicInputs{ID: id, Kind: epicKindRepair, Repo: ep.Repo, Base: ep.Base, RepoHint: ep.Repo, Input: r.repairText(*ep, past), AddedAt: r.now}
 	dir := filepath.Join(store.Factory(r.d.Brain), "work", id)
 	e, err := r.create(id, store.Entry{Kind: blueprint.MachineEpic, Dir: dir, Epic: id}, in, blueprint.TriggerTick)
@@ -509,4 +531,24 @@ func baseCheckNames(checks []gh.BaseCheck) []string {
 		names = append(names, c.Name)
 	}
 	return names
+}
+
+func (r *run) repairExecutorSource(repo, base string) string {
+	var chosen *entity
+	for _, e := range r.ents {
+		if e.work == nil || !e.open() || e.work.Repo != repo || e.work.Base != base {
+			continue
+		}
+		epic := r.ents[e.entry.Epic]
+		if epic == nil || epic.epic == nil || !epic.open() {
+			continue
+		}
+		if chosen == nil || epic.epic.AddedAt.Before(chosen.epic.AddedAt) || (epic.epic.AddedAt.Equal(chosen.epic.AddedAt) && epic.id < chosen.id) {
+			chosen = epic
+		}
+	}
+	if chosen == nil {
+		return ""
+	}
+	return chosen.id
 }

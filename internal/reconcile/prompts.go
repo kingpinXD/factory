@@ -57,6 +57,9 @@ func (r *run) plannerPrompt(epic *entity, msgs []delivery) string {
 	if in.Path != "" {
 		fmt.Fprintf(&b, "plan file: %s\n", in.Path)
 	}
+	if in.PlanInputSHA256 != "" {
+		b.WriteString("Read the immutable accepted plan with factory_control {\"op\":\"plan_input\",\"payload\":{}}. Its sha256 must match inputs.plan_input_sha256; do not read the original external path.\n")
+	}
 	if in.RepoHint != "" {
 		fmt.Fprintf(&b, "repo hint: %s\n", in.RepoHint)
 	}

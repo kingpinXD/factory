@@ -9,11 +9,13 @@ import (
 // useSecretsToken sets GH_TOKEN from <brain>/connectors/secrets.env when
 // it is empty, as launchd starts the factory: launchd loses the keychain
 // after sleep, so gh would have no login. It prints nothing.
+var readSecretsFile = os.ReadFile
+
 func useSecretsToken(brain string) {
 	if os.Getenv("GH_TOKEN") != "" {
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(brain, "connectors", "secrets.env"))
+	data, err := readSecretsFile(filepath.Join(brain, "connectors", "secrets.env"))
 	if err != nil {
 		return
 	}

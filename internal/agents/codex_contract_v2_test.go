@@ -22,12 +22,12 @@ func TestCodexControlInstructionsUseTrustedVersionCatalogue(t *testing.T) {
 				t.Fatalf("%s has independent catalogue instructions", name)
 			}
 		}
-		for _, operation := range []string{"issue_create", "issue_assign", "pr_create", "pr_ready"} {
+		for _, operation := range []string{"issue_create", "issue_assign", "pr_create", "pr_ready", "effect_prepare", "effect_result"} {
 			if strings.Contains(text, `op="`+operation+`"`) {
 				t.Fatalf("contract2 instructions advertise direct write %s", operation)
 			}
 		}
-		if !strings.Contains(text, "Factory owns GitHub credentials and all GitHub writes") || !strings.Contains(text, "Do not request Slack reviews") {
+		if !strings.Contains(text, "Factory automatically publishes verified commits and babysitter revisions") || !strings.Contains(text, "Factory owns GitHub credentials and all GitHub writes") || !strings.Contains(text, "Do not request Slack reviews") {
 			t.Fatal("publication boundary missing")
 		}
 	}

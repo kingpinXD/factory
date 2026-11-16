@@ -15,7 +15,7 @@ func CodexControlInstructions(version int, helper bool) string {
 	if version != 2 {
 		return ""
 	}
-	text := "\nThe stored Factory contract is version 2. The advertised catalogue defines the available operations. Factory owns GitHub credentials and all GitHub writes. Repository helpers write code and local commits in the contained workspace. Coordinators request publication through effect_prepare using a declared proposal file and inspect effect_result. Keep the proposal and actual selected source unchanged while an operation is unresolved. An unavailable result is unknown evidence; it does not prove absence or authorize a repeated write. Do not request Slack reviews.\n"
+	text := "\nThe stored Factory contract is version 2. The advertised catalogue defines the available operations. Factory owns GitHub credentials and all GitHub writes. Repository helpers write code and local commits in the contained workspace. Factory automatically publishes verified commits and babysitter revisions. PR openers write title and body only. An unavailable result is unknown evidence; it does not prove absence or authorize a repeated write. Do not request Slack reviews.\n"
 	names := []string{toolcontract.FactoryControl}
 	if helper {
 		names = []string{toolcontract.FactoryHelper, toolcontract.ManagedFiles, toolcontract.ManagedTerminal}

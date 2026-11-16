@@ -23,7 +23,6 @@ const (
 )
 
 var coordinatorEvents = events.CoordinatorEventKinds()
-var effectKinds = []string{"issue_create", "issue_attach", "issue_update", "issue_comment", "issue_assign", "issue_close", "branch_push", "pr_create", "pr_ready", "pr_reply", "pr_resolve"}
 var epicReferences = []string{"DESIGN.md", "PLAN.md", "GOTCHAS.md"}
 var replyKinds = []string{"thread", "comment", "review"}
 
@@ -100,8 +99,6 @@ func allDefinitions(tool string) []definition {
 			contract("file_read", "target path", "path", `{"path":"inputs.yaml"}`, controlInput),
 			contract("file_write", "target path text append", "path text", `{"path":"checkpoint.v1.md","text":"working"}`, controlInput),
 			contract("event", "target kind path text key to", "kind", `{"kind":"message","text":"Question","to":"user"}`, controlInput),
-			contract("effect_prepare", "kind proposal_path", "kind proposal_path", `{"kind":"issue_create","proposal_path":"producer.v1.json"}`, func() Input { return &EffectPrepareInput{} }),
-			contract("effect_result", "slot_id", "slot_id", `{"slot_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, func() Input { return &EffectResultInput{} }),
 			contract("query", "repo base", "repo", `{"repo":"owner/repo"}`, issueInput),
 			readContract("issue_read", "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, issueInput),
 			readContract("issue_children", "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, issueInput),
@@ -125,11 +122,6 @@ func allDefinitions(tool string) []definition {
 			readContract("github_file", "repo base path", "repo path", `{"repo":"owner/repo","path":"README.md"}`, githubInput),
 			readContract("github_runs", "repo base", "repo", `{"repo":"owner/repo"}`, githubInput),
 		)
-		for n := range out {
-			if out[n].operation == "effect_prepare" || out[n].operation == "effect_result" {
-				out[n].first = 2
-			}
-		}
 		return out
 	}
 	return nil
@@ -337,22 +329,6 @@ func validateInput(op string, in Input, raw map[string]json.RawMessage, required
 		}
 		if len(p.Title) > 16384 || len(p.Body) > ControlLimit {
 			return fmt.Errorf("issue payload exceeds limit")
-		}
-	case *EffectPrepareInput:
-		if !slices.Contains(effectKinds, p.Kind) {
-			return fmt.Errorf("unsupported effect kind")
-		}
-		if strings.TrimSpace(p.ProposalPath) != p.ProposalPath || p.ProposalPath == "" || strings.ContainsAny(p.ProposalPath, "\x00\r\n") {
-			return fmt.Errorf("declared proposal path required")
-		}
-	case *EffectResultInput:
-		if len(p.SlotID) != 64 {
-			return fmt.Errorf("invalid effect slot")
-		}
-		for _, c := range p.SlotID {
-			if !strings.ContainsRune("0123456789abcdef", c) {
-				return fmt.Errorf("invalid effect slot")
-			}
 		}
 	case *GitHubReadInput:
 		if err := validateRepo(p.Repo); err != nil {

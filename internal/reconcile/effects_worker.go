@@ -113,7 +113,7 @@ func (p ProgramEffects) QueueLocked(ctx context.Context, r effects.Receipt) (eff
 	if err != nil {
 		return effects.EventRef{}, err
 	}
-	if err := p.validateAdmission(ctx, a, false, true); err != nil {
+	if err := p.validateAdmission(ctx, a); err != nil {
 		return effects.EventRef{}, err
 	}
 	ref, err := p.effectQueue(r)
@@ -213,7 +213,7 @@ func (p ProgramEffects) TransferBlockersLocked(ctx context.Context, owner string
 		if err != nil {
 			return out, err
 		}
-		if err := p.validateAdmission(ctx, a, false, true); err != nil {
+		if err := p.validateAdmission(ctx, a); err != nil {
 			return out, err
 		}
 		out.Actions = append(out.Actions, effectActionRef(r))
@@ -258,7 +258,7 @@ func (p ProgramEffects) transferWorkBlockersLocked(ctx context.Context, scope he
 		if err != nil {
 			return out, err
 		}
-		if err := p.validateAdmission(ctx, admission, false, true); err != nil {
+		if err := p.validateAdmission(ctx, admission); err != nil {
 			return out, err
 		}
 		if admission.Work == nil || admission.Work.Authorization() != scope.Authorization() || admission.Authority.OwnerID != scope.OwnerID || admission.Authority.EpicID != scope.EpicID {
@@ -285,7 +285,7 @@ func (p ProgramEffects) transferWorkBlockersLocked(ctx context.Context, scope he
 			if err != nil {
 				return out, err
 			}
-			if err := p.validateAdmission(ctx, admission, false, true); err != nil {
+			if err := p.validateAdmission(ctx, admission); err != nil {
 				return out, err
 			}
 			if record.LogicalRevision != admission.Authority.Revision || record.InputSHA256.String() != receipt.Prepared.PayloadHash {
@@ -335,7 +335,7 @@ func (s factoryEffectSupervision) Current(ctx context.Context, r effects.Receipt
 	if err != nil {
 		return out, err
 	}
-	if err := s.p.validateAdmission(ctx, a, false, true); err != nil {
+	if err := s.p.validateAdmission(ctx, a); err != nil {
 		return out, err
 	}
 	// No ledger reentry: the caller supplies the actual receipt it is settling.
@@ -420,7 +420,7 @@ func ClaimEffectDispatcher(ctx context.Context, brain, claimID, nonce string) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := p.validateAdmission(ctx, a, false, true); err != nil {
+	if err := p.validateAdmission(ctx, a); err != nil {
 		return nil, err
 	}
 	if physical.Mode == "execute" {
@@ -572,7 +572,7 @@ func runEffectJobs(ctx context.Context, brain string, out io.Writer) error {
 				}
 				a, e := p.readAdmission(r.Prepared)
 				if e == nil {
-					e = p.validateAdmission(ctx, a, false, true)
+					e = p.validateAdmission(ctx, a)
 				}
 				if e == nil {
 					_, e = p.effectQueue(r)
@@ -586,7 +586,7 @@ func runEffectJobs(ctx context.Context, brain string, out io.Writer) error {
 			for _, r := range pending {
 				a, e := p.readAdmission(r.Prepared)
 				if e == nil {
-					e = p.validateAdmission(ctx, a, false, true)
+					e = p.validateAdmission(ctx, a)
 				}
 				if e == nil {
 					_, e = p.QueueLocked(ctx, r)
@@ -657,7 +657,7 @@ func (p ProgramEffects) runEffectJob(ctx context.Context, expected effects.Recei
 	}
 	a, err := p.readAdmission(r.Prepared)
 	if err == nil {
-		err = p.validateAdmission(ctx, a, false, true)
+		err = p.validateAdmission(ctx, a)
 	}
 	if err != nil {
 		_ = unlock()
@@ -745,7 +745,7 @@ func (p ProgramEffects) finishEffectProcess(ctx context.Context, physical codex.
 		a, e := p.readAdmission(r.Prepared)
 		err = e
 		if err == nil {
-			err = p.validateAdmission(ctx, a, false, true)
+			err = p.validateAdmission(ctx, a)
 		}
 	}
 	if err == nil && physical.Host == (codex.ProcessIdentity{}) && (r.Claim.ID == physical.ClaimID || r.DispatcherClaim == physical.ClaimID) {

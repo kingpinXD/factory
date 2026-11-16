@@ -145,8 +145,6 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 				return nil, effects.ErrEvidence
 			}
 			controlInput = pre.Coordinator.Ingress.Input
-		} else if !localControlV2(envelope.Op, input) {
-			return nil, fmt.Errorf("%w: concrete %s control integration is required", reconcile.ErrCodexIntegration, envelope.Op)
 		} else {
 			controlInput, err = localControlInputV2(ctx, brain, spec, original, input)
 			if err != nil {
@@ -165,7 +163,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if localControlV2(envelope.Op, input) {
 		localProof, localSnapshot, err = controlrecord.FindReplySnapshot(brain, originalRef)
 		if errors.Is(err, os.ErrNotExist) {
-			value, readErr := readLocalControlV2(ctx, brain, spec, programme, envelope, input)
+			value, readErr := scopedCoordinatorControl(ctx, brain, spec, controlRequest{Op: envelope.Op, Payload: envelope.Payload})
 			if readErr != nil {
 				value, readErr = correctedControlReply(readErr)
 				if readErr != nil {
@@ -341,7 +339,7 @@ func recheckControlV2(ctx context.Context, brain string, id effects.ControlID, s
 }
 func localControlV2(op string, input toolcontract.Input) bool {
 	switch op {
-	case "brain_read", "plan_input", "epic_file", "events", "lease_check", "file_read", "query", "helper_result", "effect_result":
+	case "brain_read", "plan_input", "epic_file", "events", "lease_check", "file_read", "query", "helper_result":
 		return true
 	case "inbox":
 		p, ok := input.(*toolcontract.ControlInput)
@@ -417,20 +415,6 @@ func correctedControlReply(err error) (any, error) {
 		return toolcontract.ToolFailure{ToolError: input.Message}, nil
 	}
 	return nil, err
-}
-
-func readLocalControlV2(ctx context.Context, brain string, spec session.Spec, programme reconcile.ProgramEffects, envelope toolcontract.Envelope, input toolcontract.Input) (any, error) {
-	if request, ok := input.(*toolcontract.EffectResultInput); ok {
-		receipt, err := programme.Service().Result(ctx, request.SlotID)
-		if err != nil {
-			return nil, err
-		}
-		if receipt.Prepared.Slot.OwnerID != spec.Task || receipt.Prepared.Slot.EpicID != spec.EpicID {
-			return nil, effects.ErrAuthority
-		}
-		return receipt, nil
-	}
-	return scopedCoordinatorControl(ctx, brain, spec, controlRequest{Op: envelope.Op, Payload: envelope.Payload})
 }
 
 func helperControlV2(ctx context.Context, brain, id string, generation, round int, data []byte) (any, error) {

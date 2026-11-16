@@ -60,12 +60,6 @@ type issueInput struct {
 	existing                                                                          []int64
 }
 
-// ValidateIssuePayload is local-only and may run under the owner/ledger guard.
-func ValidateIssuePayload(p Prepared, origin Origin) error {
-	_, err := decodeIssueInput(Receipt{Prepared: p, Origin: origin})
-	return err
-}
-
 func decodeIssueInput(r Receipt) (issueInput, error) {
 	p := r.Prepared
 	id, err := p.Slot.ID()

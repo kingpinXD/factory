@@ -137,16 +137,3 @@ type PRActionInput struct {
 }
 
 func (*PRActionInput) contractInput() {}
-
-type EffectPrepareInput struct {
-	Kind         string `json:"kind"`
-	ProposalPath string `json:"proposal_path"`
-}
-
-func (*EffectPrepareInput) contractInput() {}
-
-type EffectResultInput struct {
-	SlotID string `json:"slot_id"`
-}
-
-func (*EffectResultInput) contractInput() {}

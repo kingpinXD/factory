@@ -34,12 +34,6 @@ func operationSchema(d definition, tool string) map[string]any {
 		if tool == FactoryHelper && name == "text" {
 			field["maxLength"] = EventTextLimit
 		}
-		if op == "effect_prepare" && name == "kind" {
-			field["enum"] = slices.Clone(effectKinds)
-		}
-		if op == "effect_result" && name == "slot_id" {
-			field["pattern"] = "^[0-9a-f]{64}$"
-		}
 		if op == "event" && name == "kind" {
 			field["enum"] = slices.Clone(coordinatorEvents)
 		}

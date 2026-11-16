@@ -570,7 +570,7 @@ func TestIssueAdapterRejectsMalformedPayloadAndObservation(t *testing.T) {
 		r := original
 		r.Prepared.Payload = []byte(bad)
 		r.Prepared.PayloadHash = Digest(sha256.Sum256([]byte(bad))).String()
-		if err := ValidateIssuePayload(r.Prepared, r.Origin); err == nil {
+		if _, err := decodeIssueInput(r); err == nil {
 			t.Fatalf("bad payload accepted %s", bad)
 		}
 	}
@@ -621,7 +621,7 @@ func TestIssueAdapterCreateReceiptHashIsCheckedLocally(t *testing.T) {
 	origin := r.Origin
 	r = receiptPayload(r.Prepared.Slot, p)
 	r.Origin = origin
-	if ValidateIssuePayload(r.Prepared, r.Origin) == nil {
+	if _, err := decodeIssueInput(r); err == nil {
 		t.Fatal("altered historical receipt was accepted before admission")
 	}
 }

@@ -32,12 +32,9 @@ func TestContractTwoUsesOneCatalogueWithoutDirectMutations(t *testing.T) {
 		}
 	}
 	for _, op := range []string{"effect_prepare", "effect_result"} {
-		if !slices.Contains(v2, op) || slices.Contains(Operations(FactoryControl), op) {
-			t.Fatalf("effect version boundary: %s", op)
-		}
-		for _, tool := range []string{FactoryHelper, ManagedFiles, ManagedTerminal} {
-			if slices.Contains(OperationsForContract(tool, 2), op) {
-				t.Fatalf("helper effect grant: %s", tool)
+		for _, version := range []int{1, 2} {
+			if slices.Contains(OperationsForContract(FactoryControl, version), op) || strings.Contains(HelpForContract(FactoryControl, version), op) {
+				t.Fatalf("obsolete effect operation advertised: %s contract %d", op, version)
 			}
 		}
 	}
@@ -46,14 +43,13 @@ func TestContractTwoUsesOneCatalogueWithoutDirectMutations(t *testing.T) {
 	}
 }
 
-func TestEffectInputCannotSupplyAuthorityOrTarget(t *testing.T) {
-	for _, raw := range []string{`{"kind":"issue_create","proposal_path":"proposal.json","repo":"o/r"}`, `{"kind":"issue_create","proposal_path":"proposal.json","actor":"me"}`, `{"kind":"unsupported","proposal_path":"proposal.json"}`, `{"kind":"issue_create","proposal_path":""}`, `{"slot_id":"arbitrary"}`} {
-		op := "effect_prepare"
-		if strings.Contains(raw, "slot_id") {
-			op = "effect_result"
-		}
-		if _, err := DecodeInputForContract(FactoryControl, op, 2, json.RawMessage(raw)); err == nil {
-			t.Fatalf("untrusted effect descriptor accepted: %s", raw)
+func TestContractTwoRejectsObsoleteEffectRequests(t *testing.T) {
+	for op, payload := range map[string]string{
+		"effect_prepare": `{"kind":"pr_create","proposal_path":"publication.json"}`,
+		"effect_result":  `{"slot_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`,
+	} {
+		if _, err := DecodeInputForContract(FactoryControl, op, 2, json.RawMessage(payload)); err == nil {
+			t.Fatalf("obsolete effect request decoded: %s", op)
 		}
 	}
 }

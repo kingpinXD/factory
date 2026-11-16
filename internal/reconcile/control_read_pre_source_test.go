@@ -115,6 +115,9 @@ func TestControlReadPreSourcePreservesExplicitCompatibilityTargetAndRefusesRebin
 	}
 }
 func TestControlReadHelperPreSourceUsesActualJobAndNoCoordinatorEnrollment(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, service, job, req := realHelperReadSourceFixture(t)
 	release, err := store.Lock(w.brain, "tick")
 	if err != nil {
@@ -175,7 +178,6 @@ func TestControlReadNoActionReceiptCompletesActualControlWithoutInventingResult(
 		if alive, err := observed.Host.Alive(); err != nil || alive {
 			t.Fatal("original writer not actually stopped", alive, err)
 		}
-		due := observed.Recovery.NextCheckAt
 		if err := runtime.Recover(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -183,10 +185,11 @@ func TestControlReadNoActionReceiptCompletesActualControlWithoutInventingResult(
 		if err := store.ReadJSON(statePath, &beforeDue); err != nil || beforeDue.Revision != observed.Revision {
 			t.Fatal("same attempt advanced before actual due", err)
 		}
-		t.Logf("actual physical stop hold resumes same attempt at %s", due)
-		timer := time.NewTimer(time.Until(due))
-		defer timer.Stop()
-		<-timer.C
+		if err := makeFixtureCodexRecoveryDue(context.Background(), w.brain, runtime, attempt, func() error {
+			return runtime.Recover(context.Background())
+		}); err != nil {
+			t.Fatal("actual control-read hold did not become due fixture", err)
+		}
 		closeErr = runtime.Recover(context.Background())
 		var afterDue codex.Record
 		if err := store.ReadJSON(statePath, &afterDue); err != nil || afterDue.AttemptID != attempt.AttemptID || afterDue.Stage != "sealing" || !reflect.DeepEqual(afterDue.Seal, observed.Seal) || afterDue.Recovery == nil || afterDue.Recovery.Reason != "effects_unsettled" {
@@ -245,6 +248,9 @@ func (a outputFixtureAuthority) ValidateControlReadInputAbsentLocal(ctx context.
 }
 
 func TestControlReadInputAbsenceCompleteRequiresActualRetainedSourceProjection(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, mutation := range []string{"valid", "canonical-admission", "read-target", "request-id"} {
 		t.Run(mutation, func(t *testing.T) {
 			fixture := actualInputPreSourceFixture(t, "c2-absence-complete-"+mutation)

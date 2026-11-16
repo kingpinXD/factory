@@ -26,13 +26,20 @@ import (
 
 func nativeBaseWorld(t *testing.T) (*world, helper.Service, helper.Request) {
 	t.Helper()
-	w := newWorld(t)
+	return nativeBaseWorldWithBrainEnv(t, true)
+}
+
+func nativeBaseWorldWithBrainEnv(t *testing.T, setBrainEnv bool) (*world, helper.Service, helper.Request) {
+	t.Helper()
+	w := newWorldWithBrainEnv(t, setBrainEnv)
 	real, err := filepath.EvalSymlinks(w.brain)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w.brain = real
-	t.Setenv("FACTORY_BRAIN", real)
+	if setBrainEnv {
+		t.Setenv("FACTORY_BRAIN", real)
+	}
 	w.epic("e1", "planned")
 	w.set("e1", "e1-s1", "running", "e1-w1")
 	w.item("e1", "e1-s1", "e1-w1", "implementing")

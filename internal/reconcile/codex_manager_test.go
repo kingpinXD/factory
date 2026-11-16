@@ -136,6 +136,8 @@ func ordinaryManagerFixture(t *testing.T) (*world, *run, *codex.Runtime, *entity
 		if role == "provider" && os.Getenv("FACTORY_E6_ADVANCE_TURNS") == "1" {
 			fixtureEnv = "export FACTORY_E6_ADVANCE_TURNS=1\n"
 		}
+		// Only fixture children skip the race detector exit delay; the parent keeps its settings.
+		fixtureEnv += "export GORACE=" + quote(os.Getenv("GORACE")+" atexit_sleep_ms=0") + "\n"
 		put(t, filepath.Join(w.brain, "s6-"+role), "#!/bin/sh\n"+fixtureEnv+"exec "+quote(binary)+" "+command+" \"$@\"\n")
 		if err = os.Chmod(filepath.Join(w.brain, "s6-"+role), 0700); err != nil {
 			t.Fatal(err)
@@ -279,11 +281,12 @@ func TestOrdinaryManagerRecoversTwoActualFailedHostsWithoutChangingAuthority(t *
 		if err != nil || current.Stage != "claimed" {
 			t.Fatal("actual child did not claim", err)
 		}
-		// The real driver records its own terminal Failure before exiting.
+		// Wait for the failed fixture process to exit before testing manager recovery.
+		// Its terminal journal can appear before its race-instrumented process exits.
 		state := filepath.Join(store.Factory(w.brain), "codex/sessions", prior.SessionID, "attempts", prior.AttemptID, "state.json")
 		for time.Now().Before(deadline) {
 			var record codex.Record
-			if store.ReadJSON(state, &record) == nil && record.Failure != nil {
+			if store.ReadJSON(state, &record) == nil && record.Failure != nil && codex.VerifyOwnedProcessGroupGone(record.Host) == nil {
 				break
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -293,14 +296,7 @@ func TestOrdinaryManagerRecoversTwoActualFailedHostsWithoutChangingAuthority(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if current.Stage != "closed" && !current.NextCheckAt.IsZero() {
-			t.Logf("actual closure due after initial hold: %v at %s", recoveryErr, current.NextCheckAt)
-			for time.Now().Before(current.NextCheckAt) {
-				time.Sleep(10 * time.Millisecond)
-			}
-			recoveryErr = rt.RecoverAttempts(r.ctx)
-			current, err = rt.InspectCoordinatorAttemptByName(r.ctx, name)
-		}
+
 		if err != nil || recoveryErr != nil || current.Stage != "closed" {
 			t.Fatalf("actual same-attempt closure: %+v %v %v", current, err, recoveryErr)
 		}

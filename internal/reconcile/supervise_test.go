@@ -539,7 +539,14 @@ func TestAPlannerTimingOutThreeTimesWaitsForTheUser(t *testing.T) {
 			w.append(w.dir("e1"), events.Event{At: w.now, Kind: events.KindIntent, Sender: "e1", Text: "comment on o/r#12"})
 			w.append(w.dir("e1"), events.Event{At: w.now, Kind: events.KindDone, Sender: "e1", Text: "comment on o/r#12"})
 		}
-		w.tick(false)
+		// Keep the full activity history, and observe each timeout and its recovery.
+		if m == 0 || m%120 >= 119 || m%120 <= 2 || m == 419 {
+			w.tick(false)
+			wantStops := min(m/120, 3)
+			if got := len(w.called("claude stop")); got != wantStops {
+				t.Fatalf("at %dm stops = %d, want %d", m, got, wantStops)
+			}
+		}
 		w.now = w.now.Add(time.Minute)
 	}
 	if got := w.called("claude stop"); len(got) != 3 {

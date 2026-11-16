@@ -299,11 +299,15 @@ func TestSupervisorActualRequestClosesOutsideTickAndManagerSelectsSuccessor(t *t
 			changedAfterSeal = true
 		}
 		if !view.NextCheckAt.IsZero() && time.Now().Before(view.NextCheckAt) {
-			time.Sleep(10 * time.Millisecond)
+			if err := makeFixtureCodexRecoveryDue(context.Background(), w.brain, rt, request.Attempt, func() error {
+				return recoverRequestedCoordinators(context.Background(), w.brain, rt)
+			}); err != nil {
+				t.Fatal("actual supervisor hold did not become due fixture", err)
+			}
 			continue
 		}
 		// This is the ordinary pre-tick consumer. No tick lock surrounds its
-		// actual stop/fence, and saved retry times are never changed.
+		// actual stop/fence. The fixture advances retry time only after proving death.
 		lastError = recoverRequestedCoordinators(context.Background(), w.brain, rt)
 	}
 	if view.Stage != "closed" {
@@ -358,6 +362,9 @@ func TestSupervisorActualRequestClosesOutsideTickAndManagerSelectsSuccessor(t *t
 }
 
 func TestSupervisorActualCurrentSourceGuardMatrix(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, scenario := range []string{"same_timestamp_progress", "closed_hold_overlap", "policy", "pending_command"} {
 		t.Run(scenario, func(t *testing.T) {
 			w, _, rt, id, request := genuineSupervisorRequest(t)

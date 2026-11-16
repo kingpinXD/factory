@@ -190,6 +190,9 @@ func TestUnadmittedActualOutputEnrollmentCrashRecoversWithoutPreparing(t *testin
 }
 
 func TestUnadmittedActualSourceRejectsMissingLedgerAndForeignClosure(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, kind := range []string{"missing-ledger", "corrupt-ledger", "foreign-attempt", "changed-enrollment", "missing-witness"} {
 		t.Run(kind, func(t *testing.T) {
 			w, service, req := enrolledOutputCut(t)

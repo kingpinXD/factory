@@ -73,6 +73,9 @@ func TestManagedBrokerSourceChild(t *testing.T) {
 }
 
 func TestManagedBrokerActualDriverKillRecoversOnlyCommittedAdmission(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, cut := range []string{"before-admit", "after-commit"} {
 		t.Run(cut, func(t *testing.T) {
 			w, service, parent, request := realHelperReadSourceFixture(t)
@@ -152,6 +155,9 @@ func TestManagedBrokerActualDriverKillRecoversOnlyCommittedAdmission(t *testing.
 }
 
 func TestManagedBrokerActualParallelChildrenAndYieldReceipts(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, service, parent, request := realHelperReadSourceFixture(t)
 	children := []string{}
 	for _, key := range []string{"area-one", "area-two"} {

@@ -52,7 +52,17 @@ func realReadSourceFixture(t *testing.T) (*world, *codex.Runtime, codex.AttemptR
 }
 func realReadSourceFixtureWithSetup(t *testing.T, setup func(*world)) (*world, *codex.Runtime, codex.AttemptRef, ControlReadRequest) {
 	t.Helper()
-	w, r, _ := b2World(t)
+	return readSourceFixtureWithBrainEnv(t, true, setup)
+}
+
+func isolatedReadSourceFixture(t *testing.T) (*world, *codex.Runtime, codex.AttemptRef, ControlReadRequest) {
+	t.Helper()
+	return readSourceFixtureWithBrainEnv(t, false, nil)
+}
+
+func readSourceFixtureWithBrainEnv(t *testing.T, setBrainEnv bool, setup func(*world)) (*world, *codex.Runtime, codex.AttemptRef, ControlReadRequest) {
+	t.Helper()
+	w, r, _ := b2WorldWithBrainEnv(t, setBrainEnv)
 	if setup != nil {
 		setup(w)
 	}
@@ -83,7 +93,8 @@ func realReadSourceFixtureWithSetup(t *testing.T, setup func(*world)) (*world, *
 }
 
 func TestControlReadSourceBuildsFromActualClaimedCallAndRetainsAfterDeath(t *testing.T) {
-	w, runtime, ref, req := realReadSourceFixture(t)
+	t.Parallel()
+	w, runtime, ref, req := isolatedReadSourceFixture(t)
 	ctx := context.Background()
 	admission, err := buildControlReadLocked(ctx, w.brain, req, b2Qualification)
 	if err != nil {
@@ -118,7 +129,8 @@ func TestControlReadSourceBuildsFromActualClaimedCallAndRetainsAfterDeath(t *tes
 }
 
 func TestControlReadSourceRejectsForeignIdentityAndDerivedInputMutation(t *testing.T) {
-	w, _, _, req := realReadSourceFixture(t)
+	t.Parallel()
+	w, _, _, req := isolatedReadSourceFixture(t)
 	ctx := context.Background()
 	admission, err := buildControlReadLocked(ctx, w.brain, req, b2Qualification)
 	if err != nil {
@@ -255,6 +267,9 @@ func realHelperReadSourceFixtureWithSetup(t *testing.T, setup func(*world)) (*wo
 }
 
 func TestControlReadSourceUsesActualRunningHelperWithoutCoordinatorEnrollment(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, job, req := realHelperReadSourceFixture(t)
 	admission, err := buildControlReadLocked(context.Background(), w.brain, req, b2Qualification)
 	if err != nil {

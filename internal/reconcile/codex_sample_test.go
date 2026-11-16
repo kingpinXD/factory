@@ -161,6 +161,9 @@ links:
 // repository-worker responses and GitHub. It does not implement sample code or
 // claim a provider-backed sample epic passed.
 func TestCodexSampleEpicSimulationPreservesDependenciesAndMergeChecks(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, runtime := codexSampleWorld(t)
 	tick := func() {
 		t.Helper()

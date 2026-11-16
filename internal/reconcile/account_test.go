@@ -575,9 +575,13 @@ func TestAnIdleFactoryKeepsItsAccountState(t *testing.T) {
 	w.realAccount()
 	w.listSession("someone-else", 4103, "working")
 	w.usage("u1", t0, 30, 40, t0.Add(5*time.Hour), t0.Add(72*time.Hour))
-	for m := range 180 {
+	// Sample each stale/pause boundary and the end of the idle period.
+	for _, m := range []int{0, 1, 14, 15, 16, 44, 45, 46, 89, 90, 91, 134, 135, 136, 179} {
 		w.at(time.Duration(m) * time.Minute)
 		w.tickAccount()
+		if st := w.accountStatus(); st.State != stateOK || st.Usage == nil || !st.Usage.WrittenAt.Equal(t0) {
+			t.Fatalf("idle at minute %d: account = %+v, want ok with the original figure", m, st)
+		}
 	}
 	if got := w.accountMoves(); !reflect.DeepEqual(got, []string{"→ok"}) {
 		t.Fatalf("account moves = %v, want none while the factory is idle", got)
@@ -651,14 +655,24 @@ func TestAStaleAccountDoesNotPauseWhileTheFactoryIsIdle(t *testing.T) {
 	w.failProbe(true)
 	w.epic("e1", stateNeedsYou)
 	w.usage("u1", t0, 30, 40, t0.Add(5*time.Hour), t0.Add(72*time.Hour))
-	for m := range 26 {
+	for _, m := range []int{0, 14, 15, 25} {
 		w.at(time.Duration(m) * time.Minute)
 		w.tickAccount()
+		want := stateOK
+		if m >= 15 {
+			want = "stale"
+		}
+		if st := w.accountStatus(); st.State != want {
+			t.Fatalf("active at minute %d: account = %s, want %s", m, st.State, want)
+		}
 	}
 	w.append(w.dir("e1"), events.Event{Kind: events.KindTransition, At: w.now, From: stateNeedsYou, To: "cancelled", Trigger: "user", TriggerRef: "fixture"})
-	for m := 26; m < 180; m++ {
+	for _, m := range []int{26, 27, 44, 45, 46, 89, 90, 179} {
 		w.at(time.Duration(m) * time.Minute)
 		w.tickAccount()
+		if st := w.accountStatus(); st.State != "stale" || !st.Since.Equal(t0.Add(15*time.Minute)) || !st.HeldSince.Equal(t0.Add(26*time.Minute)) {
+			t.Fatalf("idle at minute %d: account = %+v, want stale since minute 15 with its clock held since minute 26", m, st)
+		}
 	}
 	if got := w.accountMoves(); !reflect.DeepEqual(got, []string{"→ok", "ok→stale"}) {
 		t.Fatalf("account moves = %v, want stale and no pause while idle", got)
@@ -667,9 +681,12 @@ func TestAStaleAccountDoesNotPauseWhileTheFactoryIsIdle(t *testing.T) {
 	// Stale from t0+15m until the first idle tick at t0+26m: 19 of its 30
 	// minutes are left.
 	w.epic("e2", stateNeedsYou)
-	for m := 180; m < 199; m++ {
+	for _, m := range []int{180, 198} {
 		w.at(time.Duration(m) * time.Minute)
 		w.tickAccount()
+		if st := w.accountStatus(); st.State != "stale" || st.Held != 154*time.Minute || !st.HeldSince.IsZero() {
+			t.Fatalf("resumed at minute %d: account = %+v, want stale with 154 idle minutes excluded", m, st)
+		}
 	}
 	if got := w.accountMoves(); last(got) != "ok→stale" {
 		t.Fatalf("account moves = %v, want still stale 18 minutes into the open work", got)

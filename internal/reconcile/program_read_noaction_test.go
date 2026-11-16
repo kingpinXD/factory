@@ -100,6 +100,9 @@ func TestProgrammeReadClosedBeforeSelectionHasDistinctNoActionFact(t *testing.T)
 }
 
 func TestProgrammeReadNoActionRejectsUnknownPhysicalHistory(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, which := range []string{"raw-temp", "corrupt", "selected"} {
 		t.Run(which, func(t *testing.T) {
 			w, runtime, attempt, a, ref := noactionReadFixture(t)
@@ -307,6 +310,9 @@ func TestProgrammeReadExpirySettlesAfterActualProposerTurnAdvances(t *testing.T)
 }
 
 func TestProgrammeReadNoActionUsesExistingNonExecutableTempClassification(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, which := range []string{"private", "public", "symlink", "hardlink", "unknown"} {
 		t.Run(which, func(t *testing.T) {
 			w, runtime, attempt, a, ref := noactionReadFixture(t)
@@ -375,6 +381,9 @@ func TestProgrammeReadNoActionUsesExistingNonExecutableTempClassification(t *tes
 }
 
 func TestProgrammeReadHelperNoActionUsesActualClosedGenerationFence(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, service, job, source := realHelperReadSourceFixtureWithSetup(t, normalReadExecutablePins(t))
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -503,6 +512,9 @@ func TestProgrammeReadHelperNoActionUsesActualClosedGenerationFence(t *testing.T
 }
 
 func TestProgrammeReadCurrentHelperGuardRechecksRepositoryPolicy(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, _, source := realHelperReadSourceFixtureWithSetup(t, normalReadExecutablePins(t))
 	a, err := buildControlReadLocked(context.Background(), w.brain, source, b2Qualification)
 	if err != nil {

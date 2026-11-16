@@ -104,7 +104,11 @@ func TestTerminalStopActualPreTickClosesOriginalAndNeverSelectsSuccessor(t *test
 			break
 		}
 		if !view.NextCheckAt.IsZero() && time.Now().Before(view.NextCheckAt) {
-			time.Sleep(10 * time.Millisecond)
+			if err := makeFixtureCodexRecoveryDue(context.Background(), w.brain, rt, original.Ref, func() error {
+				return recoverModernCoordinators(context.Background(), d)
+			}); err != nil {
+				t.Fatal("actual terminal hold did not become due fixture", err)
+			}
 			continue
 		}
 		last = recoverModernCoordinators(context.Background(), d)

@@ -471,13 +471,10 @@ func TestFactoryRequestedPhysicalFenceDoesNotHoldTick(t *testing.T) {
 		if readErr != nil || view.NextCheckAt.IsZero() || view.Stage != "sealing" {
 			t.Fatal("unknown physical closure not retained", view, readErr)
 		}
-		t.Logf("same request waits for actual persisted physical due time %s", view.NextCheckAt)
-		timer := time.NewTimer(time.Until(view.NextCheckAt))
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+		if err := makeFixtureCodexRecoveryDue(ctx, w.brain, runtime, ref, func() error {
+			return recoverRequestedCoordinators(ctx, w.brain, runtime)
+		}); err != nil {
+			t.Fatal("actual held physical stop did not become due fixture", err)
 		}
 		go recoverOnce()
 		select {
@@ -504,6 +501,7 @@ func TestFactoryRequestedPhysicalFenceDoesNotHoldTick(t *testing.T) {
 	if err != nil || view.Stage != "closed" {
 		t.Fatal("actual physical request did not close", view, err)
 	}
+	assertCodexDueFixtureDeathGuards(t, w.brain, ref)
 }
 
 func TestFactoryUnselectedCodexRuntimeDoesNotRecoverRetainedState(t *testing.T) {

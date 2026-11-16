@@ -179,17 +179,30 @@ func TestBabysitterStallRegressionIdleChurnStillRestarts(t *testing.T) {
 	cp := w.kinds(item, events.KindCheckpoint)[0]
 	for minute := 1; minute <= 55; minute++ {
 		w.at(time.Duration(minute) * time.Minute)
+		boundary := minute == 1 || minute == 9 || minute == 10 || minute == 54 || minute == 55
 		// A nudge can start a turn that immediately ends without doing the work.
 		w.sessions[0].Status = ""
-		w.tick(false)
+		if boundary {
+			w.tick(false)
+		}
 		w.sessions[0].Status = listedIdle
 		cp.At = w.now
 		cp.Seq = 0
 		w.append(w.dir(item), cp)
 		w.append(w.dir(item), events.Event{At: w.now, Kind: events.KindAck, Sender: item, Ack: 1})
 		w.append(w.dir(item), events.Event{At: w.now, Kind: events.KindHeartbeat, Sender: item})
+		if !boundary {
+			continue
+		}
 		w.tick(false)
 		w.noErrors()
+		wantNudges := 0
+		if minute >= 10 {
+			wantNudges = 1
+		}
+		if got := len(posted()) - baseline; got != wantNudges {
+			t.Fatalf("at %dm nudges = %d, want %d despite idle/ack/heartbeat/unchanged-checkpoint churn", minute, got, wantNudges)
+		}
 		wantStops := 0
 		if minute == 55 {
 			wantStops = 1
@@ -486,6 +499,9 @@ func TestBabysitterStallRegressionStopRechecksAccountAfterFence(t *testing.T) {
 }
 
 func TestBabysitterStallRegressionFreshWriterOverridesOldTurnEnd(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, action := range []string{"nudge", "restart"} {
 		for _, changed := range []string{"busy", "active", "done_but_busy", "status_missing", "different_id", "different_session", "different_pid"} {
 			t.Run(action+"/"+changed, func(t *testing.T) {

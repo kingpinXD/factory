@@ -125,6 +125,9 @@ func TestControlReadSnapshotReaderUsesRealRetainedSource(t *testing.T) {
 }
 
 func TestControlReadSnapshotReaderUsesActualHelperSource(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, _, req := realHelperReadSourceFixture(t)
 	ctx := context.Background()
 	admission, err := buildControlReadLocked(ctx, w.brain, req, b2Qualification)

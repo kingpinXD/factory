@@ -111,8 +111,15 @@ func put(t *testing.T, path, content string) {
 // settings, and a world around it with no sessions and no PRs.
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldWithBrainEnv(t, true)
+}
+
+func newWorldWithBrainEnv(t *testing.T, setBrainEnv bool) *world {
+	t.Helper()
 	brain := t.TempDir()
-	t.Setenv("FACTORY_BRAIN", brain)
+	if setBrainEnv {
+		t.Setenv("FACTORY_BRAIN", brain)
+	}
 	data, err := os.ReadFile(shippedBlueprint)
 	if err != nil {
 		t.Fatal(err)

@@ -26,7 +26,8 @@ import (
 )
 
 func TestProgrammeReadLawfulExpandedInputSurvivesActualQueueAndLookup(t *testing.T) {
-	w, _, _, old := realReadSourceFixture(t)
+	t.Parallel()
+	w, _, _, old := isolatedReadSourceFixture(t)
 	id := old.Control.Control
 	id.CallID = "e6-lawful-expanded-input"
 	payload := map[string]any{"op": "github_file", "payload": map[string]any{"repo": "o/r", "path": strings.Repeat("<", 174700)}}
@@ -117,7 +118,17 @@ type inputAbsenceFixture struct {
 
 func actualInputPreSourceFixture(t *testing.T, call string) inputAbsenceFixture {
 	t.Helper()
-	w, rt, attempt, old := realReadSourceFixture(t)
+	return inputPreSourceFixtureWithBrainEnv(t, call, true)
+}
+
+func isolatedInputPreSourceFixture(t *testing.T, call string) inputAbsenceFixture {
+	t.Helper()
+	return inputPreSourceFixtureWithBrainEnv(t, call, false)
+}
+
+func inputPreSourceFixtureWithBrainEnv(t *testing.T, call string, setBrainEnv bool) inputAbsenceFixture {
+	t.Helper()
+	w, rt, attempt, old := readSourceFixtureWithBrainEnv(t, setBrainEnv, nil)
 	original := coordinatorPreOriginal(t, w, old, call)
 	writer, err := (NativeAuthority{w.brain}).CaptureControlOutputWriter()
 	if err != nil {
@@ -174,7 +185,8 @@ func (f *inputAbsenceFixture) closeInput(t *testing.T) (codex.ProgramReadInputAb
 }
 
 func TestProgrammeReadInputAbsentUsesActualPreEnrollmentAndNoFakeRequest(t *testing.T) {
-	f := actualInputPreSourceFixture(t, "input-absence-actual-row")
+	t.Parallel()
+	f := isolatedInputPreSourceFixture(t, "input-absence-actual-row")
 	f.seal(t)
 	ref, err := f.closeInput(t)
 	if err != nil {
@@ -207,7 +219,8 @@ func TestProgrammeReadInputAbsentUsesActualPreEnrollmentAndNoFakeRequest(t *test
 }
 
 func TestProgrammeReadInputLostAfterRealQueueIsNotNeverAdmitted(t *testing.T) {
-	f := actualInputPreSourceFixture(t, "input-absence-preserves-real-queue")
+	t.Parallel()
+	f := isolatedInputPreSourceFixture(t, "input-absence-preserves-real-queue")
 	release, err := store.Lock(f.world.brain, "tick")
 	if err != nil {
 		t.Fatal(err)
@@ -241,7 +254,8 @@ func (a inputAbsenceWorkAuthority) Refresh(ctx context.Context, scope helper.Sco
 }
 
 func TestProgrammeReadCoordinatorWorkSealLeavesSetAttemptRunning(t *testing.T) {
-	w, _, attempt, source := realReadSourceFixture(t)
+	t.Parallel()
+	w, _, attempt, source := isolatedReadSourceFixture(t)
 	admission, err := buildControlReadLocked(context.Background(), w.brain, source, b2Qualification)
 	if err != nil {
 		t.Fatal(err)
@@ -450,7 +464,8 @@ func TestProgrammeReadInputCaptureDriver(t *testing.T) {
 }
 
 func TestProgrammeReadInputAbsenceRecoversActualKilledEnrollmentDriver(t *testing.T) {
-	w, rt, attempt, old := realReadSourceFixture(t)
+	t.Parallel()
+	w, rt, attempt, old := isolatedReadSourceFixture(t)
 	original := coordinatorPreOriginal(t, w, old, "input-enrollment-kill-cut")
 	specFile := filepath.Join(w.brain, "factory", "input-capture-test", "driver.json")
 	resultFile := filepath.Join(w.brain, "factory", "input-capture-test", "result.json")
@@ -536,6 +551,9 @@ func TestProgrammeReadInputAbsenceRecoversActualKilledEnrollmentDriver(t *testin
 }
 
 func TestProgrammeReadHelperInputAbsenceUsesActualClosedGeneration(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, service, job, source := realHelperReadSourceFixture(t)
 	release, err := store.Lock(w.brain, "tick")
 	if err != nil {
@@ -609,9 +627,10 @@ func TestProgrammeReadHelperInputAbsenceUsesActualClosedGeneration(t *testing.T)
 }
 
 func TestProgrammeReadInputAbsenceInventoryRequiresFullRetainedProjection(t *testing.T) {
+	t.Parallel()
 	for _, which := range []string{"admission", "request-id"} {
 		t.Run(which, func(t *testing.T) {
-			f := actualInputPreSourceFixture(t, "inventory-full-projection-"+which)
+			f := isolatedInputPreSourceFixture(t, "inventory-full-projection-"+which)
 			f.seal(t)
 			ref, err := f.closeInput(t)
 			if err != nil {
@@ -684,6 +703,9 @@ func TestProgrammeReadInputAbsenceInventoryRequiresFullRetainedProjection(t *tes
 }
 
 func TestProgrammeReadInputAbsenceRejectsActualRawAndSelectorHistory(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, which := range []string{"prepared-before-selection", "selected", "missing-raw", "corrupt-selector", "symlink-selector", "hardlink-selector"} {
 		t.Run(which, func(t *testing.T) {
 			w, _, _, a, ref := noactionReadFixture(t)

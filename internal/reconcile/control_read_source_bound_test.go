@@ -13,22 +13,23 @@ import (
 )
 
 func TestControlReadSourceRoundTripsLargestLawfulTypedHTMLPath(t *testing.T) {
-	w, _, _, req := realReadSourceFixture(t)
-	// Select the largest literal HTML path accepted by the unchanged actual typed read validator.
-	low, high := 0, toolcontract.ControlLimit/6+1
-	for low+1 < high {
-		middle := (low + high) / 2
-		candidate := toolcontract.GitHubReadInput{Repo: "o/r", Base: "main", Path: strings.Repeat("<", middle)}
-		if codex.ValidateProgramReadInput("github_file", candidate) == nil {
-			low = middle
-		} else {
-			high = middle
-		}
+	t.Parallel()
+	w, _, _, req := isolatedReadSourceFixture(t)
+	// JSON expands each '<' into six bytes. Build the boundary once, then
+	// check both sides with the unchanged typed read validator.
+	one, err := json.Marshal(map[string]string{"repo": "o/r", "base": "main", "path": "<"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	path := strings.Repeat("<", low)
+	path := strings.Repeat("<", 1+(toolcontract.ControlLimit-len(one))/len(`\u003c`))
 	input := toolcontract.GitHubReadInput{Repo: "o/r", Base: "main", Path: path}
 	if err := codex.ValidateProgramReadInput("github_file", input); err != nil {
 		t.Fatal("fixture is not a lawful typed read", err)
+	}
+	larger := input
+	larger.Path += "<"
+	if err := codex.ValidateProgramReadInput("github_file", larger); err == nil {
+		t.Fatal("fixture does not reach the typed read limit")
 	}
 	raw := []byte(`{"op":"github_file","payload":{"repo":"o/r","base":"main","path":"` + path + `"}}`)
 	if _, _, err := toolcontract.DecodeRequestForContract(toolcontract.FactoryControl, 2, raw); err != nil {

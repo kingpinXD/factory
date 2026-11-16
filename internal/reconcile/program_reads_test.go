@@ -103,14 +103,14 @@ func TestAcceptanceReadScheduledFenceDoesNotMoveOnPolling(t *testing.T) {
 	if !errors.Is(err, effects.ErrBusy) || codex.ProgramProcessDigest(actual) != codex.ProgramProcessDigest(deferred) {
 		t.Fatalf("revocation changed historical retry into new work: %+v %v", actual, err)
 	}
-	for time.Now().Before(deferred.NextCheckAt) {
-		select {
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		case <-time.After(time.Until(deferred.NextCheckAt)):
-		}
+	// Use a due storage fixture after checking the real future schedule above.
+	// No claimed process or new admission is introduced when retry time changes.
+	due := deferred
+	due.NextCheckAt = time.Now().UTC().Add(-time.Second)
+	if err := effectWriteProcess(brain, due); err != nil {
+		t.Fatal(err)
 	}
-	actual, err = settleAcceptanceRead(ctx, brain, request, deferred)
+	actual, err = settleAcceptanceRead(ctx, brain, request, due)
 	if err != nil || actual.Stage != "closed" || actual.ClosedProof.Kind != "never_claimed" || !actual.NextCheckAt.IsZero() {
 		t.Fatalf("due fence did not settle its actual storage enrollment: %+v %v", actual, err)
 	}
@@ -496,6 +496,9 @@ func normalReadContainmentFixture(t *testing.T, w *world, attempt codex.AttemptR
 }
 
 func TestProgrammeReadActualSelectedChildSucceedsAndNeverReplays(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, attempt, source := realReadSourceFixtureWithSetup(t, normalReadExecutablePins(t))
 	trace := normalReadContainmentFixture(t, w, attempt)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -569,6 +572,9 @@ func normalReadExecutablePins(t *testing.T) func(*world) {
 }
 
 func TestProgrammeReadWorkerRecoversActualCrashBeforeQueueAndKeepsHealthyRows(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, attempt, source := realReadSourceFixtureWithSetup(t, normalReadExecutablePins(t))
 	trace := normalReadContainmentFixture(t, w, attempt)
 	admission, err := buildControlReadLocked(context.Background(), w.brain, source, b2Qualification)

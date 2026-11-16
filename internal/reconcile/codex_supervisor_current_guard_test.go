@@ -74,6 +74,9 @@ func TestSupervisorActualNewOpenHoldBeyondSnapshotRevokesNewSeal(t *testing.T) {
 }
 
 func TestSupervisorActualAckRevokesCapturedInbox(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, path := range []string{"cli_user", "modern_receiving"} {
 		t.Run(path, func(t *testing.T) {
 			w, d, rt, id := supervisorPlannerFixture(t)

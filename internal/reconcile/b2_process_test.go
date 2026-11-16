@@ -270,6 +270,8 @@ func b2ReadyCoordinator(t *testing.T, w *world) (*codex.Runtime, codex.AttemptRe
 		if role == "provider" && os.Getenv("FACTORY_E6_ADVANCE_TURNS") == "1" {
 			fixtureEnv = "export FACTORY_E6_ADVANCE_TURNS=1\n"
 		}
+		// Only fixture children skip the race detector exit delay; the parent keeps its settings.
+		fixtureEnv += "export GORACE=" + quote(os.Getenv("GORACE")+" atexit_sleep_ms=0") + "\n"
 		script := "#!/bin/sh\n" + fixtureEnv + "exec " + quote(binary) + " -test.run '^TestB2OfflineProcess$' -- --b2-role " + role + " \"$@\"\n"
 		p := filepath.Join(w.brain, "b2-"+role)
 		if err := os.WriteFile(p, []byte(script), 0700); err != nil {
@@ -375,6 +377,9 @@ func (b2ReviewBackend) Inspect(context.Context, helper.RunSpec, helper.Sink) (he
 }
 func (b2ReviewBackend) Fence(context.Context, helper.Job) error { return nil }
 func TestB2ActualReviewRoundsKeepConversationAndRequireOrchestratorEnd(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, req := b2World(t)
 	evs := w.log(req.WorkID)
 	evs[0].To = "plan_review"

@@ -29,7 +29,12 @@ func b2Qualification(context.Context, string, executor.Selection) (codex.Contrac
 }
 func b2World(t *testing.T) (*world, *run, helper.Request) {
 	t.Helper()
-	w, _, req := nativeBaseWorld(t)
+	return b2WorldWithBrainEnv(t, true)
+}
+
+func b2WorldWithBrainEnv(t *testing.T, setBrainEnv bool) (*world, *run, helper.Request) {
+	t.Helper()
+	w, _, req := nativeBaseWorldWithBrainEnv(t, setBrainEnv)
 	selection, err := executor.ReadSelection(w.brain, "e1")
 	if err != nil {
 		t.Fatal(err)

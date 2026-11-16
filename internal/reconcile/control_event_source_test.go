@@ -106,9 +106,10 @@ func completeEventFixture(t *testing.T, brain string, original controlrecord.Ori
 	}
 }
 func TestControlEventActualSourceAppendAndAckReceiptsCompleteWithoutReplay(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"event", "heartbeat", "inbox"} {
 		t.Run(operation, func(t *testing.T) {
-			w, _, _, old := realReadSourceFixture(t)
+			w, _, _, old := isolatedReadSourceFixture(t)
 			ctx := context.Background()
 			payload := map[string]any{}
 			if operation == "event" {
@@ -219,11 +220,12 @@ func TestControlEventReceivingDomainChild(t *testing.T) {
 }
 
 func TestControlEventActualReceivingDriverCutsRecoverFactsOrPrefixAbsence(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"event", "inbox"} {
 		for _, cut := range []string{"before-append", "after-append", "after-receipt"} {
 			t.Run(operation+"/"+cut, func(t *testing.T) {
 				ctx := context.Background()
-				w, runtime, attempt, old := realReadSourceFixture(t)
+				w, runtime, attempt, old := isolatedReadSourceFixture(t)
 				payload := map[string]any{"kind": "message", "text": "actual child event", "to": "user", "key": "original-key"}
 				if operation == "inbox" {
 					message := w.append(w.dir("e1-s1"), events.Event{Kind: events.KindMessage, Sender: "user", Text: "actual inbox message"})
@@ -386,8 +388,9 @@ func TestControlEventActualReceivingDriverCutsRecoverFactsOrPrefixAbsence(t *tes
 }
 
 func TestControlEventCompleteRejectsNeutralValidForeignTargetWithoutPolicyReentry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	w, _, _, old := realReadSourceFixture(t)
+	w, _, _, old := isolatedReadSourceFixture(t)
 	original := eventOriginal(t, w, old, "wrong-event-target", "event", map[string]any{"kind": "message", "text": "target-bound message", "to": "user"})
 	writer, err := (NativeAuthority{w.brain}).CaptureControlOutputWriter()
 	if err != nil {
@@ -476,8 +479,9 @@ func TestControlEventCompleteRejectsNeutralValidForeignTargetWithoutPolicyReentr
 }
 
 func TestControlEventEvidenceBindsOriginalInputSourceAndActualEnrollment(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	w, _, _, old := realReadSourceFixture(t)
+	w, _, _, old := isolatedReadSourceFixture(t)
 	writer, err := (NativeAuthority{w.brain}).CaptureControlOutputWriter()
 	if err != nil {
 		t.Fatal(err)
@@ -564,8 +568,9 @@ func TestControlEventEvidenceBindsOriginalInputSourceAndActualEnrollment(t *test
 }
 
 func TestControlEventNewMutationRequiresCurrentAuthorityAndReceivingWriter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	w, _, _, old := realReadSourceFixture(t)
+	w, _, _, old := isolatedReadSourceFixture(t)
 	original := eventOriginal(t, w, old, "revoked-event", "event", map[string]any{"kind": "message", "text": "must not append", "to": "user"})
 	writer, err := (NativeAuthority{w.brain}).CaptureControlOutputWriter()
 	if err != nil {
@@ -611,8 +616,9 @@ func TestControlEventNewMutationRequiresCurrentAuthorityAndReceivingWriter(t *te
 }
 
 func TestControlEventFileChangedAfterCaptureCannotAppendCheckpoint(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	w, _, _, old := realReadSourceFixture(t)
+	w, _, _, old := isolatedReadSourceFixture(t)
 	name := filepath.Join(w.dir("e1-s1"), "checkpoint.v1.md")
 	put(t, name, "actual captured checkpoint")
 	original := eventOriginal(t, w, old, "checkpoint-event", "event", map[string]any{"kind": "checkpoint", "path": "checkpoint.v1.md", "text": "checkpoint"})
@@ -644,10 +650,11 @@ func TestControlEventFileChangedAfterCaptureCannotAppendCheckpoint(t *testing.T)
 }
 
 func TestControlEventLawfulHTMLWireStoresActualOutcome(t *testing.T) {
+	t.Parallel()
 	for _, size := range []int{174000, 175000} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			ctx := context.Background()
-			w, _, _, old := realReadSourceFixture(t)
+			w, _, _, old := isolatedReadSourceFixture(t)
 			id := old.Control.Control
 			id.CallID = "lawful-large-event"
 			wire := []byte(`{"op":"event","payload":{"kind":"message","text":"` + strings.Repeat("<", size) + `","to":"user"}}`)

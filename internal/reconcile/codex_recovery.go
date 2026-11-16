@@ -38,11 +38,11 @@ func recoverModernCoordinators(ctx context.Context, d Deps) error {
 	if !selected {
 		return selectionErr
 	}
-	var requested error
 	if actual, ok := d.Runtimes["codex"].(*codex.Runtime); ok {
-		requested = errors.Join(recoverCoordinatorTerminalFences(ctx, d, actual), recoverRequestedCoordinators(ctx, d.Brain, actual))
+		requested := errors.Join(recoverCoordinatorTerminalFences(ctx, d, actual), recoverRequestedCoordinators(ctx, d.Brain, actual))
+		return errors.Join(selectionErr, requested, runtime.RecoverAttempts(ctx), runtime.RecoverLegacy(ctx))
 	}
-	return errors.Join(selectionErr, requested, runtime.RecoverAttempts(ctx))
+	return errors.Join(selectionErr, runtime.RecoverAttempts(ctx))
 }
 
 func indexedCodexSelection(brain string, ix store.Index) (bool, error) {

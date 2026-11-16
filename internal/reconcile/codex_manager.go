@@ -81,7 +81,7 @@ func (r *run) manageCodexCoordinators() {
 }
 
 func (r *run) manageCodexCoordinator(owner, sess *entity) error {
-	if r.dry {
+	if r.dry || r.codexDeliveryHeld(owner) {
 		return nil
 	}
 	if nativeBoundaryState(sess).pending() {
@@ -210,7 +210,7 @@ func (r *run) prepareInitialCodexCoordinator(owner, sess *entity, runtime *codex
 	}
 	if !activated {
 		inventory := r.inventory("codex")
-		if !inventory.Complete || inventory.Lookup(sess.session.Name).Presence != session.Absent {
+		if !r.initialCodexSlotAvailable(runtime, inventory, sess.session.Name) {
 			return codex.ErrObservationUnknown
 		}
 		service := r.d.Helpers
@@ -287,7 +287,7 @@ func (r *run) prepareInitialCodexCoordinator(owner, sess *entity, runtime *codex
 	}
 	if !found {
 		inventory := r.inventory("codex")
-		if !inventory.Complete || inventory.Lookup(sess.session.Name).Presence != session.Absent {
+		if !r.initialCodexSlotAvailable(runtime, inventory, sess.session.Name) {
 			return codex.ErrObservationUnknown
 		}
 		ref, err = runtime.PrepareAttempt(r.ctx, spec, key)
@@ -440,4 +440,15 @@ func (r *run) ensureSetWorkAuthorities(owner *entity, verify nativeAcceptance) e
 		r.invalidateAvailability()
 	}
 	return nil
+}
+
+func (r *run) initialCodexSlotAvailable(runtime *codex.Runtime, inventory session.Inventory, name string) bool {
+	if !inventory.Complete {
+		return false
+	}
+	lookup := inventory.Lookup(name)
+	if lookup.Presence == session.Absent {
+		return true
+	}
+	return lookup.Presence == session.Present && lookup.Session.Stopped() && runtime.ValidateLegacySettlement(r.ctx, lookup.Session.ID) == nil
 }

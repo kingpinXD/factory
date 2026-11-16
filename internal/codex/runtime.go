@@ -58,6 +58,7 @@ type Runtime struct {
 	AttemptCapabilities AttemptCapabilities
 	Effects             *effects.Service
 	ControlRecovery     SealedControlRecovery
+	SubmissionObserver  func(context.Context, Record) (Caller, func(), error)
 	attemptWrite        func(string, any) error
 	attemptSync         func(string) error
 }
@@ -187,78 +188,96 @@ func (r *Runtime) List(ctx context.Context) (session.Inventory, error) {
 	}
 	inventory := session.Inventory{Complete: true}
 	for _, entry := range entries {
-		if err = ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return session.Inventory{}, err
 		}
-		if !entry.IsDir() || !recordID.MatchString(entry.Name()) {
-			return session.Inventory{}, fmt.Errorf("unknown Codex session record")
+		if !recordID.MatchString(entry.Name()) {
+			continue
 		}
 		record, err := r.read(entry.Name())
 		if err != nil {
-			return session.Inventory{}, err
-		}
-		if record.Schema == 2 {
-			if err := r.addAttemptInventory(&inventory, record); err != nil {
-				return session.Inventory{}, err
-			}
-			continue
-		}
-		if record.ID != hash([]byte(record.Spec.Name)) || record.Spec.Task == "" || record.Spec.Generation == "" {
-			return session.Inventory{}, fmt.Errorf("invalid Codex inventory slot binding")
-		}
-		switch record.State {
-		case "starting", "active", "idle", "compacting", "held", "stopped", "failed":
-		default:
-			return session.Inventory{}, fmt.Errorf("invalid Codex activity state")
-		}
-		for _, identity := range []ProcessIdentity{record.Host, record.Server} {
-			if identity.PID < 0 || (identity.PID == 0 && identity != (ProcessIdentity{})) || (identity.PID > 0 && (identity.Group <= 0 || identity.Birth == "")) {
-				return session.Inventory{}, fmt.Errorf("invalid Codex process identity")
+			selected, selectionErr := r.hasAttemptIndex(entry.Name())
+			if selectionErr == nil && !selected {
+				if source, legacyErr := r.inspectLegacy(entry.Name(), true); legacyErr == nil {
+					record, err = source.Record, nil
+				}
 			}
 		}
-		pid := 0
-		state, status := record.State, ""
-		reason := ""
-		if record.Host.PID != 0 {
-			alive, err := record.Host.Alive()
-			switch {
-			case err != nil:
-				return session.Inventory{}, fmt.Errorf("Codex host observation unavailable: %w", err)
-			case alive:
-				pid = record.Host.PID
-			case state != "stopped" && state != "failed":
-				reason = "host_absent"
+		if record.Schema == 1 && r.ValidateLegacySettlement(ctx, entry.Name()) == nil {
+			if record.ID != entry.Name() || record.ID != hash([]byte(record.Spec.Name)) {
+				continue
 			}
-		} else if state != "stopped" && state != "failed" {
-			prelaunch := state == "held" && record.Host == (ProcessIdentity{}) && record.Server == (ProcessIdentity{}) && record.ThreadID == "" && record.TurnID == "" && !record.TurnRequested && !record.ResumeAttempt && !record.Rerouted && record.LastTurnEnded.IsZero() && len(record.Deliveries) == 0 && len(record.Commands) == 0 && record.CompactionIntent == "" && record.CompactionDone == "" && record.CompactionTurnID == "" && record.CompactionItemID == ""
-			if !prelaunch {
-				reason = "launch_unconfirmed"
+			record.State = "stopped"
+		}
+		if err == nil {
+			if record.Schema == 2 {
+				err = r.addAttemptInventory(&inventory, record)
+			} else {
+				err = r.addLegacyInventory(&inventory, record)
 			}
 		}
-		if reason != "" {
-			inventory.Quarantined = append(inventory.Quarantined, session.Reservation{Executor: "codex", ID: record.ID, Name: record.Spec.Name, OwnerID: record.Spec.Task, EpicID: record.Spec.EpicID, Generation: record.Spec.Generation, Reason: reason})
-			continue
+		if err != nil {
+			// The directory still reserves its fixed slot even if its contents cannot be decoded.
+			inventory.Quarantined = append(inventory.Quarantined, session.Reservation{Executor: "codex", ID: entry.Name(), Name: record.Spec.Name, OwnerID: record.Spec.Task, EpicID: record.Spec.EpicID, Generation: record.Spec.Generation, Reason: "record_invalid"})
 		}
-		switch state {
-		case "active", "starting", "compacting":
-			state, status = "working", "busy"
-		case "idle":
-			state, status = "done", "idle"
-			if len(record.Commands) > 0 {
-				state, status = "working", "busy"
-			}
-		case "held":
-			state = "stopped"
-		}
-		inventory.Sessions = append(inventory.Sessions, session.Session{Ref: session.Ref{Executor: "codex", ID: record.ID, Name: record.Spec.Name, ConversationID: record.ThreadID, PID: pid, EpicID: record.Spec.EpicID, Generation: record.Spec.Generation}, OwnerID: record.Spec.Task, Cwd: record.Spec.Cwd, Kind: "factory_host", Status: status, State: state, StartedAt: record.StartedAt.UnixMilli()})
 	}
 	if err := ctx.Err(); err != nil {
 		return session.Inventory{}, err
 	}
-	if err := inventory.Validate("codex"); err != nil {
-		return session.Inventory{}, err
-	}
+	inventory.LocalizeCodex()
 	return inventory, nil
+}
+
+func (r *Runtime) addLegacyInventory(inventory *session.Inventory, record Record) error {
+	if record.ID != hash([]byte(record.Spec.Name)) || record.Spec.Task == "" || record.Spec.Generation == "" {
+		return fmt.Errorf("invalid Codex inventory slot binding")
+	}
+	switch record.State {
+	case "starting", "active", "idle", "compacting", "held", "stopped", "failed":
+	default:
+		return fmt.Errorf("invalid Codex activity state")
+	}
+	for _, identity := range []ProcessIdentity{record.Host, record.Server} {
+		if identity.PID < 0 || (identity.PID == 0 && identity != (ProcessIdentity{})) || (identity.PID > 0 && (identity.Group <= 0 || identity.Birth == "")) {
+			return fmt.Errorf("invalid Codex process identity")
+		}
+	}
+	pid := 0
+	state, status := record.State, ""
+	reason := ""
+	if record.Host.PID != 0 {
+		alive, err := record.Host.Alive()
+		switch {
+		case err != nil:
+			return fmt.Errorf("Codex host observation unavailable: %w", err)
+		case alive:
+			pid = record.Host.PID
+		case state != "stopped" && state != "failed":
+			reason = "host_absent"
+		}
+	} else if state != "stopped" && state != "failed" {
+		prelaunch := state == "held" && record.Host == (ProcessIdentity{}) && record.Server == (ProcessIdentity{}) && record.ThreadID == "" && record.TurnID == "" && !record.TurnRequested && !record.ResumeAttempt && !record.Rerouted && record.LastTurnEnded.IsZero() && len(record.Deliveries) == 0 && len(record.Commands) == 0 && record.CompactionIntent == "" && record.CompactionDone == "" && record.CompactionTurnID == "" && record.CompactionItemID == ""
+		if !prelaunch {
+			reason = "launch_unconfirmed"
+		}
+	}
+	if reason != "" {
+		inventory.Quarantined = append(inventory.Quarantined, session.Reservation{Executor: "codex", ID: record.ID, Name: record.Spec.Name, OwnerID: record.Spec.Task, EpicID: record.Spec.EpicID, Generation: record.Spec.Generation, Reason: reason})
+		return nil
+	}
+	switch state {
+	case "active", "starting", "compacting":
+		state, status = "working", "busy"
+	case "idle":
+		state, status = "done", "idle"
+		if len(record.Commands) > 0 {
+			state, status = "working", "busy"
+		}
+	case "held":
+		state = "stopped"
+	}
+	inventory.Sessions = append(inventory.Sessions, session.Session{Ref: session.Ref{Executor: "codex", ID: record.ID, Name: record.Spec.Name, ConversationID: record.ThreadID, PID: pid, EpicID: record.Spec.EpicID, Generation: record.Spec.Generation}, OwnerID: record.Spec.Task, Cwd: record.Spec.Cwd, Kind: "factory_host", Status: status, State: state, StartedAt: record.StartedAt.UnixMilli()})
+	return nil
 }
 
 func (r *Runtime) Start(ctx context.Context, spec session.Spec) error {
@@ -427,6 +446,18 @@ func (r *Runtime) command(ctx context.Context, ref session.Ref, op, text string)
 	if record.Schema == 2 && (op != "deliver" || record.Stage != attemptClaimed) {
 		return ErrAttemptRecovery
 	}
+	key := "stop"
+	if op != "stop" {
+		if ref.DeliveryKey == "" {
+			return fmt.Errorf("Codex delivery requires a durable delivery key")
+		}
+		key = hash([]byte(op + "\x00" + ref.DeliveryKey))
+	}
+	if record.Schema == 2 && op == "deliver" {
+		if err := r.checkSettledSubmissionKey(ctx, record, key); err != nil {
+			return err
+		}
+	}
 	alive, err := record.Host.Alive()
 	if err != nil || !alive {
 		return ErrObservationUnknown
@@ -442,13 +473,6 @@ func (r *Runtime) command(ctx context.Context, ref session.Ref, op, text string)
 	}
 	if err = conn.SetDeadline(deadline); err != nil {
 		return err
-	}
-	key := "stop"
-	if op != "stop" {
-		if ref.DeliveryKey == "" {
-			return fmt.Errorf("Codex delivery requires a durable delivery key")
-		}
-		key = hash([]byte(op + "\x00" + ref.DeliveryKey))
 	}
 	if err = json.NewEncoder(conn).Encode(hostRequest{AttemptID: record.AttemptID, Token: record.Token, Operation: op, Key: key, Text: text}); err != nil {
 		return err

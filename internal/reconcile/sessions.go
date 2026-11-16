@@ -73,49 +73,39 @@ func (r *run) inventory(provider string) session.Inventory {
 }
 
 func (r *run) validateInventory(provider string, inventory *session.Inventory) error {
+	if provider == "codex" {
+		inventory.LocalizeCodex()
+		rows := inventory.Sessions[:0]
+		for _, row := range inventory.Sessions {
+			conflict := false
+			for _, e := range r.ents {
+				if e.session != nil && e.session.Name == row.Name && (e.entry.Epic != row.EpicID || e.session.Task != row.OwnerID) {
+					conflict = true
+					break
+				}
+			}
+			if conflict {
+				inventory.Quarantined = append(inventory.Quarantined, session.Reservation{Executor: provider, ID: row.ID, Name: row.Name, OwnerID: row.OwnerID, EpicID: row.EpicID, Generation: row.Generation, AttemptID: row.AttemptID, Reason: "indexed_ownership_conflict"})
+			} else {
+				rows = append(rows, row)
+			}
+		}
+		inventory.Sessions = rows
+	}
 	if err := inventory.Validate(provider); err != nil {
 		return err
 	}
 	if provider == "claude" && len(inventory.Sessions) == 0 && r.expectsLiveSession(provider) {
 		inventory.Complete = false
 	}
-	if provider != "codex" {
-		return nil
-	}
-	check := func(name, epic, owner string) error {
-		for _, e := range r.ents {
-			if e.session != nil && e.session.Name == name && (e.entry.Epic != epic || e.session.Task != owner) {
-				return fmt.Errorf("Codex inventory conflicts with indexed ownership")
-			}
-		}
-		return nil
-	}
-	for _, row := range inventory.Sessions {
-		if err := check(row.Name, row.EpicID, row.OwnerID); err != nil {
-			return err
-		}
-	}
-	for _, q := range inventory.Quarantined {
-		if err := check(q.Name, q.EpicID, q.OwnerID); err != nil {
-			return err
-		}
-	}
 	return nil
-}
-
-func (r *run) rejectInventory(provider string, err error) {
-	inventory := r.inventories[provider]
-	inventory.Complete = false
-	r.inventories[provider], r.inventoryErrors[provider] = inventory, err
-	r.fail("%v", err)
 }
 
 func (r *run) lookupSession(epic, name string) session.Lookup {
 	provider := r.providerForEpic(epic)
 	lookup := r.inventory(provider).Lookup(name)
-	if provider == "codex" && ((lookup.Presence == session.Present && lookup.Session.EpicID != epic) || (lookup.Presence == session.Quarantined && lookup.Reservation.EpicID != epic)) {
-		r.rejectInventory(provider, fmt.Errorf("Codex inventory conflicts with requested epic"))
-		return session.Lookup{Presence: session.Unknown}
+	if provider == "codex" && lookup.Presence == session.Present && lookup.Session.EpicID != epic {
+		return session.Lookup{Presence: session.Quarantined, Reservation: session.Reservation{Executor: provider, ID: lookup.Session.ID, Name: name, Reason: "requested_epic_conflict"}}
 	}
 	return lookup
 }
@@ -275,7 +265,7 @@ func (r *run) deliveries(owner *entity) []delivery {
 	items, _ := r.itemsOf(owner)
 	for _, it := range items {
 		if ready, ok := worktreeReady(it); ok && it.cur.State == stateStarting {
-			out = append(out, delivery{ref: eventRef(it.id, ready), item: it})
+			out = append(out, delivery{ref: eventRef(it.id, ready), msg: ready, item: it})
 		}
 	}
 	return out
@@ -283,7 +273,7 @@ func (r *run) deliveries(owner *entity) []delivery {
 
 // undelivered returns the deliveries the session has not been given.
 func (r *run) undelivered(owner, sess *entity) []delivery {
-	return slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return slices.Contains(sess.st.Delivered, d.ref) })
+	return r.codexDeliveries(owner, sess.session.Name, slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return slices.Contains(sess.st.Delivered, d.ref) }))
 }
 
 // unacknowledged returns what a session being resumed is told: every
@@ -294,7 +284,7 @@ func (r *run) unacknowledged(owner, sess *entity) []delivery {
 	for _, m := range events.Inbox(owner.evs) {
 		inbox[eventRef(owner.id, m)] = true
 	}
-	return slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return !inbox[d.ref] && slices.Contains(sess.st.Delivered, d.ref) })
+	return r.codexDeliveries(owner, sess.session.Name, slices.DeleteFunc(r.deliveries(owner), func(d delivery) bool { return !inbox[d.ref] && slices.Contains(sess.st.Delivered, d.ref) }))
 }
 
 func markDelivered(sess *entity, ds []delivery) {
@@ -358,6 +348,9 @@ func (r *run) driveSessions() {
 }
 
 func (r *run) drive(owner *entity, component string) error {
+	if r.codexDeliveryHeld(owner) {
+		return nil
+	}
 	id, name := r.sessionSlot(owner, component)
 	sess := r.ents[id]
 	if sess == nil {
@@ -381,7 +374,11 @@ func (r *run) drive(owner *entity, component string) error {
 func (r *run) startSession(owner *entity, component, id, name string) error {
 	lookup := r.lookupSession(owner.entry.Epic, name)
 	if r.providerForEpic(owner.entry.Epic) == "codex" && ((lookup.Presence == session.Present && lookup.Session.OwnerID != owner.id) || (lookup.Presence == session.Quarantined && lookup.Reservation.OwnerID != owner.id)) {
-		r.rejectInventory("codex", fmt.Errorf("Codex inventory conflicts with new owner"))
+		inventory := r.inventories["codex"]
+		inventory.Quarantined = append(inventory.Quarantined, session.Reservation{Executor: "codex", ID: lookup.Session.ID, Name: name, Reason: "new_owner_conflict"})
+		inventory.LocalizeCodex()
+		r.inventories["codex"] = inventory
+		r.say("%s: not started: Codex inventory conflicts with new owner", name)
 		return nil
 	}
 	if lookup.Presence == session.Unknown {
@@ -405,6 +402,9 @@ func (r *run) startSession(owner *entity, component, id, name string) error {
 		return err
 	}
 	if lookup.Presence == session.Present {
+		if runtime, ok := r.runtimeFor("codex").(*codex.Runtime); ok && r.providerForEpic(owner.entry.Epic) == "codex" && lookup.Session.Stopped() && runtime.ValidateLegacySettlement(r.ctx, lookup.Session.ID) == nil {
+			return r.manageCodexCoordinator(owner, sess)
+		}
 		r.say("%s: listed already, so not started again", name)
 		return nil
 	}
@@ -484,7 +484,7 @@ func (r *run) post(owner, sess *entity, s session.Session, news []delivery) erro
 	text := coordinatorText(s.Executor, r.wakePrompt(owner, sess.session.Component, news))
 	what := fmt.Sprintf("post %d new to %s (pid %d)", len(news), sess.session.Name, s.PID)
 	err := r.act(what, func(ctx context.Context) error {
-		return r.runtimeFor(s.Executor).Post(ctx, deliveryRef(s.Ref, inboxDeliveryKey(sess, news)), text)
+		return r.runtimeFor(s.Executor).Post(ctx, deliveryRef(s.Ref, r.codexPostDeliveryKey(owner, sess, news)), text)
 	})
 	if err == nil {
 		markDelivered(sess, news)

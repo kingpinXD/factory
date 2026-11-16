@@ -561,7 +561,7 @@ func (r *run) nudgePrompt(owner *entity, why string) string {
 func (r *run) resumePrompt(owner *entity, component string, news []delivery) string {
 	prompt := r.wakePrompt(owner, component, news)
 	if component == componentOrchestrator {
-		prompt = r.orchestratorPrompt(owner, "You were stopped and are resumed. Carry on from your newest event.", r.workingItems(owner), news)
+		prompt = r.orchestratorPrompt(owner, "You were stopped and are resumed. Carry on from your newest event.", r.codexWorkingItems(owner), news)
 	}
 	return prompt + r.outboxSection(owner)
 }
@@ -1078,6 +1078,8 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 			n, r.restartLimit(babysitterComponent), r.b.Values.Supervision.RestartsPerItem, e.st.PRURL)
 	case strings.HasPrefix(ref, timedOutRef):
 		return fmt.Sprintf("%s timed out %d times, and its planner was restarted each time", t.From, r.b.Values.Supervision.PlannerRunsPerProblem)
+	case strings.HasPrefix(ref, unknownCodexDeliveryRef):
+		return "Codex session " + strings.TrimPrefix(ref, unknownCodexDeliveryRef) + " has an unknown receipt; factory retry authorizes one delivery"
 	case strings.HasPrefix(ref, missingRecheckScopeRef):
 		return "no saved re-check scope; use factory replan " + e.id + " \"<what to re-check>\" to provide one"
 	case strings.HasPrefix(ref, plansRefusedRef):

@@ -32,29 +32,49 @@ func (r *Runtime) recoverSessions(ctx context.Context, modern bool) error {
 			holds = append(holds, ErrObservationUnknown)
 			continue
 		}
+		if !modern {
+			selected, e := r.hasAttemptIndex(entry.Name())
+			if e != nil {
+				holds = append(holds, e)
+				continue
+			}
+			if selected {
+				continue
+			}
+			source, e := r.inspectLegacy(entry.Name(), true)
+			if e != nil {
+				holds = append(holds, e)
+				continue
+			}
+			record := source.Record
+			if record.Host.PID == 0 {
+				continue
+			}
+			alive, e := record.Host.Alive()
+			if e != nil {
+				holds = append(holds, e)
+				continue
+			}
+			if alive {
+				continue
+			}
+			if unsubmittedInitialTurn(record) && len(source.UnknownFields) == 0 {
+				e = r.observeStopped(ctx, &record)
+			} else {
+				e = r.SettleLegacy(ctx, entry.Name())
+			}
+			if e != nil {
+				holds = append(holds, e)
+			}
+			continue
+		}
 		record, err := r.read(entry.Name())
 		if err != nil {
 			holds = append(holds, err)
 			continue
 		}
 		if record.Schema == 2 {
-			if modern {
-				if err := r.recoverAttempt(ctx, record); err != nil {
-					holds = append(holds, err)
-				}
-			}
-			continue
-		}
-		if modern || record.Host.PID == 0 || record.State == "stopped" || record.State == "failed" {
-			continue
-		}
-		alive, err := record.Host.Alive()
-		if err != nil {
-			holds = append(holds, err)
-			continue
-		}
-		if !alive {
-			if err := r.observeStopped(ctx, &record); err != nil {
+			if err := r.recoverAttempt(ctx, record); err != nil {
 				holds = append(holds, err)
 			}
 		}

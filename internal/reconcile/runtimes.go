@@ -284,6 +284,10 @@ func (r *run) recoverRuntimes() {
 		return
 	}
 	if runtime, ok := r.runtimeFor("codex").(session.Recoverer); ok {
+		// Actual provider observations run before the tick lock.
+		if _, actual := runtime.(*codex.Runtime); actual {
+			return
+		}
 		ctx, cancel := r.call()
 		var err error
 		if modern, ok := runtime.(modernCoordinatorRecovery); ok {

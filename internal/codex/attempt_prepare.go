@@ -67,8 +67,13 @@ func (r *Runtime) PrepareAttempt(ctx context.Context, spec session.Spec, key str
 	err = func() error {
 		dir, _ := r.directory(ref.SessionID)
 		if _, e := os.Lstat(filepath.Join(dir, "state.json")); e == nil {
-			return ErrLegacyMigration
+			if e = r.validateLegacyAdmission(ctx, ref.SessionID, spec); e != nil {
+				return e
+			}
 		} else if !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+		if e := r.validateSessionClaimants(ctx, spec.Name); e != nil {
 			return e
 		}
 		if exists, e := r.hasAttemptIndex(ref.SessionID); e != nil {
@@ -290,6 +295,9 @@ func (r *Runtime) SelectSuccessor(ctx context.Context, old AttemptRef, key strin
 		if !reflect.DeepEqual(i, observedIndex) || prior.Revision != observed.Revision || !reflect.DeepEqual(prior.Closure, observed.Closure) || prior.Stage != attemptClosed || !sameLogicalAuthorization(prior.Spec, spec) || !reflect.DeepEqual(prior.Selection, selection) {
 			return ErrAttemptStale
 		}
+		if e := r.validateSessionClaimants(ctx, spec.Name); e != nil {
+			return e
+		}
 		if current.AttemptID == next.AttemptID {
 			if current.FromAttempt != old.AttemptID || current.RecoveryKey != key || !reflect.DeepEqual(current.Spec, spec) || current.FactorySHA256 != binary {
 				return ErrAttemptConflict
@@ -387,6 +395,9 @@ func (r *Runtime) LaunchAttempt(ctx context.Context, ref AttemptRef) error {
 	}
 	if v.AttemptID != ref.AttemptID || v.Stage != attemptPrepared {
 		return ErrAttemptStale
+	}
+	if err := r.validateSessionClaimants(ctx, v.Spec.Name); err != nil {
+		return err
 	}
 	return r.launchHost(ctx, v, "")
 }

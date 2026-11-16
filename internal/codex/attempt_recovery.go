@@ -153,6 +153,17 @@ func (r *Runtime) closeAttempt(ctx context.Context, ref AttemptRef, reason strin
 			}
 		}
 	}
+	var submissions []SubmissionObservation
+	for _, sub := range sealed.Submissions {
+		if sub.State != "intent" {
+			continue
+		}
+		observation, err := r.ObserveSubmission(ctx, sealed, submissionQuery(sub))
+		if err != nil {
+			return err
+		}
+		submissions = append(submissions, observation)
+	}
 	if r.ControlRecovery != nil {
 		if err := r.ControlRecovery.RecoverSealedControls(ctx, ref.effectsKey()); err != nil {
 			return err
@@ -183,6 +194,11 @@ func (r *Runtime) closeAttempt(ctx context.Context, ref AttemptRef, reason strin
 				return e
 			}
 		}
+		if len(submissions) != 0 {
+			if e = verifySubmissionProcessesGone(current); e != nil {
+				return e
+			}
+		}
 		if e = r.Effects.ValidateAttemptSettlement(ctx, settlement); e != nil {
 			return e
 		}
@@ -193,7 +209,7 @@ func (r *Runtime) closeAttempt(ctx context.Context, ref AttemptRef, reason strin
 			n.Recovery = nil
 			n.Stage = attemptClosed
 			n.State = "stopped"
-			n.Closure = &closureReceipt{Attempt: ref, Reason: n.Seal.Reason, Seal: seal, Fence: fence, Settlement: settlement, ClosedAt: time.Now().UTC()}
+			n.Closure = &closureReceipt{Attempt: ref, Reason: n.Seal.Reason, Seal: seal, Fence: fence, Settlement: settlement, ClosedAt: time.Now().UTC(), Submissions: submissions}
 			return nil
 		})
 		return e
@@ -210,6 +226,23 @@ func validateClosure(v Record) error {
 		return err
 	}
 	if c.Seal != seal || c.Fence.Attempt != v.attemptRef() || c.Fence.SealSHA256 != seal.SHA256.String() || !recordID.MatchString(c.Fence.OwnerSHA256) || c.Fence.Host != v.Host || c.Fence.Server != v.Server || c.Fence.HostGroupPolicy != ownedHostGroup || c.Fence.Claimed != v.Claimed || c.Settlement.Journal.Attempt != v.attemptRef().effectsKey() || c.Settlement.Journal.Seal != seal || c.Settlement.Journal.SHA256 == (effects.Digest{}) || c.Settlement.EnumerationSHA256 == (effects.Digest{}) {
+		return ErrAttemptConflict
+	}
+	observed := 0
+	for _, sub := range v.Submissions {
+		if sub.State != "intent" {
+			continue
+		}
+		// Older closures did not retain input observations.
+		if len(c.Submissions) == 0 && sub.InputText == nil {
+			continue
+		}
+		if observed >= len(c.Submissions) || ValidateSubmissionObservation(c.Submissions[observed], v.ThreadID, submissionQuery(sub)) != nil || c.Submissions[observed].ObservedAt.After(c.ClosedAt) {
+			return ErrAttemptConflict
+		}
+		observed++
+	}
+	if observed != len(c.Submissions) {
 		return ErrAttemptConflict
 	}
 	if effects.ValidateSettlementReferences(c.Settlement) != nil {

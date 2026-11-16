@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/kingpinXD/factory/internal/session"
@@ -69,7 +68,7 @@ func TestInventoryRejectsMismatchedFixedSlotAndCancelledEmptyRead(t *testing.T) 
 	if err := r.save(&rec); err != nil {
 		t.Fatal(err)
 	}
-	if i, err := r.List(context.Background()); err == nil || i.Complete {
+	if i, err := r.List(context.Background()); err != nil || !i.Complete || i.Lookup(rec.Spec.Name).Presence != session.Quarantined {
 		t.Fatalf("mismatched identity localized as valid quarantine: %+v %v", i, err)
 	}
 }
@@ -125,11 +124,11 @@ func TestInventoryRejectsMalformedActivityAndProcessIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			i, err := r.List(context.Background())
-			if err == nil || i.Complete || len(i.Quarantined) != 0 || len(i.Sessions) != 0 {
+			if err != nil || !i.Complete || len(i.Quarantined) != 1 || len(i.Sessions) != 0 {
 				t.Fatalf("corrupt or unclassifiable observation was localized: %+v %v", i, err)
 			}
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("wrong guard rejected malformed record: %v; want %s", err, want)
+			if i.Quarantined[0].Reason != "record_invalid" {
+				t.Fatalf("wrong reservation: %+v; malformed %s", i.Quarantined[0], want)
 			}
 		})
 	}

@@ -261,14 +261,12 @@ func TestInventoryRejectsCanonicalCodexOwnerAndEpicMismatch(t *testing.T) {
 				d.Runtimes["codex"] = &scopedInventoryRuntime{Runtime: f, quarantined: []session.Reservation{q}}
 			}
 			r := inventoryRun(t, w, d)
-			if !strings.HasPrefix(kind, "unindexed_") && r.inventory("codex").Complete {
-				t.Fatal("indexed corruption survived cache validation")
+			r.inventory("codex")
+			if got := r.lookupSession("e-codex", name); got.Presence != session.Quarantined {
+				t.Fatalf("foreign ownership was accepted as executable: %+v", got)
 			}
-			if got := r.lookupSession("e-codex", name); got.Presence != session.Unknown {
-				t.Fatalf("foreign ownership was accepted as present/quarantine: %+v", got)
-			}
-			if r.inventory("codex").Complete || r.lookupSession("e-codex", "unused-name").Presence != session.Unknown {
-				t.Fatal("unassignable row still supplied complete provider/absence evidence")
+			if !r.inventory("codex").Complete || r.lookupSession("e-codex", "unused-name").Presence != session.Absent {
+				t.Fatal("ownership conflict blocked an independent slot")
 			}
 		})
 	}
@@ -303,8 +301,8 @@ func TestInventoryForeignUnindexedOwnerCannotBeAdopted(t *testing.T) {
 			if r.ents[id] != nil || len(f.starts) != 0 {
 				t.Fatal("foreign unindexed owner was adopted before binding validation")
 			}
-			if r.inventory("codex").Complete {
-				t.Fatal("unassignable reserved owner still established provider completeness")
+			if !r.inventory("codex").Complete {
+				t.Fatal("unassignable reserved owner blocked independent slots")
 			}
 		})
 	}

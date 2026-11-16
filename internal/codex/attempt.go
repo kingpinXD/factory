@@ -72,13 +72,15 @@ const (
 )
 
 type submission struct {
-	ID           string `json:"id"`
-	Key          string `json:"key"`
-	Method       string `json:"method"`
-	TargetTurnID string `json:"target_turn_id,omitempty"`
-	InputSHA256  string `json:"input_sha256"`
-	State        string `json:"state"`
-	TurnID       string `json:"turn_id,omitempty"`
+	ID           string  `json:"id"`
+	Key          string  `json:"key"`
+	Method       string  `json:"method"`
+	TargetTurnID string  `json:"target_turn_id,omitempty"`
+	InputSHA256  string  `json:"input_sha256"`
+	InputText    *string `json:"input_text,omitempty"`
+	AfterTurnID  string  `json:"after_turn_id,omitempty"`
+	State        string  `json:"state"`
+	TurnID       string  `json:"turn_id,omitempty"`
 }
 
 type attemptSeal struct {
@@ -101,12 +103,13 @@ type attemptFence struct {
 }
 
 type closureReceipt struct {
-	Attempt    AttemptRef                `json:"attempt"`
-	Reason     string                    `json:"reason"`
-	Seal       effects.AttemptSeal       `json:"seal"`
-	Fence      attemptFence              `json:"fence"`
-	Settlement effects.AttemptSettlement `json:"settlement"`
-	ClosedAt   time.Time                 `json:"closed_at"`
+	Attempt     AttemptRef                `json:"attempt"`
+	Reason      string                    `json:"reason"`
+	Seal        effects.AttemptSeal       `json:"seal"`
+	Fence       attemptFence              `json:"fence"`
+	Settlement  effects.AttemptSettlement `json:"settlement"`
+	ClosedAt    time.Time                 `json:"closed_at"`
+	Submissions []SubmissionObservation   `json:"submissions,omitempty"`
 }
 
 func (r Record) attemptRef() AttemptRef { return AttemptRef{SessionID: r.ID, AttemptID: r.AttemptID} }

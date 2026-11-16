@@ -14,13 +14,15 @@ import (
 
 // startPrompt is a session's first prompt: everything its owner holds for it now.
 func (r *run) startPrompt(owner *entity, component string) string {
+	_, name := r.sessionSlot(owner, component)
+	deliveries := r.codexDeliveries(owner, name, r.deliveries(owner))
 	switch component {
 	case componentPlanner:
-		return r.plannerPrompt(owner, r.deliveries(owner))
+		return r.plannerPrompt(owner, deliveries)
 	case componentOrchestrator:
-		return r.orchestratorPrompt(owner, "You are starting on this set.", r.workingItems(owner), r.deliveries(owner))
+		return r.orchestratorPrompt(owner, "You are starting on this set.", r.codexWorkingItems(owner), deliveries)
 	case babysitterComponent:
-		return r.babysitterPromptFor(owner, r.deliveries(owner))
+		return r.babysitterPromptFor(owner, deliveries)
 	}
 	return taskLine(owner.id)
 }

@@ -14,15 +14,17 @@ import (
 const EvidencePolicy = "codex-configured-persisted-v1"
 
 type Item struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	Text string `json:"text"`
+	ID      string            `json:"id"`
+	Type    string            `json:"type"`
+	Text    string            `json:"text"`
+	Content []json.RawMessage `json:"content,omitempty"`
 }
 
 type Turn struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Items  []Item `json:"items"`
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	ItemsView string `json:"itemsView,omitempty"`
+	Items     []Item `json:"items"`
 }
 
 type PersistedTurn struct {

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"time"
 )
@@ -42,8 +43,9 @@ func (i Inventory) Lookup(name string) Lookup {
 	if !i.Complete {
 		return Lookup{Presence: Unknown}
 	}
+	slotID := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
 	for _, q := range i.Quarantined {
-		if q.Name == name {
+		if q.Name == name || q.ID == slotID {
 			return Lookup{Presence: Quarantined, Reservation: q}
 		}
 	}
@@ -85,12 +87,48 @@ func (i Inventory) Validate(provider string) error {
 		}
 	}
 	for _, q := range i.Quarantined {
-		if q.OwnerID == "" || q.Reason == "" {
+		if names[q.Name] || ids[q.ID] {
+			return fmt.Errorf("Codex reservation conflicts with executable row")
+		}
+		if q.Executor != provider || q.ID == "" && q.Name == "" || q.Reason == "" || q.OwnerID == "" && q.Reason != "record_invalid" && q.Reason != "inventory_conflict" && q.Reason != "new_owner_conflict" {
 			return fmt.Errorf("incomplete Codex inventory reservation")
 		}
-		if err := check(q.Executor, q.ID, q.Name, q.EpicID, q.Generation); err != nil {
-			return err
+	}
+
+	return nil
+}
+
+// LocalizeCodex reserves conflicting slots while preserving independent observations.
+func (i *Inventory) LocalizeCodex() {
+	names, ids := map[string]int{}, map[string]int{}
+	for _, s := range i.Sessions {
+		names[s.Name]++
+		ids[s.ID]++
+	}
+	reservations := i.Quarantined[:0]
+	for _, q := range i.Quarantined {
+		if q.ID == "" && q.Name == "" {
+			continue
+		}
+		q.Executor = "codex"
+		if q.Reason == "" || q.OwnerID == "" {
+			q.Reason = "record_invalid"
+		}
+		names[q.Name]++
+		ids[q.ID]++
+		reservations = append(reservations, q)
+	}
+	i.Quarantined = reservations
+	rows := i.Sessions[:0]
+	for _, s := range i.Sessions {
+		if s.ID == "" && s.Name == "" {
+			continue
+		}
+		if s.Executor != "codex" || s.Name == "" || s.ID == "" || s.OwnerID == "" || s.EpicID == "" || s.Generation == "" || names[s.Name] > 1 || ids[s.ID] > 1 {
+			i.Quarantined = append(i.Quarantined, Reservation{Executor: "codex", ID: s.ID, Name: s.Name, OwnerID: s.OwnerID, EpicID: s.EpicID, Generation: s.Generation, AttemptID: s.AttemptID, Reason: "inventory_conflict"})
+		} else {
+			rows = append(rows, s)
 		}
 	}
-	return nil
+	i.Sessions = rows
 }

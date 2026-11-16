@@ -23,6 +23,9 @@ func validateSubmissionJournal(values []submission) error {
 		if s.Key == "" || !recordID.MatchString(s.ID) || !recordID.MatchString(s.InputSHA256) || keys[s.Key] || ids[s.ID] || s.Method != "turn/start" && s.Method != "turn/steer" || s.Method == "turn/start" && s.TargetTurnID != "" || s.Method == "turn/steer" && s.TargetTurnID == "" || s.State != "intent" && s.State != "acknowledged" || s.State == "intent" && s.TurnID != "" || s.State == "acknowledged" && s.TurnID == "" || s.Method == "turn/steer" && s.State == "acknowledged" && s.TurnID != s.TargetTurnID {
 			return ErrAttemptConflict
 		}
+		if s.InputText != nil && inputDigest(*s.InputText) != s.InputSHA256 {
+			return ErrAttemptConflict
+		}
 		keys[s.Key], ids[s.ID] = true, true
 	}
 	return nil
@@ -42,7 +45,7 @@ func (r *Runtime) beginSubmission(v *Record, key, method, target, text string) e
 			return ErrAttemptRecovery
 		}
 	}
-	sub := submission{ID: hash([]byte(v.AttemptID + "\x00" + key)), Key: key, Method: method, TargetTurnID: target, InputSHA256: inputDigest(text), State: "intent"}
+	sub := submission{ID: hash([]byte(v.AttemptID + "\x00" + key)), Key: key, Method: method, TargetTurnID: target, InputSHA256: inputDigest(text), InputText: &text, AfterTurnID: v.TurnID, State: "intent"}
 	next, err := r.mutateAttempt(v.attemptRef(), v.Revision, "submission", func(n *Record) error { n.Submissions = append(n.Submissions, sub); return nil })
 	if err == nil {
 		*v = next

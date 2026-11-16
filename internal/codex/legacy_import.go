@@ -13,6 +13,7 @@ import (
 
 // LegacyObservation preserves source bytes; it does not grant migration authority.
 type LegacyObservation struct {
+	PhysicalID    string
 	Raw           []byte
 	SHA256        string
 	Record        Record
@@ -21,6 +22,10 @@ type LegacyObservation struct {
 }
 
 func (r *Runtime) InspectLegacy(id string) (LegacyObservation, error) {
+	return r.inspectLegacy(id, false)
+}
+
+func (r *Runtime) inspectLegacy(id string, allowAlias bool) (LegacyObservation, error) {
 	var out LegacyObservation
 	dir, err := r.directory(id)
 	if err != nil {
@@ -80,9 +85,10 @@ func (r *Runtime) InspectLegacy(id string) (LegacyObservation, error) {
 		return out, err
 	}
 	v := out.Record
-	if v.Schema != 1 || v.ID != id || v.ID != hash([]byte(v.Spec.Name)) || v.Spec.Task == "" || v.Spec.EpicID == "" || v.Spec.Generation == "" || v.Selection.Executor != "codex" || v.Selection.EpicID != v.Spec.EpicID || v.Token == "" || v.Deliveries == nil || v.hasAttemptFields() {
+	if v.Schema != 1 || !recordID.MatchString(v.ID) || (!allowAlias && (v.ID != id || v.ID != hash([]byte(v.Spec.Name)))) || v.Spec.Task == "" || v.Spec.EpicID == "" || v.Spec.Generation == "" || v.Selection.Executor != "codex" || v.Selection.EpicID != v.Spec.EpicID || v.Token == "" || v.Deliveries == nil || v.hasAttemptFields() {
 		return LegacyObservation{}, ErrAttemptConflict
 	}
+	out.PhysicalID = id
 	out.Raw = append([]byte(nil), raw...)
 	out.SHA256 = hash(raw)
 	out.DeliveryFacts = map[string]string{}

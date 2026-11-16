@@ -95,17 +95,33 @@ func (r *run) startRecheck(ep *entity, t events.Event) error {
 		return nil
 	}
 	var refs, lines []string
-	for _, sig := range pendingSignals(ep) {
-		if sig.UIBinding != "" && !r.uiBindingValid(ep, sig) {
-			if _, err := r.append(ep, events.Event{Kind: events.KindRefused, Sender: events.SenderProgram, Text: "question changed; refresh before answering", TriggerRef: seqRef(sig), Key: "refused:" + seqRef(sig)}); err != nil {
-				return err
-			}
+	var retryRefs []string
+	if receipt, ok := ep.byKey("signal:retry:" + seqRef(t)); ok && receipt.Kind == events.KindDone && receipt.TriggerRef == seqRef(t) {
+		retryRefs = strings.Fields(receipt.Text)
+		refs = append(refs, retryRefs...)
+		lines = append(lines, "retry the previous re-check of "+strings.Join(retryRefs, ", "))
+	}
+	for _, sig := range ep.evs {
+		if sig.Kind != events.KindRequest || sig.Recipient != recipientRecheck || ep.has("refused:"+seqRef(sig)) {
 			continue
 		}
-		covers := signalCovers(sig)
-		if _, err := r.append(ep, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, TriggerRef: seqRef(t),
-			Text: strings.Join(covers, " "), Key: consumedKey(sig)}); err != nil {
-			return err
+		receipt, consumed := ep.byKey(consumedKey(sig))
+		if consumed && (receipt.Kind != events.KindDone || receipt.TriggerRef != seqRef(t)) {
+			continue
+		}
+		covers := strings.Fields(receipt.Text)
+		if !consumed {
+			if sig.UIBinding != "" && !r.uiBindingValid(ep, sig) {
+				if _, err := r.append(ep, events.Event{Kind: events.KindRefused, Sender: events.SenderProgram, Text: "question changed; refresh before answering", TriggerRef: seqRef(sig), Key: "refused:" + seqRef(sig)}); err != nil {
+					return err
+				}
+				continue
+			}
+			covers = signalCovers(sig)
+			if _, err := r.append(ep, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, TriggerRef: seqRef(t),
+				Text: strings.Join(covers, " "), Key: consumedKey(sig)}); err != nil {
+				return err
+			}
 		}
 		lines = append(lines, r.describe(ep, sig))
 		for _, c := range covers {
@@ -113,6 +129,29 @@ func (r *run) startRecheck(ep *entity, t events.Event) error {
 				refs = append(refs, c)
 			}
 		}
+	}
+	if len(refs) == 0 || len(retryRefs) > 0 && len(lines) == 1 {
+		// A retry has no new signal. Recover both the instruction and its
+		// durable scope so unrelated items remain outside this re-check.
+		for i := len(ep.evs) - 1; i >= 0; i-- {
+			ev := ep.evs[i]
+			previous, ok := strings.CutPrefix(ev.Key, "recheck:")
+			if ev.Kind != events.KindMessage || !ok {
+				continue
+			}
+			refs = recheckScope(ep, previous)
+			if len(refs) == 0 {
+				continue
+			}
+			if !ep.has("signal:retry:" + seqRef(t)) {
+				if _, err := r.append(ep, events.Event{Kind: events.KindDone, Sender: events.SenderProgram, TriggerRef: seqRef(t), Text: strings.Join(refs, " "), Key: "signal:retry:" + seqRef(t)}); err != nil {
+					return err
+				}
+			}
+			_, err := r.append(ep, events.Event{Kind: events.KindMessage, Sender: events.SenderProgram, Text: ev.Text, Key: key})
+			return err
+		}
+		return nil
 	}
 	issues := strings.Join(refs, ", ")
 	if slices.Contains(refs, everyIssue) {
@@ -187,7 +226,10 @@ func covered(ep *entity) []string {
 	if ep.cur.State != epicChecking || len(ep.cur.Prev) == 0 {
 		return nil
 	}
-	began := strconv.Itoa(recheckBegan(ep))
+	return recheckScope(ep, strconv.Itoa(recheckBegan(ep)))
+}
+
+func recheckScope(ep *entity, began string) []string {
 	var refs []string
 	for _, ev := range ep.evs {
 		if ev.Kind == events.KindDone && strings.HasPrefix(ev.Key, "signal:") && ev.TriggerRef == began {
@@ -775,4 +817,15 @@ func Replan(ctx context.Context, d Deps, epicID, note string) (events.Event, err
 	}
 	return events.Append(store.EventsPath(ep.entry.Dir), events.Event{Kind: events.KindRequest, Sender: senderUser, Recipient: recipientRecheck,
 		Request: signalReplan, Text: note})
+}
+
+const missingRecheckScopeRef = "recheck-scope:"
+
+func init() { needsUserReasons = append(needsUserReasons, (*run).missingRecheckScope) }
+
+func (r *run) missingRecheckScope(ep *entity) (string, bool) {
+	if ep.epic == nil || ep.cur.State != epicChecking || len(ep.cur.Prev) == 0 || len(covered(ep)) != 0 {
+		return "", false
+	}
+	return missingRecheckScopeRef + strconv.Itoa(recheckBegan(ep)), true
 }

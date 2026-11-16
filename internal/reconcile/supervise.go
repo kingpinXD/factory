@@ -768,6 +768,14 @@ func (r *run) restartWorker(e *entity, key string) {
 	if lookup.Presence != session.Present || !s.Live() {
 		return
 	}
+	if s.Executor == "codex" {
+		if _, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
+			if _, err := r.captureWorkTimeoutCloseLocked(e, sess); err != nil {
+				r.fail("%s: timeout close request: %v", sess.id, err)
+			}
+			return
+		}
+	}
 	if err := r.stopCoordinator(sess, s, key, fmt.Sprintf("restart %s: %s timed out in %s", s.Name, e.id, e.cur.State)); err != nil {
 		r.fail("%v", err)
 	}
@@ -1070,6 +1078,8 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 			n, r.restartLimit(babysitterComponent), r.b.Values.Supervision.RestartsPerItem, e.st.PRURL)
 	case strings.HasPrefix(ref, timedOutRef):
 		return fmt.Sprintf("%s timed out %d times, and its planner was restarted each time", t.From, r.b.Values.Supervision.PlannerRunsPerProblem)
+	case strings.HasPrefix(ref, missingRecheckScopeRef):
+		return "no saved re-check scope; use factory replan " + e.id + " \"<what to re-check>\" to provide one"
 	case strings.HasPrefix(ref, plansRefusedRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, plansRefusedRef))
 		refusal, _, _ := strings.Cut(ev.Text, ". Write a fixed new version")

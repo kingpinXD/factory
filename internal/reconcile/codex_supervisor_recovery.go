@@ -8,8 +8,10 @@ import (
 	"github.com/kingpinXD/factory/internal/toolcontract"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
@@ -515,4 +517,108 @@ func validateSupervisorCloseLocked(ctx context.Context, brain string, runtime *c
 		return effects.ErrAuthority
 	}
 	return r.validateSupervisorSource(runtime, verify, sess, source, event, sealed, now)
+}
+
+type coordinatorWorkTimeoutCause struct {
+	Version               int
+	Attempt               codex.AttemptRef
+	Authority             OwnerAuthority
+	SubjectID             string
+	Timeout, SessionEntry effects.EventRef
+}
+
+func workTimeoutSourceKey(source coordinatorWorkTimeoutCause) string {
+	return "work-timeout:" + source.Attempt.AttemptID + ":" + source.SubjectID + ":" + fmt.Sprint(source.Timeout.Sequence)
+}
+
+func (r *run) captureWorkTimeoutCloseLocked(subject, sess *entity) (CoordinatorCloseRequestRef, error) {
+	runtime, verify, err := r.modernCoordinatorRuntime()
+	if err != nil {
+		return CoordinatorCloseRequestRef{}, err
+	}
+	if subject == nil || sess == nil || sess.session == nil {
+		return CoordinatorCloseRequestRef{}, effects.ErrAuthority
+	}
+	owner := r.ents[sess.session.Task]
+	if owner == nil || r.subject(owner) != subject {
+		return CoordinatorCloseRequestRef{}, effects.ErrAuthority
+	}
+	view, err := r.coordinatorAttemptView(sess, runtime)
+	if err != nil {
+		return CoordinatorCloseRequestRef{}, err
+	}
+	authority, _, err := nativeAuthority(r.ctx, r.d.Brain, owner.entry.Epic, owner.id, true, nil, verify)
+	if err != nil {
+		return CoordinatorCloseRequestRef{}, err
+	}
+	source := coordinatorWorkTimeoutCause{Version: 2, Attempt: view.Ref, Authority: authority, SubjectID: subject.id, Timeout: nativeEventRef(subject.id, subject.enteredBy), SessionEntry: nativeEventRef(sess.id, sess.enteredBy)}
+	data, err := canonicalCoordinatorSource(source)
+	if err != nil {
+		return CoordinatorCloseRequestRef{}, err
+	}
+	event := events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Recipient: "codex-attempt", Request: "work-timeout-observation", Text: data, Key: workTimeoutSourceKey(source)}
+	if err := r.validateWorkTimeoutSource(runtime, sess, source, event, false); err != nil {
+		return CoordinatorCloseRequestRef{}, err
+	}
+	ref, err := appendCoordinatorEvent(r, sess, event)
+	if err != nil {
+		return CoordinatorCloseRequestRef{}, err
+	}
+	return r.requestCoordinatorCloseLocked(sess, "process_replace", "shutdown", ref)
+}
+
+func (r *run) validateWorkTimeoutSource(runtime *codex.Runtime, sess *entity, source coordinatorWorkTimeoutCause, event events.Event, sealed bool) error {
+	data, err := canonicalCoordinatorSource(source)
+	if err != nil || data != event.Text || source.Version != 2 || event.Kind != events.KindIntent || event.Sender != events.SenderProgram || event.Recipient != "codex-attempt" || event.Request != "work-timeout-observation" || event.Key != workTimeoutSourceKey(source) {
+		return effects.ErrEvidence
+	}
+	subject := r.ents[source.SubjectID]
+	owner := r.ents[sess.session.Task]
+	if subject == nil || owner == nil || source.Authority.OwnerID != owner.id || source.Authority.EpicID != owner.entry.Epic || source.Timeout.OwnerID != subject.id || source.SessionEntry.OwnerID != sess.id {
+		return effects.ErrAuthority
+	}
+	timeout, err := (ProgramEffects{Brain: r.d.Brain}).boundEffectEvent(source.Timeout)
+	if err != nil {
+		return err
+	}
+	if timeout.Kind != events.KindTransition || timeout.Sender != events.SenderProgram || timeout.Trigger != blueprint.TriggerTick || !strings.HasPrefix(timeout.TriggerRef, timeoutRef) || timeout.From == "" || timeout.From != timeout.To || timeout.Attempt <= 0 || timeout.At.After(event.At) {
+		return effects.ErrEvidence
+	}
+	if _, err := (ProgramEffects{Brain: r.d.Brain}).boundEffectEvent(source.SessionEntry); err != nil {
+		return err
+	}
+	if sealed {
+		return nil
+	}
+	view, err := runtime.InspectCoordinatorAttemptByName(r.ctx, sess.session.Name)
+	if err != nil {
+		return err
+	}
+	if view.Ref != source.Attempt || (view.Stage != "claimed" && view.Stage != "prepared") {
+		return codex.ErrAttemptStale
+	}
+	if r.subject(owner) != subject || nativeEventRef(subject.id, subject.enteredBy) != source.Timeout || nativeEventRef(sess.id, sess.enteredBy) != source.SessionEntry {
+		return effects.ErrStale
+	}
+	state := subject.m.States[timeout.From]
+	if state.Timeout <= 0 || state.OnTimeout != timeout.From {
+		return effects.ErrEvidence
+	}
+	return nil
+}
+
+func validateWorkTimeoutCloseLocked(ctx context.Context, brain string, runtime *codex.Runtime, sessionID string, request CoordinatorCloseRequest, event events.Event, sealed bool, now time.Time) error {
+	var source coordinatorWorkTimeoutCause
+	if toolcontract.DecodeBroker([]byte(event.Text), &source) != nil || source.Attempt != request.Attempt || source.Authority != request.Authority || request.Work != nil || event.At.After(now) {
+		return effects.ErrEvidence
+	}
+	r, err := readRun(ctx, Deps{Brain: brain, Now: func() time.Time { return now }, Runtimes: map[string]session.Runtime{"codex": runtime}})
+	if err != nil {
+		return err
+	}
+	sess := r.ents[sessionID]
+	if sess == nil || sess.session == nil {
+		return effects.ErrAuthority
+	}
+	return r.validateWorkTimeoutSource(runtime, sess, source, event, sealed)
 }

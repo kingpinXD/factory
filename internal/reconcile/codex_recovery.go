@@ -259,6 +259,9 @@ func validateCoordinatorCloseLocked(ctx context.Context, brain string, runtime *
 		return err
 	}
 	if supervisor {
+		if ev.Request == "work-timeout-observation" {
+			return validateWorkTimeoutCloseLocked(ctx, brain, runtime, sessionID, request, ev, sealed, now)
+		}
 		return validateSupervisorCloseLocked(ctx, brain, runtime, verify, sessionID, request, ev, sealed, now)
 	}
 	if ev.Kind != events.KindRequest || ev.Sender != events.SenderProgram || ev.Recipient != "codex-attempt" || ev.Request != "quota-observation" {

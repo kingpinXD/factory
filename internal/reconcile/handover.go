@@ -181,6 +181,9 @@ func (r *run) babysitterLookup(it *entity) session.Lookup {
 // names the occurrence that stops it.
 func (r *run) stopBabysitter(it *entity, key, why string) error {
 	sess := r.babysitterOf(it)
+	if (sess == nil || sess.session == nil) && r.providerForEpic(it.entry.Epic) == "claude" {
+		return nil
+	}
 	lookup := r.babysitterLookup(it)
 	if sess == nil || sess.session == nil {
 		if lookup.Presence == session.Absent {

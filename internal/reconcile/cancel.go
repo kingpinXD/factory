@@ -25,12 +25,14 @@ func (r *run) cancelItem(it *entity) error {
 	if it.cur.State != workCancelled || it.has(k) {
 		return nil
 	}
-	lookup := r.babysitterLookup(it)
-	if !handedOver(it) && !skipsOrchestrator(it) {
-		lookup = r.lookupSession(it.entry.Epic, sessionName(it.work.Set, componentOrchestrator))
-	}
-	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
-		return fmt.Errorf("%s: cancellation waits for writer observation", it.id)
+	if r.providerForEpic(it.entry.Epic) == "codex" {
+		lookup := r.babysitterLookup(it)
+		if !handedOver(it) && !skipsOrchestrator(it) {
+			lookup = r.lookupSession(it.entry.Epic, sessionName(it.work.Set, componentOrchestrator))
+		}
+		if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+			return fmt.Errorf("%s: cancellation waits for writer observation", it.id)
+		}
 	}
 	why := r.cancelReason(it)
 	for _, step := range []func() error{
@@ -68,13 +70,15 @@ func (r *run) cancelUnder(e *entity) error {
 	if captured, err := r.cancelCapturedCoordinatorTerminal(e); captured || err != nil {
 		return err
 	}
-	inventory := r.inventory(r.providerForEpic(e.entry.Epic))
-	if !inventory.Complete {
-		return fmt.Errorf("%s: cancellation inventory is unknown", e.id)
-	}
-	for _, q := range inventory.Quarantined {
-		if q.OwnerID == e.id {
-			return fmt.Errorf("%s: cancellation waits for writer observation", e.id)
+	if r.providerForEpic(e.entry.Epic) == "codex" {
+		inventory := r.inventory("codex")
+		if !inventory.Complete {
+			return fmt.Errorf("%s: cancellation inventory is unknown", e.id)
+		}
+		for _, q := range inventory.Quarantined {
+			if q.OwnerID == e.id {
+				return fmt.Errorf("%s: cancellation waits for writer observation", e.id)
+			}
 		}
 	}
 	items, err := r.itemsOf(e)

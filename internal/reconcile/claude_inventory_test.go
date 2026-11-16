@@ -1,7 +1,9 @@
 package reconcile
 
 import (
+	"context"
 	"encoding/json"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,7 +37,35 @@ func TestClaudeCheckpointListsAfterGitHubReads(t *testing.T) {
 	}
 }
 
+type tracingClaudeInventory struct {
+	session.Runtime
+	list func()
+}
+
+func (r tracingClaudeInventory) List(ctx context.Context) (session.Inventory, error) {
+	r.list()
+	return r.Runtime.List(ctx)
+}
+
 func TestClaudeWorkerRetryListsOncePerTick(t *testing.T) {
+	originalDeps := compatCandidateDeps
+	t.Cleanup(func() { compatCandidateDeps = originalDeps })
+	ticks := 0
+	var cancellationStacks []string
+	compatCandidateDeps = func(d Deps) Deps {
+		d = originalDeps(d)
+		ticks++
+		tick := ticks
+		if d.Runtimes == nil {
+			d.Runtimes = map[string]session.Runtime{}
+		}
+		d.Runtimes["claude"] = tracingClaudeInventory{Runtime: session.Claude{Client: d.Claude}, list: func() {
+			if tick == 9 {
+				cancellationStacks = append(cancellationStacks, string(debug.Stack()))
+			}
+		}}
+		return d
+	}
 	capture := &compatCapture{t: t, roots: map[string]string{}}
 	compatFailures(capture)
 	var calls []compatCall
@@ -59,7 +89,16 @@ func TestClaudeWorkerRetryListsOncePerTick(t *testing.T) {
 				}
 			}
 			tick, _ := strconv.Atoi(strings.TrimPrefix(relation, "tick_calls:"))
-			if count > 1 {
+			if tick == 9 {
+				if count != 0 {
+					t.Errorf("cancelled epic without an owned session listed Claude %d times; want 0; listing callers:\n%s", count, strings.Join(cancellationStacks, "\n"))
+				}
+				for _, call := range calls[span.Start:span.End] {
+					if call.Name != "gh" || strings.Join(call.Args, " ") != "issue edit 12 -R o/r --remove-assignee @me" {
+						t.Errorf("unexpected exhausted-epic cancellation call: %s %q", call.Name, call.Args)
+					}
+				}
+			} else if count > 1 {
 				t.Errorf("worker retry tick %d listed Claude sessions %d times; want at most 1", tick, count)
 			}
 		}

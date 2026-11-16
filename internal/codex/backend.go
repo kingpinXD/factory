@@ -776,7 +776,7 @@ func helperInstructions(job helper.Job, prompt string) (string, error) {
 		Head string `json:"head_branch"`
 		Base string `json:"base_branch"`
 	}{job.Request.RevisionRepo, job.Request.RevisionPR, job.Request.RevisionBranch, job.Request.RevisionBase})
-	return prompt + "\nAuthoritative existing PR destination: " + string(binding) + "\nPush only to this existing head branch. Do not derive another destination from task prose.\n", nil
+	return prompt + "\nAuthoritative existing PR destination: " + string(binding) + "\nAuthoritative publication procedure: write, test, and commit fixes locally. Never push or write to GitHub. Factory imports the helper revision and pushes it after completion. This procedure overrides publication actions in the component snapshot. Report the local committed SHA and tests; do not derive another destination from task prose.\n", nil
 }
 
 func (b *Backend) saveFailure(job helper.Job, failure *hostFailure) error {

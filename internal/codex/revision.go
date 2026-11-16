@@ -431,6 +431,15 @@ func (b *Backend) CommitHelperRevisionLocked(ctx context.Context, observed Helpe
 		if strictDecodeRevision(input, &inputFacts) != nil || strictDecodeRevision(final, &finalFacts) != nil || finalFacts.Input != inputRef {
 			return ErrObservationUnknown
 		}
+		if b.owner(archived).RevisionRole == "implementor" {
+			publication, ok := actual.remote.(workspace.RepositoryPublicationGuard)
+			if !ok {
+				return ErrCapabilitiesUnverified
+			}
+			if _, err := publication.PrepareFinalGitLocal(ctx); err != nil {
+				return err
+			}
+		}
 		result, err = saveHelperRevisionArtifact(helperRevisionPath(b, observed.Job, "revision.json"), HelperRevisionReceipt{Observation: observed, Settlement: settlement})
 		return err
 	})
@@ -491,6 +500,12 @@ func ReadHelperRepositoryRevisionLocal(ctx context.Context, brain string, ref Pr
 	if err != nil {
 		return input, final, err
 	}
+	return readHelperRevisionFacts(receipt)
+}
+
+func readHelperRevisionFacts(receipt HelperRevisionReceipt) (workspace.RepositoryInput, workspace.RepositoryFinal, error) {
+	var input workspace.RepositoryInput
+	var final workspace.RepositoryFinal
 	data, err := readProgramArtifact(receipt.Observation.Input)
 	if err != nil {
 		return input, final, err
@@ -506,6 +521,40 @@ func ReadHelperRepositoryRevisionLocal(ctx context.Context, brain string, ref Pr
 		return input, final, err
 	}
 	return input, final, nil
+}
+
+func ReadHelperPublicationRevisionLocal(ctx context.Context, brain string, ref ProgramArtifact) (workspace.RepositoryInput, workspace.RepositoryFinal, string, error) {
+	var input workspace.RepositoryInput
+	var final workspace.RepositoryFinal
+	receipt, err := ReadHelperRevisionLocal(ctx, brain, ref)
+	if err != nil {
+		return input, final, "", err
+	}
+	input, final, err = readHelperRevisionFacts(receipt)
+	if err != nil {
+		return input, final, "", err
+	}
+	source, err := readHelperPublicationGitLocal(ctx, receipt, final)
+	return input, final, source, err
+}
+
+func readHelperPublicationGitLocal(ctx context.Context, receipt HelperRevisionReceipt, final workspace.RepositoryFinal) (string, error) {
+	if receipt.Observation.Job.Request.Component != "implementor" || final.Tree != final.IndexTree {
+		return "", ErrObservationUnknown
+	}
+	source := filepath.Join(filepath.Dir(receipt.Observation.Workspace.ContainmentRef), "revision", "final-source.git")
+	real, err := filepath.EvalSymlinks(source)
+	if err != nil || !filepath.IsAbs(source) || real != source {
+		return "", ErrObservationUnknown
+	}
+	verified, err := workspace.VerifyProgramCommit(ctx, source, final.Commit)
+	if err != nil {
+		return "", err
+	}
+	if verified.Commit != final.Commit || verified.Tree != final.Tree {
+		return "", ErrObservationUnknown
+	}
+	return source, nil
 }
 
 // This copy is for managed tool paths only. The original owner remains the

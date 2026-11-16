@@ -264,17 +264,17 @@ func readRevision(ref RevisionArtifact, out any) error {
 }
 
 // This repository is programme-owned and never mounted in the model container.
-func freezeRevisionSource(ctx context.Context, o RemoteOwner, g gitView) (ProgramGitImport, string, error) {
+func freezeRevisionSource(ctx context.Context, o RemoteOwner, g gitView, name string) (ProgramGitImport, string, error) {
 	root := filepath.Join(o.RunDir, "revision")
 	if err := privateDir(root); err != nil {
 		return ProgramGitImport{}, "", err
 	}
-	stage := filepath.Join(root, "source-stage.git")
+	stage := filepath.Join(root, name+"-stage.git")
 	view := gitView{Private: g.Common, Objects: g.Objects, NewSHA: g.OldSHA}
 	if _, err := stageObjectFiles(ctx, view, stage); err != nil {
 		return ProgramGitImport{}, "", err
 	}
-	source := filepath.Join(root, "source.git")
+	source := filepath.Join(root, name+".git")
 	if err := privateDir(source); err != nil {
 		return ProgramGitImport{}, "", err
 	}
@@ -436,7 +436,7 @@ func observeTrackedRevision(ctx context.Context, worktree string, listing []byte
 }
 
 func captureRepositoryInput(ctx context.Context, o RemoteOwner, g *gitView) (RevisionArtifact, error) {
-	imported, source, err := freezeRevisionSource(ctx, o, *g)
+	imported, source, err := freezeRevisionSource(ctx, o, *g, "source")
 	if err != nil {
 		return RevisionArtifact{}, err
 	}
@@ -607,6 +607,43 @@ func (w *RemoteWorkspace) ObserveRepositoryRevision(ctx context.Context, o Remot
 
 type RepositoryRevisionGuard interface {
 	RevisionRefsLocal(context.Context) (RevisionArtifact, RevisionArtifact, error)
+}
+
+type RepositoryPublicationGuard interface {
+	PrepareFinalGitLocal(context.Context) (string, error)
+}
+
+func (g workspaceSettlementGuard) PrepareFinalGitLocal(ctx context.Context) (string, error) {
+	if g.owner.RevisionRole != "implementor" {
+		return "", errUnknown
+	}
+	if _, err := g.ValidateLocal(ctx); err != nil {
+		return "", err
+	}
+	var a remoteAttempt
+	if err := readPrivate(filepath.Join(g.owner.RunDir, "containment.json"), &a); err != nil {
+		return "", err
+	}
+	var final RepositoryFinal
+	if err := readRevision(a.Final, &final); err != nil {
+		return "", err
+	}
+	if err := verifyWriterFinal(ctx, &a, final); err != nil {
+		return "", err
+	}
+	selected := a.Git
+	selected.OldSHA = selected.NewSHA
+	imported, source, err := freezeRevisionSource(ctx, g.owner, selected, "final-source")
+	if err != nil {
+		return "", err
+	}
+	if imported.Commit != final.Commit || imported.Tree != final.Tree {
+		return "", safeError("final publication snapshot differs from helper revision")
+	}
+	if _, err := g.ValidateLocal(ctx); err != nil {
+		return "", err
+	}
+	return source, nil
 }
 
 func (g workspaceSettlementGuard) RevisionRefsLocal(ctx context.Context) (RevisionArtifact, RevisionArtifact, error) {

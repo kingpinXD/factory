@@ -51,7 +51,7 @@ func TestExistingPRInstructionsRequireAuthoritativeModeBinding(t *testing.T) {
 	original := "- **Commits:** commit after tests. Never push.\n"
 	job := helper.Job{Request: helper.Request{Mode: helper.ModeExistingPRRevision, Component: "implementor", OwnerID: "w", WorkID: "w", RevisionPR: 7, RevisionRepo: "o/r", RevisionBranch: "factory/w", RevisionBase: "main"}, Route: executor.Route{Provider: "codex"}, Scope: helper.Scope{OwnerID: "w", WorkID: "w"}}
 	text, err := helperInstructions(job, original)
-	if err != nil || strings.Contains(text, "Never push.") || !strings.Contains(text, `"head_branch":"factory/w"`) {
+	if err != nil || !strings.Contains(text, "Never push or write to GitHub") || !strings.Contains(text, `"head_branch":"factory/w"`) {
 		t.Fatalf("overlay=%q err=%v", text, err)
 	}
 	job.Request.RevisionBranch = ""

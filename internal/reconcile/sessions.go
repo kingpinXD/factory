@@ -121,6 +121,9 @@ func (r *run) lookupSession(epic, name string) session.Lookup {
 }
 
 func (r *run) invalidateInventory(provider string) {
+	if provider == "claude" {
+		return
+	}
 	delete(r.inventories, provider)
 	delete(r.inventoryErrors, provider)
 }

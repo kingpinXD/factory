@@ -210,7 +210,7 @@ func (r *run) workBoundaryPending(it *entity) bool {
 func (r *run) recoverNativeBoundaries() {
 	for _, id := range r.order() {
 		sess := r.ents[id]
-		if sess.session == nil {
+		if sess.session == nil || r.providerForEpic(sess.entry.Epic) != "codex" {
 			continue
 		}
 		b := nativeBoundaryState(sess)

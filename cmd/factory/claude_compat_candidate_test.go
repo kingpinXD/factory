@@ -95,17 +95,9 @@ func TestClaudeCompatCandidateProductionConstructor(t *testing.T) {
 	_, claudeExec := d.Claude.Runner.(proc.Exec)
 	_, account := d.Account.(reconcile.PlanAccount)
 	_, slack := d.Notify.(notify.Slack)
-	cliCompatRequire(t, ghExec && claudeExec && account && slack && d.Helpers != nil && d.StartHelpers != nil, "production adapter wiring missing")
-	jobs, err := d.Helpers.Jobs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cliCompatRequire(t, len(jobs) == 0, "constructor ledger not empty")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := d.StartHelpers(ctx); err != nil {
-		t.Fatalf("empty actual StartHelpers: %v", err)
-	}
+	cliCompatRequire(t, ghExec && claudeExec && account && slack && d.ConfigureCodex != nil, "production adapter wiring missing")
+	// A Claude-only brain builds no Codex runtime or helper service.
+	cliCompatRequire(t, d.Helpers == nil && d.StartHelpers == nil && d.Runtimes["codex"] == nil && d.CodexSetupError == nil, "Claude-only constructor built Codex dependencies")
 	// Constructor plus empty startup is not full production subprocess proof.
 	// Replace both proc.Exec adapters and every live service before any Tick.
 	x := cliCompatNew(t)

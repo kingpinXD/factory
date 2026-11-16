@@ -141,7 +141,9 @@ func unknownSessionObservation(listed string) bool {
 func (r *run) notePresence(sess *entity, lookup session.Lookup) {
 	switch lookup.Presence {
 	case session.Unknown:
-		r.noteListedText(sess, "unknown")
+		if r.providerForEpic(sess.entry.Epic) != "claude" {
+			r.noteListedText(sess, "unknown")
+		}
 	case session.Quarantined:
 		r.noteListedText(sess, "quarantined ("+lookup.Reservation.Reason+")")
 	}

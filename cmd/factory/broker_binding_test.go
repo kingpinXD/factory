@@ -132,7 +132,7 @@ func bindingControl(ctx context.Context, service helper.Service, job helper.Job,
 }
 
 func TestBrokerBindingManagedChildren(t *testing.T) {
-	for _, provider := range []string{"codex", "zed"} {
+	for _, provider := range []string{"codex"} {
 		for _, operation := range []string{"submit", "result", "continue"} {
 			t.Run(provider+"/"+operation, func(t *testing.T) {
 				s, d, req := bindingFixture(t, provider)
@@ -217,7 +217,7 @@ func TestBrokerBindingManagedChildren(t *testing.T) {
 }
 
 func TestBrokerBindingCoordinatorCannotClaimNestedParent(t *testing.T) {
-	s, d, req := bindingFixture(t, "zed")
+	s, d, req := bindingFixture(t, "codex")
 	root, err := s.Submit(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +225,7 @@ func TestBrokerBindingCoordinatorCannotClaimNestedParent(t *testing.T) {
 	var checked bool
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (helper.RunResult, error) {
+	d.Backends = map[string]helper.Backend{"codex": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (helper.RunResult, error) {
 		result, err := bindingTurn(ctx, spec, sink)
 		if err != nil || spec.Job.ID != root.JobID {
 			return result, err
@@ -252,7 +252,7 @@ func TestBrokerBindingCoordinatorCannotClaimNestedParent(t *testing.T) {
 }
 
 func TestBrokerBindingManagedAuthorityAndPayloadGuards(t *testing.T) {
-	for _, provider := range []string{"codex", "zed"} {
+	for _, provider := range []string{"codex"} {
 		t.Run(provider, func(t *testing.T) {
 			s, d, req := bindingFixture(t, provider)
 			root, err := s.Submit(context.Background(), req)

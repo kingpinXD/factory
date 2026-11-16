@@ -17,7 +17,16 @@ import (
 
 func codexFixture(t *testing.T) (string, *blueprint.Blueprint, Profile, string) {
 	t.Helper()
-	brain, b, _, profilePath := fixture(t)
+	brain := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(brain, "factory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	b := &blueprint.Blueprint{Components: map[string]blueprint.Component{}}
+	for _, name := range []string{"planner", "orchestrator", "babysitter"} {
+		b.Components[name] = blueprint.Component{RunsAs: blueprint.RunsAsSession, Tier: "high", Instructions: "components/" + name + ".md"}
+	}
+	b.Components["implementor"] = blueprint.Component{RunsAs: blueprint.RunsAsHelper, Tier: "medium", Instructions: "components/implementor.md"}
+	profilePath := filepath.Join(brain, "profile.yaml")
 	if err := os.WriteFile(filepath.Join(brain, "AGENTS.md"), []byte("## Model tiers\n\n| Tier | Claude | Codex |\n| --- | --- | --- |\n| medium | opus | gpt-6.1-sol |\n| low | sonnet | gpt-6.1-sol |\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -45,17 +54,19 @@ func codexFixture(t *testing.T) (string, *blueprint.Blueprint, Profile, string) 
 		t.Fatal(err)
 	}
 	saveProfile(t, profilePath, p)
+	old := inspectImage
+	inspectImage = func(image string) (string, error) {
+		if image != p.ContainerImage {
+			return "", errors.New("wrong image")
+		}
+		return p.ContainerImage, nil
+	}
+	t.Cleanup(func() { inspectImage = old })
 	return brain, b, p, profilePath
 }
 
 func TestCodexPrepareSeparateImmutableSelection(t *testing.T) {
 	brain, b, p, profilePath := codexFixture(t)
-	// The native executables from the Z fixture are deliberately absent.
-	for _, name := range []string{"worker", "usage"} {
-		if err := os.Remove(filepath.Join(brain, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	s, err := Prepare(brain, "e-codex", b, Options{Executor: "codex", ProfilePath: profilePath})
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +144,7 @@ func TestCodexIntakeRejectsUnpinnedAndForeignSettings(t *testing.T) {
 
 func TestCodexResolveUsesOnlySharedCodexColumn(t *testing.T) {
 	_, _, p, _ := codexFixture(t)
-	tiers := blueprint.Tiers{"medium": {"Claude": ClaudeModel, "Zed": NativeModel, "Codex": CodexModel}, "low": {"Codex": CodexModel}}
+	tiers := blueprint.Tiers{"medium": {"Claude": ClaudeModel, "Codex": CodexModel}, "low": {"Codex": CodexModel}}
 	for _, mutation := range []string{"missing", "different", "denied"} {
 		t.Run(mutation, func(t *testing.T) {
 			copy := maps.Clone(tiers)
@@ -155,8 +166,7 @@ func TestCodexResolveUsesOnlySharedCodexColumn(t *testing.T) {
 }
 
 func TestExistingSelectionJSONHasNoCodexFields(t *testing.T) {
-	brain, b, _, profilePath := fixture(t)
-	for _, s := range []Selection{prepare(t, brain, b, profilePath, "e-z"), {SchemaVersion: 1, Executor: "claude", EpicID: "e-claude"}} {
+	for _, s := range []Selection{{SchemaVersion: 1, Executor: "claude", EpicID: "e-claude"}} {
 		raw, err := json.Marshal(s)
 		if err != nil {
 			t.Fatal(err)

@@ -571,9 +571,9 @@ func (r *run) spec(owner *entity, sess *SessionInputs, prompt string) (session.S
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return session.Spec{}, err
 	}
-	if err == nil && (selection.Executor == "z" || selection.Executor == "codex") {
+	if err == nil && (selection.Executor == "codex") {
 		routes := selection.Routes[component]
-		if len(routes) != 1 || routes[0].Provider != coordinatorProvider(selection) || (selection.Executor == "z" && routes[0].Model != executor.ClaudeModel) {
+		if len(routes) != 1 || routes[0].Provider != coordinatorProvider(selection) {
 			return session.Spec{}, fmt.Errorf("invalid pinned top route")
 		}
 		dir := filepath.Join(store.Factory(r.d.Brain), "executors", owner.entry.Epic)

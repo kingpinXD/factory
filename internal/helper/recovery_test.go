@@ -56,7 +56,7 @@ func TestInspectRecoveryRequiresIdentifiedFencedResult(t *testing.T) {
 			ended := kind != "checkpointed" && kind != "missing_end"
 			j, result := preparedAttempt(t, s, req, ended)
 			if kind == "checkpointed" {
-				if err := (journalSink{service: s, job: j}).Record(context.Background(), EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID}); err != nil {
+				if err := (journalSink{service: s, job: j}).Record(context.Background(), EventPersistedTurnVerified, persistedTurnFields(result)); err != nil {
 					t.Fatal(err)
 				}
 				result.Outcome = "recovery_required"
@@ -69,10 +69,10 @@ func TestInspectRecoveryRequiresIdentifiedFencedResult(t *testing.T) {
 				result.TurnID = "foreign-turn"
 			}
 			if kind == "wrong_model" {
-				result.ObservedModel = "foreign-model"
+				result.ConfiguredModel = "foreign-model"
 			}
 			runs, inspects := 0, 0
-			d.Backends["zed"] = backendFunc{
+			d.Backends["codex"] = backendFunc{
 				run: func(context.Context, RunSpec, Sink) (RunResult, error) {
 					runs++
 					return RunResult{}, errors.New("prompt replay")
@@ -141,7 +141,7 @@ func TestInspectFalseCanLaterRecoverWithoutReplay(t *testing.T) {
 	j, result := preparedAttempt(t, s, req, true)
 	identified := false
 	calls := 0
-	d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
 		t.Error("replayed prompt")
 		return RunResult{}, nil
 	}, inspect: func(context.Context, RunSpec, Sink) (RunResult, bool, error) { calls++; return result, identified, nil }}
@@ -162,12 +162,12 @@ func TestInspectFalseCanLaterRecoverWithoutReplay(t *testing.T) {
 	}
 }
 func TestSinkIdentityRetriesDoNotRegressAndConflictsStayUnknown(t *testing.T) {
-	for _, event := range []string{EventProcessOwned, EventConversationRecorded, EventTurnRequested, EventTurnIdentified, EventNativeEnded, EventCheckpointSaved} {
+	for _, event := range []string{EventProcessOwned, EventConversationRecorded, EventTurnRequested, EventTurnIdentified, EventNativeEnded, EventPersistedTurnVerified} {
 		t.Run(event, func(t *testing.T) {
 			s, _, req := setup(t)
 			j, result := preparedAttempt(t, s, req, true)
 			sink := journalSink{service: s, job: j}
-			if err := sink.Record(context.Background(), EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID}); err != nil {
+			if err := sink.Record(context.Background(), EventPersistedTurnVerified, persistedTurnFields(result)); err != nil {
 				t.Fatal(err)
 			}
 			fields := map[string]string{}
@@ -178,7 +178,8 @@ func TestSinkIdentityRetriesDoNotRegressAndConflictsStayUnknown(t *testing.T) {
 				fields["conversation_id"] = result.ConversationID
 			case EventTurnIdentified, EventNativeEnded:
 				fields["turn_id"] = result.TurnID
-			case EventCheckpointSaved:
+			case EventPersistedTurnVerified:
+				fields = persistedTurnFields(result)
 				fields["conversation_id"] = result.ConversationID
 				fields["turn_id"] = result.TurnID
 			}
@@ -191,7 +192,7 @@ func TestSinkIdentityRetriesDoNotRegressAndConflictsStayUnknown(t *testing.T) {
 			}
 			if err := s.transaction(context.Background(), false, func(db *ledger) error {
 				q := db.Jobs[j.ID].Rounds[1]
-				if q.Phase != EventCheckpointSaved {
+				if q.Phase != EventPersistedTurnVerified {
 					t.Error("retry regressed phase")
 				}
 				return nil
@@ -329,7 +330,7 @@ func TestReopenRefreshesNewOwnerAndRejectsOldGenerationPublication(t *testing.T)
 		t.Fatal(err)
 	}
 	d.Service = s
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		if err := os.WriteFile(req.OutputPath, []byte("## Result\nnew owner\n"), 0600); err != nil {
 			return RunResult{}, err
 		}

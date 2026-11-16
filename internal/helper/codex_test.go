@@ -16,35 +16,9 @@ import (
 	"github.com/kingpinXD/factory/internal/store"
 )
 
-func codexSelectionFixture(t *testing.T, s Service, epic string) executor.Selection {
-	t.Helper()
-	old, err := executor.ReadSelection(s.Brain, "epic1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	binary, _ := os.Executable()
-	p := executor.Profile{SchemaVersion: 1, Executor: "codex", CodexBinary: binary, CodexExecServer: binary, CodexVersion: "0.162.1", CodexModelCatalog: "/fixture/models.json", CodexModelCatalogSHA256: strings.Repeat("a", 64), ContainerImage: "sha256:" + strings.Repeat("a", 64), IdentityBinding: "account-binding", ModelEvidencePolicy: executor.CodexModelEvidencePolicy, MaxActiveHelpers: 1, Routes: map[string][]executor.Candidate{}}
-	routes := map[string][]executor.Route{}
-	for name := range old.Routes {
-		p.Routes[name] = []executor.Candidate{{Provider: "codex", Tier: "medium", Effort: "high"}}
-		routes[name] = []executor.Route{{Provider: "codex", Tier: "medium", Effort: "high", Model: executor.CodexModel}}
-	}
-	return executor.Selection{SchemaVersion: 1, Executor: "codex", EpicID: epic, Profile: p, Routes: routes, Binaries: map[string]executor.Binary{"codex": {Path: binary, SHA256: strings.Repeat("a", 64)}, "codex-executor": {Path: binary, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: p.ContainerImage, CreatedAt: time.Now().UTC()}
-}
 func setupCodex(t *testing.T) (Service, RunnerDeps, Request) {
 	t.Helper()
-	s, d, req := setup(t)
-	selection := codexSelectionFixture(t, s, "epic1")
-	data, _ := json.Marshal(selection)
-	if err := os.WriteFile(filepath.Join(s.Brain, "factory", "executors", "epic1", "selection.json"), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	d.Quotas = map[string]UsageReader{"codex": usageFunc(func(context.Context) (QuotaSnapshot, error) {
-		q := quota(time.Now(), 10)
-		q.Provider = "codex"
-		return q, nil
-	})}
-	return s, d, req
+	return setup(t)
 }
 func recordCodexTurn(ctx context.Context, s RunSpec, k Sink) (RunResult, error) {
 	conversation := s.Job.ConversationID
@@ -198,97 +172,6 @@ func TestCodexLedgerRejectsTamperedCompletionEvidence(t *testing.T) {
 	}
 }
 
-func TestMixedSchedulerSkipsQuotaHeldZButRetainsUnknownWriter(t *testing.T) {
-	for _, unknownWriter := range []bool{false, true} {
-		t.Run(fmt.Sprint(unknownWriter), func(t *testing.T) {
-			s, d, req := setup(t)
-			z, err := s.Submit(context.Background(), req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			selection := codexSelectionFixture(t, s, "epic2")
-			if err = executor.WriteSelection(s.Brain, selection); err != nil {
-				t.Fatal(err)
-			}
-			ix, _ := store.ReadIndex(s.Brain)
-			ix["epic2"] = store.Entry{Kind: "epic", Epic: "epic2", Dir: filepath.Join(s.Brain, "factory", "epic2")}
-			if err = store.WriteIndex(s.Brain, ix); err != nil {
-				t.Fatal(err)
-			}
-			authority := s.Authority.(*fakeAuthority)
-			authority.scope.EpicID = "epic2"
-			req.RequestKey = "codex-request"
-			req.WorkID = "work2"
-			c, err := s.Submit(context.Background(), req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Deterministic order puts the held Z request first, regardless of UUIDs.
-			if err = s.transaction(context.Background(), true, func(db *ledger) error {
-				zr, cr := db.Jobs[z.JobID], db.Jobs[c.JobID]
-				oldZ, oldC := z.JobID, c.JobID
-				delete(db.Jobs, oldZ)
-				delete(db.Jobs, oldC)
-				z.JobID = "a-z-held"
-				c.JobID = "b-codex"
-				zr.Job.ID = z.JobID
-				zr.Rounds[1].Result.JobID = z.JobID
-				cr.Job.ID = c.JobID
-				cr.Rounds[1].Result.JobID = c.JobID
-				db.Jobs[z.JobID] = zr
-				db.Jobs[c.JobID] = cr
-				for key, id := range db.Keys {
-					if id == oldZ {
-						db.Keys[key] = z.JobID
-					}
-					if id == oldC {
-						db.Keys[key] = c.JobID
-					}
-				}
-				for key, id := range db.Reservations {
-					if id == oldZ {
-						db.Reservations[key] = z.JobID
-					}
-					if id == oldC {
-						db.Reservations[key] = c.JobID
-					}
-				}
-				if unknownWriter {
-					zr.Job.State = "unknown"
-					zr.Job.HoldReason = "writer_death_unconfirmed"
-					zr.Rounds[1].Result.State = "unknown"
-					zr.Rounds[1].Result.Outcome = "unknown"
-					zr.Rounds[1].Phase = "launch_attempted"
-				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 80), nil })
-			d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
-				q := quota(time.Now(), 10)
-				q.Provider = "codex"
-				return q, nil
-			})
-			var ran atomic.Bool
-			d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
-				ran.Store(true)
-				return recordCodexTurn(ctx, spec, k)
-			}}
-			d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
-				t.Error("quota held Z launched")
-				return RunResult{}, nil
-			}, fence: func(context.Context, Job) error { return fmt.Errorf("uncertain Z writer") }}
-			ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-			defer cancel()
-			_ = Run(ctx, d)
-			if ran.Load() == unknownWriter {
-				t.Fatalf("Codex ran=%v with unknown Z writer=%v", ran.Load(), unknownWriter)
-			}
-		})
-	}
-}
-
 func TestCodexNestedChildrenYieldBeforeContinuation(t *testing.T) {
 	s, d, req := setupCodex(t)
 	root, err := s.Submit(context.Background(), req)
@@ -326,5 +209,91 @@ func TestCodexNestedChildrenYieldBeforeContinuation(t *testing.T) {
 	r, err := s.Result(root.JobID, 2)
 	if err != nil || r.State != "completed" {
 		t.Fatalf("parent continuation: %+v %v", r, err)
+	}
+}
+
+func TestLegacyZedJobDoesNotBlockCodexLedger(t *testing.T) {
+	s, d, req := setup(t)
+	old, err := s.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved ledger
+	if err = s.transaction(context.Background(), false, func(db *ledger) error {
+		saved = *db
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := saved.Jobs[old.JobID]
+	r.Job.Route.Provider = "zed"
+	r.Rounds[1].Result.Provider = "zed"
+	var selection executor.Selection
+	if err = json.Unmarshal(r.Selection, &selection); err != nil {
+		t.Fatal(err)
+	}
+	selection.Executor = "z"
+	selection.Profile.Executor = "z"
+	for name, routes := range selection.Routes {
+		routes[0].Provider = "zed"
+		selection.Routes[name] = routes
+	}
+	r.Selection, err = json.Marshal(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(s.root(), "ledger.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := s.Jobs()
+	if err != nil || len(jobs) != 1 || jobs[0].State != "failed" || jobs[0].HoldReason != "unsupported_provider" {
+		t.Fatalf("legacy provider blocked ledger: %+v %v", jobs, err)
+	}
+	result, err := s.Result(old.JobID, 1)
+	if err != nil || result.State != "failed" || result.ErrorCode != "unsupported_provider" {
+		t.Fatalf("legacy provider did not terminate: %+v %v", result, err)
+	}
+	if err = s.transaction(context.Background(), false, func(db *ledger) error {
+		if db.Jobs[old.JobID].Rounds[1].Stopped {
+			t.Fatal("unsupported provider invented writer death evidence")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	index, err := store.ReadIndex(s.Brain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(index, req.OwnerID)
+	owner := filepath.Join(s.Brain, "factory", "owner2")
+	if err = os.MkdirAll(owner, 0700); err != nil {
+		t.Fatal(err)
+	}
+	index["owner2"] = store.Entry{Kind: "session", Dir: owner, Epic: "epic1"}
+	work := filepath.Join(s.Brain, "factory", "work2")
+	if err = os.MkdirAll(work, 0700); err != nil {
+		t.Fatal(err)
+	}
+	index["work2"] = store.Entry{Kind: "work", Dir: work, Epic: "epic1"}
+	if err = store.WriteIndex(s.Brain, index); err != nil {
+		t.Fatal(err)
+	}
+	req.RequestKey = "new-codex-job"
+	req.OwnerID = "owner2"
+	req.WorkID = "work2"
+	current, err := s.Submit(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Backends["codex"] = backendFunc{run: recordTurn}
+	runBounded(t, d)
+	result, err = s.Result(current.JobID, 1)
+	if err != nil || result.State != "completed" {
+		t.Fatalf("Codex ledger no longer usable: %+v %v", result, err)
 	}
 }

@@ -68,7 +68,7 @@ func TestRunAndInspectSpecsUseCurrentReservedOutput(t *testing.T) {
 			var childRequest Request
 			var inspected int
 			var completed RunResult
-			d.Backends["zed"] = backendFunc{
+			d.Backends["codex"] = backendFunc{
 				run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 					if spec.Job.ID != root.JobID {
 						assertSpecOutput(t, spec, "", childRequest)

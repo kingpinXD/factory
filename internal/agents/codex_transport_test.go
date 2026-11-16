@@ -49,9 +49,17 @@ func codexBrain(t *testing.T) (string, *blueprint.Blueprint, string) {
 
 func TestCodexBuildForUsesScopedToolsAndBroker(t *testing.T) {
 	brain, b, out := codexBrain(t)
+	put(t, Path(brain), "live sentinel")
+	put(t, PromptPath(brain, "planner"), "live prompt sentinel")
 	helpers, sessions, err := BuildFor(brain, out, b, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := read(t, Path(brain)); got != "live sentinel" {
+		t.Fatal("isolated build changed live agent definitions", got)
+	}
+	if got := read(t, PromptPath(brain, "planner")); got != "live prompt sentinel" {
+		t.Fatal("isolated build changed live planner prompt", got)
 	}
 	if len(helpers) != 0 || len(sessions) != 3 || strings.TrimSpace(read(t, filepath.Join(out, "agents.json"))) != "{}" {
 		t.Fatalf("Codex leaked native agent definitions: %v %v", helpers, sessions)
@@ -95,6 +103,10 @@ func TestCodexBuildForUsesScopedToolsAndBroker(t *testing.T) {
 	planner := read(t, PromptPathFor(out, "planner"))
 	if !strings.Contains(planner, "factory_control operation issue_create") || strings.Contains(planner, "Return any required issue changes to the owning session") {
 		t.Fatal("planner lost scoped issue ownership")
+	}
+	reviewer := read(t, PromptPathFor(out, "plan-reviewer"))
+	if !strings.Contains(reviewer, "same conversation") || !strings.Contains(reviewer, "Round 2") {
+		t.Fatal("lost round-two review contract")
 	}
 	verifier := read(t, PromptPathFor(out, "verifier"))
 	for _, reviewer := range []string{"reviewer-code", "reviewer-arch-test", "reviewer-issue-completeness", "reviewer-red-team"} {
@@ -180,7 +192,7 @@ func TestCodexManagerRecoveryTextUsesAvailableControls(t *testing.T) {
 	if !strings.Contains(got, `payload={path:"checkpoint.v2.md"}`) || !strings.Contains(got, `factory_control(op="events")`) {
 		t.Fatal(got)
 	}
-	if SessionText("claude", original) != original || SessionText("z", original) != original {
+	if SessionText("claude", original) != original {
 		t.Fatal("legacy manager prompt changed")
 	}
 }
@@ -205,7 +217,7 @@ func TestCodexRecoveryContractsReachPinnedConversations(t *testing.T) {
 	if read(t, sources) != before {
 		t.Fatal("runtime correction rewrote pinned sources")
 	}
-	for _, provider := range []string{"claude", "z"} {
+	for _, provider := range []string{"claude"} {
 		if SessionText(provider, "resume") != "resume" {
 			t.Fatal("legacy manager message changed")
 		}
@@ -219,7 +231,7 @@ func TestCodexScopeFactsCorrectionReachesExistingConversations(t *testing.T) {
 			t.Fatalf("missing scope recovery instruction %q", required)
 		}
 	}
-	for _, provider := range []string{"claude", "z"} {
+	for _, provider := range []string{"claude"} {
 		if SessionText(provider, "Resume your current work.") != "Resume your current work." {
 			t.Fatal("legacy recovery instructions changed")
 		}
@@ -253,7 +265,7 @@ func TestCodexControlRecoveryGuidanceReachesImmutableConversations(t *testing.T)
 	if read(t, sources) != before {
 		t.Fatal("runtime guidance changed immutable sources")
 	}
-	for _, provider := range []string{"claude", "z"} {
+	for _, provider := range []string{"claude"} {
 		if SessionText(provider, "Resume.") != "Resume." {
 			t.Fatal("legacy message changed")
 		}
@@ -270,7 +282,7 @@ func TestCodexRuntimeReadGuidanceSeparatesInputAndResponse(t *testing.T) {
 	if strings.Contains(text, "helper_result: read_only=true") {
 		t.Fatal("runtime still presents response field as input")
 	}
-	for _, provider := range []string{"claude", "z"} {
+	for _, provider := range []string{"claude"} {
 		if SessionText(provider, "Resume.") != "Resume." {
 			t.Fatal("legacy prompt changed")
 		}

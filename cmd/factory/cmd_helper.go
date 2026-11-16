@@ -25,7 +25,6 @@ import (
 	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
 )
 
 const controlLimit = toolcontract.ControlLimit
@@ -58,8 +57,6 @@ func readRequest(path string) ([]byte, error) {
 func helperService(brain string) helper.Service {
 	return reconcile.NativeService(brain, func(ctx context.Context, j helper.Job) error {
 		switch j.Route.Provider {
-		case "zed":
-			return zednative.New(brain).Fence(ctx, j)
 		case "codex":
 			return codex.NewBackend(brain).Fence(ctx, j)
 		}
@@ -91,12 +88,7 @@ type helperStatus struct {
 }
 
 func safeJob(j helper.Job) helperStatus {
-	provider, attach := "z", "factory z-attach "+j.ID
-	if j.Route.Provider == "codex" {
-		provider = "codex"
-		attach = "factory helper status " + j.ID
-	}
-	return helperStatus{1, j.ID, j.Round, j.Generation, provider, j.Route.Model, j.State, j.HoldReason, attach}
+	return helperStatus{1, j.ID, j.Round, j.Generation, j.Route.Provider, j.Route.Model, j.State, j.HoldReason, "factory helper status " + j.ID}
 }
 
 func runHelper(args []string, stdout, stderr io.Writer) int {
@@ -526,9 +518,6 @@ func nativeRunnerDeps(brain string) (helper.RunnerDeps, error) {
 	deps := helper.RunnerDeps{Service: service, FactoryBin: binary, Backends: map[string]helper.Backend{}, Quotas: map[string]helper.UsageReader{}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
 	for provider, s := range selections {
 		switch provider {
-		case "zed":
-			deps.Backends[provider] = promptedBackend{zednative.New(brain), brain}
-			deps.Quotas[provider] = zednative.NewUsageReader(s.Binaries["usage"], s.Profile.CredentialNamespace, s.Profile.IdentityBinding)
 		case "codex":
 			deps.Backends[provider] = promptedBackend{codex.NewBackend(brain), brain}
 			deps.Quotas[provider] = codex.UsageForSelection(s)
@@ -549,12 +538,8 @@ func runNativeRunner(brain string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "factory z-runner: %v\n", err)
+		fmt.Fprintf(stderr, "factory helper run: %v\n", err)
 		return 1
 	}
 	return 0
-}
-
-func runZRunner(args []string, stdout, stderr io.Writer) int {
-	return runHelper(append([]string{"run"}, args...), stdout, stderr)
 }

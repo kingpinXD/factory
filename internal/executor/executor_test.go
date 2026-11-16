@@ -14,66 +14,6 @@ import (
 	"time"
 )
 
-func TestResolvePinnedRoutes(t *testing.T) {
-	p := Profile{SchemaVersion: 1, Executor: "z", MaxActiveHelpers: 1, Routes: map[string][]Candidate{
-		"planner":      {{Provider: "claude", Tier: "high"}},
-		"orchestrator": {{Provider: "claude", Tier: "high"}},
-		"babysitter":   {{Provider: "claude", Tier: "high"}},
-		"implementor":  {{Provider: "zed", Tier: "medium"}},
-	}}
-	tiers := blueprint.Tiers{"high": {"Claude": "claude-opus-5-5"}, "medium": {"Zed": "openai-subscribed/gpt-6.1-sol"}}
-	got, err := Resolve(p, tiers, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got["implementor"][0].Provider != "zed" || got["planner"][0].Model != "claude-opus-5-5" {
-		t.Fatal(got)
-	}
-	for _, model := range []string{"opus", "claude-opus-4-6", ""} {
-		tiers["high"]["Claude"] = model
-		if _, err := Resolve(p, tiers, nil); err == nil {
-			t.Fatalf("accepted %q", model)
-		}
-	}
-}
-
-func fixture(t *testing.T) (string, *blueprint.Blueprint, Profile, string) {
-	t.Helper()
-	brain := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(brain, "factory"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(brain, "AGENTS.md"), []byte("## Model tiers\n\n| Tier | Claude | Zed |\n| --- | --- | --- |\n| high | claude-opus-5-5 | |\n| medium | opus | openai-subscribed/gpt-6.1-sol |\n| low | sonnet | |\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	b := &blueprint.Blueprint{Components: map[string]blueprint.Component{}}
-	for _, name := range []string{"planner", "orchestrator", "babysitter"} {
-		b.Components[name] = blueprint.Component{RunsAs: blueprint.RunsAsSession, Tier: "high", Instructions: "components/" + name + ".md"}
-	}
-	b.Components["implementor"] = blueprint.Component{RunsAs: blueprint.RunsAsHelper, Tier: "medium", Instructions: "components/implementor.md"}
-	p := DefaultProfile(b)
-	p.NativeWorker = filepath.Join(brain, "worker")
-	p.NativeUsage = filepath.Join(brain, "usage")
-	for _, name := range []string{p.NativeWorker, p.NativeUsage} {
-		if err := os.WriteFile(name, []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	p.ContainerImage = "sha256:" + strings.Repeat("a", 64)
-	p.CredentialNamespace = "test-factory"
-	p.IdentityBinding = "test-grant"
-	path := filepath.Join(brain, "profile.yaml")
-	saveProfile(t, path, p)
-	old := inspectImage
-	inspectImage = func(image string) (string, error) {
-		if image != p.ContainerImage {
-			return "", errors.New("wrong image")
-		}
-		return p.ContainerImage, nil
-	}
-	t.Cleanup(func() { inspectImage = old })
-	return brain, b, p, path
-}
 func saveProfile(t *testing.T, path string, p Profile) {
 	t.Helper()
 	data, err := yaml.Marshal(p)
@@ -86,7 +26,7 @@ func saveProfile(t *testing.T, path string, p Profile) {
 }
 func prepare(t *testing.T, brain string, b *blueprint.Blueprint, path, id string) Selection {
 	t.Helper()
-	s, err := Prepare(brain, id, b, Options{Executor: "z", ProfilePath: path})
+	s, err := Prepare(brain, id, b, Options{Executor: "codex", ProfilePath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +34,7 @@ func prepare(t *testing.T, brain string, b *blueprint.Blueprint, path, id string
 }
 
 func TestPrepareImmutableSnapshotAndBinaries(t *testing.T) {
-	brain, b, _, path := fixture(t)
+	brain, b, _, path := codexFixture(t)
 	s := prepare(t, brain, b, path, "e-one")
 	for _, name := range []string{"factory/index.json", "factory/executors/e-one/selection.json"} {
 		if _, err := os.Stat(filepath.Join(brain, name)); !errors.Is(err, os.ErrNotExist) {
@@ -126,7 +66,7 @@ func TestPrepareImmutableSnapshotAndBinaries(t *testing.T) {
 	if err := CheckBinaries(s); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(s.Profile.NativeWorker, []byte("changed executable"), 0o700); err != nil {
+	if err := os.WriteFile(s.Profile.CodexBinary, []byte("changed executable"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckBinaries(s); err == nil || !strings.Contains(err.Error(), "fingerprint changed") {
@@ -135,18 +75,18 @@ func TestPrepareImmutableSnapshotAndBinaries(t *testing.T) {
 }
 
 func TestStrictProfile(t *testing.T) {
-	_, _, p, path := fixture(t)
+	_, _, p, path := codexFixture(t)
 	good, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
 		"unknown":             string(good) + "unknown: true\n",
-		"duplicate":           string(good) + "executor: z\n",
-		"multiple documents":  string(good) + "---\nexecutor: z\n",
-		"duplicate component": strings.Replace(string(good), "routes:\n", "routes:\n    planner: [{provider: claude, tier: high}]\n", 1),
-		"unknown candidate":   strings.Replace(string(good), "provider: zed", "provider: zed\n          unknown: true", 1),
-		"scalar candidate":    strings.Replace(string(good), "- provider: zed", "provider: zed", 1),
+		"duplicate":           string(good) + "executor: codex\n",
+		"multiple documents":  string(good) + "---\nexecutor: codex\n",
+		"duplicate component": strings.Replace(string(good), "routes:\n", "routes:\n    planner: [{provider: codex, tier: medium, effort: medium}]\n", 1),
+		"unknown candidate":   strings.Replace(string(good), "provider: codex", "provider: codex\n          unknown: true", 1),
+		"scalar candidate":    strings.Replace(string(good), "- provider: codex", "provider: codex", 1),
 		"empty":               "",
 	}
 	for name, data := range cases {
@@ -161,18 +101,18 @@ func TestStrictProfile(t *testing.T) {
 	}
 	mutations := map[string]func(*Profile){
 		"schema":      func(p *Profile) { p.SchemaVersion = 2 },
-		"executor":    func(p *Profile) { p.Executor = "codex" },
+		"executor":    func(p *Profile) { p.Executor = "z" },
 		"concurrency": func(p *Profile) { p.MaxActiveHelpers = 2 },
 		"alternative": func(p *Profile) {
 			p.Routes["implementor"] = append(p.Routes["implementor"], p.Routes["implementor"][0])
 		},
 		"helper Claude":   func(p *Profile) { p.Routes["implementor"] = []Candidate{{Provider: "claude", Tier: "medium"}} },
-		"helper Codex":    func(p *Profile) { p.Routes["implementor"] = []Candidate{{Provider: "codex", Tier: "medium"}} },
+		"implicit effort": func(p *Profile) { p.Routes["implementor"] = []Candidate{{Provider: "codex", Tier: "medium"}} },
 		"top tier":        func(p *Profile) { p.Routes["planner"] = []Candidate{{Provider: "claude", Tier: "medium"}} },
 		"missing top":     func(p *Profile) { delete(p.Routes, "babysitter") },
 		"floating image":  func(p *Profile) { p.ContainerImage = "image:latest" },
-		"relative worker": func(p *Profile) { p.NativeWorker = "worker" },
-		"namespace":       func(p *Profile) { p.CredentialNamespace = "" },
+		"relative binary": func(p *Profile) { p.CodexBinary = "codex" },
+		"version":         func(p *Profile) { p.CodexVersion = "" },
 		"identity":        func(p *Profile) { p.IdentityBinding = "" },
 	}
 	for name, mutate := range mutations {
@@ -192,12 +132,12 @@ func TestPrepareValidation(t *testing.T) {
 	cases := map[string]func(string, *blueprint.Blueprint, *Profile){
 		"missing helper": func(_ string, _ *blueprint.Blueprint, p *Profile) { delete(p.Routes, "implementor") },
 		"unknown component": func(_ string, _ *blueprint.Blueprint, p *Profile) {
-			p.Routes["typo"] = []Candidate{{Provider: "zed", Tier: "medium"}}
+			p.Routes["typo"] = []Candidate{{Provider: "codex", Tier: "medium", Effort: "medium"}}
 		},
 		"denied":         func(_ string, b *blueprint.Blueprint, _ *Profile) { b.Deny.Models = []string{"gpt-6.1"} },
-		"binary missing": func(_ string, _ *blueprint.Blueprint, p *Profile) { p.NativeWorker += "-missing" },
+		"binary missing": func(_ string, _ *blueprint.Blueprint, p *Profile) { p.CodexBinary += "-missing" },
 		"binary not executable": func(_ string, _ *blueprint.Blueprint, p *Profile) {
-			if err := os.Chmod(p.NativeWorker, 0o600); err != nil {
+			if err := os.Chmod(p.CodexBinary, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -209,10 +149,10 @@ func TestPrepareValidation(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			brain, b, p, path := fixture(t)
+			brain, b, p, path := codexFixture(t)
 			mutate(brain, b, &p)
 			saveProfile(t, path, p)
-			if _, err := Prepare(brain, "e-one", b, Options{Executor: "z", ProfilePath: path}); err == nil {
+			if _, err := Prepare(brain, "e-one", b, Options{Executor: "codex", ProfilePath: path}); err == nil {
 				t.Fatal("accepted invalid intake")
 			}
 		})
@@ -220,7 +160,7 @@ func TestPrepareValidation(t *testing.T) {
 }
 
 func TestSelectionCorruptionNeverLegacy(t *testing.T) {
-	brain, b, _, path := fixture(t)
+	brain, b, _, path := codexFixture(t)
 	s := prepare(t, brain, b, path, "e-one")
 	if _, err := ReadSelection(brain, s.EpicID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing: %v", err)
@@ -237,7 +177,7 @@ func TestSelectionCorruptionNeverLegacy(t *testing.T) {
 		"duplicate":      strings.Replace(string(good), `"schema_version": 1`, `"schema_version": 1, "schema_version": 1`, 1),
 		"future":         strings.Replace(string(good), `"schema_version": 1`, `"schema_version": 2`, 1),
 		"wrong epic":     strings.Replace(string(good), `"epic_id": "e-one"`, `"epic_id": "e-other"`, 1),
-		"model mismatch": strings.Replace(string(good), NativeModel, "other-model", 1),
+		"model mismatch": strings.Replace(string(good), CodexModel, "other-model", 1),
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -252,7 +192,7 @@ func TestSelectionCorruptionNeverLegacy(t *testing.T) {
 }
 
 func TestActiveProfileCompatibility(t *testing.T) {
-	brain, b, p, path := fixture(t)
+	brain, b, p, path := codexFixture(t)
 	s := prepare(t, brain, b, path, "e-one")
 	if err := WriteSelection(brain, s); err != nil {
 		t.Fatal(err)
@@ -271,12 +211,12 @@ func TestActiveProfileCompatibility(t *testing.T) {
 	}
 	_ = prepare(t, brain, b, path, "e-two")
 	mutations := map[string]func(*Profile){
-		"namespace": func(p *Profile) { p.CredentialNamespace = "other-namespace" },
-		"identity":  func(p *Profile) { p.IdentityBinding = "other-grant" },
-		"binary":    func(p *Profile) { p.NativeWorker = p.NativeUsage },
+		"disabled MCP": func(p *Profile) { p.CodexDisabledMCP = []string{"different"} },
+		"identity":     func(p *Profile) { p.IdentityBinding = "other-grant" },
+		"binary":       func(p *Profile) { p.CodexExecServer = p.CodexBinary },
 		"effort": func(p *Profile) {
 			p.Routes = maps.Clone(p.Routes)
-			p.Routes["implementor"] = []Candidate{{Provider: "zed", Tier: "medium", Effort: "high"}}
+			p.Routes["implementor"] = []Candidate{{Provider: "codex", Tier: "medium", Effort: "high"}}
 		},
 	}
 	for name, mutate := range mutations {
@@ -284,7 +224,7 @@ func TestActiveProfileCompatibility(t *testing.T) {
 			copy := p
 			mutate(&copy)
 			saveProfile(t, path, copy)
-			if _, err := Prepare(brain, "e-two", b, Options{Executor: "z", ProfilePath: path}); err == nil || !strings.Contains(err.Error(), "conflicts with active epic") {
+			if _, err := Prepare(brain, "e-two", b, Options{Executor: "codex", ProfilePath: path}); err == nil || !strings.Contains(err.Error(), "conflicts with active epic") {
 				t.Fatalf("active mismatch: %v", err)
 			}
 		})
@@ -309,27 +249,65 @@ func TestLegacyPrepareUnchanged(t *testing.T) {
 }
 
 func TestPrepareProfileOverridesBlueprintDefaults(t *testing.T) {
-	brain, b, _, path := fixture(t)
+	brain, b, _, path := codexFixture(t)
 	for _, name := range []string{"planner", "orchestrator", "babysitter"} {
 		c := b.Components[name]
-		c.Tier = "medium"
+		c.Tier = "low"
 		b.Components[name] = c
 	}
 	s := prepare(t, brain, b, path, "e-one")
-	if s.Routes["planner"][0].Model != ClaudeModel {
+	if s.Routes["planner"][0].Tier != "medium" {
 		t.Fatal("profile did not take precedence")
 	}
 }
 
 func TestActiveStateErrorsFailClosed(t *testing.T) {
-	brain, b, _, path := fixture(t)
+	brain, b, _, path := codexFixture(t)
 	indexPath := filepath.Join(brain, "factory", "index.json")
 	for _, data := range []string{"{", "null", `{"e-one":{"kind":"epic","dir":"relative"}}`} {
 		if err := os.WriteFile(indexPath, []byte(data), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Prepare(brain, "e-two", b, Options{Executor: "z", ProfilePath: path}); err == nil {
+		if _, err := Prepare(brain, "e-two", b, Options{Executor: "codex", ProfilePath: path}); err == nil {
 			t.Fatalf("accepted bad active state: %s", data)
 		}
+	}
+}
+
+func TestSavedUnsupportedExecutorDoesNotBlockCodexIntake(t *testing.T) {
+	brain, b, _, profile := codexFixture(t)
+	oldPath := selectionPath(brain, "e-old-z")
+	if err := os.MkdirAll(filepath.Dir(oldPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"schema_version":1,"executor":"z","epic_id":"e-old-z","profile":{"schema_version":1,"executor":"z","native_worker":"/old/worker","native_usage":"/old/usage","credential_namespace":"old-z"},"created_at":"2026-10-16T00:00:00Z"}`
+	if err := os.WriteFile(oldPath, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSelection(brain, "e-old-z"); !errors.Is(err, ErrUnsupportedExecutor) || !strings.Contains(err.Error(), `"z"`) || !strings.Contains(err.Error(), "e-old-z") {
+		t.Fatalf("old epic did not report its unsupported executor: %v", err)
+	}
+	index, err := json.Marshal(map[string]map[string]string{"e-old-z": {"kind": "epic", "dir": filepath.Join(brain, "old-epic"), "epic": "e-old-z"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(brain, "factory", "index.json"), index, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	selection := prepare(t, brain, b, profile, "e-new-codex")
+	if err := WriteSelection(brain, selection); err != nil {
+		t.Fatalf("old unsupported epic blocked Codex publication: %v", err)
+	}
+	if got, err := ReadSelection(brain, "e-new-codex"); err != nil || got.Executor != "codex" {
+		t.Fatalf("new Codex selection: %+v %v", got, err)
+	}
+	if _, err := Prepare(brain, "e-new-z", b, Options{Executor: "z", ProfilePath: profile}); !errors.Is(err, ErrUnsupportedExecutor) {
+		t.Fatalf("new Z executor was accepted: %v", err)
+	}
+	if err := os.WriteFile(oldPath, []byte(`{"schema_version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(brain, "e-other-codex", b, Options{Executor: "codex", ProfilePath: profile}); err == nil || errors.Is(err, ErrUnsupportedExecutor) {
+		t.Fatalf("corrupt indexed selection was ignored: %v", err)
 	}
 }

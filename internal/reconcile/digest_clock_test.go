@@ -9,14 +9,9 @@ import (
 )
 
 func TestDigestAgeLegacyDoesNotSubtractAccountPause(t *testing.T) {
-	for _, mode := range []string{"claude", "z"} {
+	for _, mode := range []string{"claude"} {
 		t.Run(mode, func(t *testing.T) {
-			var w *world
-			if mode == "z" {
-				w, _, _ = nativeWorld(t)
-			} else {
-				w = threeWaiting(t)
-			}
+			w := threeWaiting(t)
 			w.at(25 * time.Hour)
 			r, err := newRun(context.Background(), w.deps(), false)
 			if err != nil {

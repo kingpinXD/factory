@@ -120,22 +120,13 @@ func setup(t *testing.T) (Service, RunnerDeps, Request) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := executor.DefaultProfile(&b)
-	profile.NativeWorker = binary
-	profile.NativeUsage = binary
-	profile.ContainerImage = "sha256:" + strings.Repeat("a", 64)
-	profile.CredentialNamespace = "test-grant"
-	profile.IdentityBinding = "account-binding"
+	profile := executor.Profile{SchemaVersion: 1, Executor: "codex", CodexBinary: binary, CodexExecServer: binary, CodexVersion: "0.162.1", CodexModelCatalog: "/fixture/models.json", CodexModelCatalogSHA256: strings.Repeat("a", 64), ContainerImage: "sha256:" + strings.Repeat("a", 64), IdentityBinding: "account-binding", ModelEvidencePolicy: executor.CodexModelEvidencePolicy, MaxActiveHelpers: 1, Routes: map[string][]executor.Candidate{}}
 	routes := map[string][]executor.Route{}
-	for name, candidates := range profile.Routes {
-		c := candidates[0]
-		model := executor.NativeModel
-		if c.Provider == "claude" {
-			model = executor.ClaudeModel
-		}
-		routes[name] = []executor.Route{{Provider: c.Provider, Tier: c.Tier, Model: model, Effort: c.Effort}}
+	for name := range b.Components {
+		profile.Routes[name] = []executor.Candidate{{Provider: "codex", Tier: "medium", Effort: "high"}}
+		routes[name] = []executor.Route{{Provider: "codex", Tier: "medium", Model: executor.CodexModel, Effort: "high"}}
 	}
-	selection := executor.Selection{SchemaVersion: 1, Executor: "z", EpicID: "epic1", Profile: profile, Routes: routes, Binaries: map[string]executor.Binary{"worker": {Path: binary, SHA256: strings.Repeat("a", 64)}, "usage": {Path: binary, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: profile.ContainerImage, CreatedAt: time.Now().UTC()}
+	selection := executor.Selection{SchemaVersion: 1, Executor: "codex", EpicID: "epic1", Profile: profile, Routes: routes, Binaries: map[string]executor.Binary{"codex": {Path: binary, SHA256: strings.Repeat("a", 64)}, "codex-executor": {Path: binary, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: profile.ContainerImage, CreatedAt: time.Now().UTC()}
 	if err = executor.WriteSelection(brain, selection); err != nil {
 		t.Fatal(err)
 	}
@@ -152,13 +143,13 @@ func setup(t *testing.T) (Service, RunnerDeps, Request) {
 	}
 	authority := &fakeAuthority{scope: Scope{EpicID: "epic1", OwnerID: "owner1", WorkID: "work1", Generation: "g1", Worktree: work, OutputRoot: output}}
 	service := Service{Brain: brain, Authority: authority}
-	deps := RunnerDeps{Service: service, FactoryBin: binary, Backends: map[string]Backend{}, Quotas: map[string]UsageReader{"zed": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: func(context.Context, Job, RoundResult) error { return nil }}
+	deps := RunnerDeps{Service: service, FactoryBin: binary, Backends: map[string]Backend{}, Quotas: map[string]UsageReader{"codex": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: func(context.Context, Job, RoundResult) error { return nil }}
 	req := Request{SchemaVersion: 1, RequestKey: "request1", OwnerID: "owner1", WorkID: "work1", Component: "reviewer", Prompt: "review"}
 	return service, deps, req
 }
 func quota(now time.Time, used float64) QuotaSnapshot {
 	allowed := true
-	return QuotaSnapshot{Provider: "zed", ObservedAt: now, Windows: []QuotaWindow{{used, now.Add(time.Hour), 5 * time.Hour}, {used, now.Add(24 * time.Hour), 7 * 24 * time.Hour}}, OrdinaryUsageAllowed: &allowed, Known: true, IdentityBinding: "account-binding", ExpectedIdentity: "account-binding", AttributionKnown: true}
+	return QuotaSnapshot{Provider: "codex", ObservedAt: now, Windows: []QuotaWindow{{used, now.Add(time.Hour), 5 * time.Hour}, {used, now.Add(24 * time.Hour), 7 * 24 * time.Hour}}, OrdinaryUsageAllowed: &allowed, Known: true, IdentityBinding: "account-binding", ExpectedIdentity: "account-binding", AttributionKnown: true}
 }
 func recordTurn(ctx context.Context, s RunSpec, k Sink) (RunResult, error) {
 	conversation := s.Job.ConversationID
@@ -166,6 +157,8 @@ func recordTurn(ctx context.Context, s RunSpec, k Sink) (RunResult, error) {
 		conversation = "conversation-" + s.Job.ID
 	}
 	turn := fmt.Sprintf("turn-%d", s.Job.Round)
+	result := RunResult{Outcome: "completed", Reply: "review result", ConversationID: conversation, TurnID: turn, EvidencePolicy: executor.CodexModelEvidencePolicy, ConfiguredModel: s.Job.Route.Model, ConfiguredEffort: s.Job.Route.Effort}
+	result.PersistedReplySHA256 = digestBytes([]byte(result.Reply))
 	for _, e := range []struct {
 		name   string
 		fields map[string]string
@@ -174,13 +167,16 @@ func recordTurn(ctx context.Context, s RunSpec, k Sink) (RunResult, error) {
 		{"conversation_recorded", map[string]string{"conversation_id": conversation}},
 		{"turn_requested", nil}, {"turn_identified", map[string]string{"turn_id": turn}},
 		{"native_ended", map[string]string{"turn_id": turn}},
-		{EventCheckpointSaved, map[string]string{"conversation_id": conversation, "turn_id": turn}},
+		{EventPersistedTurnVerified, map[string]string{"conversation_id": conversation, "turn_id": turn, "reply_sha256": result.PersistedReplySHA256, "configured_model": result.ConfiguredModel, "configured_effort": result.ConfiguredEffort, "evidence_policy": result.EvidencePolicy}},
 	} {
 		if err := k.Record(ctx, e.name, e.fields); err != nil {
 			return RunResult{}, err
 		}
 	}
-	return RunResult{Outcome: "completed", Reply: "review result", ConversationID: conversation, TurnID: turn, ObservedModel: s.Job.Route.Model}, nil
+	return result, nil
+}
+func persistedTurnFields(result RunResult) map[string]string {
+	return map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID, "reply_sha256": digestBytes([]byte(result.Reply)), "configured_model": result.ConfiguredModel, "configured_effort": result.ConfiguredEffort, "evidence_policy": result.EvidencePolicy}
 }
 func runBounded(t *testing.T, d RunnerDeps) {
 	t.Helper()
@@ -199,7 +195,7 @@ func TestQuotaPolicyMatrix(t *testing.T) {
 	}{
 		{"allowed", "allowed", func(*QuotaSnapshot) {}}, {"hold", "hold", func(s *QuotaSnapshot) { s.Windows[1].Used = 80 }}, {"pause", "pause", func(s *QuotaSnapshot) { s.Windows[0].Used = 88 }},
 		{"nan", "unknown", func(s *QuotaSnapshot) { s.Windows[0].Used = math.NaN() }}, {"infinite", "unknown", func(s *QuotaSnapshot) { s.Windows[1].Used = math.Inf(1) }},
-		{"missing", "unknown", func(s *QuotaSnapshot) { s.Windows = s.Windows[:1] }}, {"duplicate", "unknown", func(s *QuotaSnapshot) { s.Windows[1].Duration = 5 * time.Hour }},
+		{"single_window", "allowed", func(s *QuotaSnapshot) { s.Windows = s.Windows[:1] }}, {"missing", "unknown", func(s *QuotaSnapshot) { s.Windows = nil }}, {"duplicate", "unknown", func(s *QuotaSnapshot) { s.Windows[1].Duration = 5 * time.Hour }},
 		{"clock", "unknown", func(s *QuotaSnapshot) { s.ObservedAt = now.Add(time.Second) }}, {"stale", "unknown", func(s *QuotaSnapshot) { s.ObservedAt = now.Add(-16 * time.Minute) }},
 		{"reset_without_read", "unknown", func(s *QuotaSnapshot) { s.Windows[0].ResetsAt = now }},
 		{"identity", "unknown", func(s *QuotaSnapshot) { s.IdentityBinding = "other" }}, {"unattributed", "unknown", func(s *QuotaSnapshot) { s.AttributionKnown = false }},
@@ -289,7 +285,7 @@ func TestOutputPublicationAndFreshContinuationVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		if err := os.WriteFile(req.OutputPath, []byte("## Result\ncomplete\n"), 0600); err != nil {
 			return RunResult{}, err
 		}
@@ -323,8 +319,8 @@ func TestExitZeroWithoutTurnEvidenceNeverCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
-		return RunResult{Outcome: "completed", ObservedModel: executor.NativeModel}, nil
+	d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
+		return RunResult{Outcome: "completed", ObservedModel: executor.CodexModel}, nil
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -345,7 +341,7 @@ func TestNestedYieldPoolOne(t *testing.T) {
 	var active atomic.Int32
 	var maxActive atomic.Int32
 	var total atomic.Int32
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		n := active.Add(1)
 		defer active.Add(-1)
 		if n > maxActive.Load() {
@@ -388,7 +384,7 @@ func TestNotificationRetryIsKeyed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: recordTurn}
+	d.Backends["codex"] = backendFunc{run: recordTurn}
 	calls := 0
 	d.Notify = func(context.Context, Job, RoundResult) error {
 		calls++
@@ -443,7 +439,7 @@ func beginTurn(ctx context.Context, s RunSpec, k Sink) (RunResult, error) {
 			return RunResult{}, err
 		}
 	}
-	return RunResult{Outcome: "interrupted", ConversationID: conversation, TurnID: turn, ObservedModel: s.Job.Route.Model}, nil
+	return RunResult{Outcome: "interrupted", ConversationID: conversation, TurnID: turn, EvidencePolicy: executor.CodexModelEvidencePolicy, ConfiguredModel: s.Job.Route.Model, ConfiguredEffort: s.Job.Route.Effort, PersistedReplySHA256: digestBytes(nil)}, nil
 }
 func TestQuotaInterruptionRequiresExplicitRecoveryWithoutReplay(t *testing.T) {
 	s, d, req := setup(t)
@@ -455,14 +451,14 @@ func TestQuotaInterruptionRequiresExplicitRecoveryWithoutReplay(t *testing.T) {
 	var nativeSaved RunResult
 	var writes atomic.Int32
 	started := make(chan struct{})
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 		used := 10.0
 		if paused.Load() {
 			used = 95
 		}
 		return quota(time.Now(), used), nil
 	})
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		if spec.Resume {
 			if spec.Job.ConversationID == "" || spec.Prompt != "recover without repeating command" {
 				return RunResult{}, errors.New("lost conversation or replayed prompt")
@@ -491,7 +487,7 @@ func TestQuotaInterruptionRequiresExplicitRecoveryWithoutReplay(t *testing.T) {
 		<-ctx.Done()
 		saveCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err = k.Record(saveCtx, "checkpoint_saved", map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
+		err = k.Record(saveCtx, EventPersistedTurnVerified, persistedTurnFields(result))
 		if err == nil {
 			nativeSaved = result
 		}
@@ -593,7 +589,7 @@ func TestUnknownWriterRequiresFencerAndRetainsBarrier(t *testing.T) {
 	if _, err = s.Submit(context.Background(), req); err == nil {
 		t.Fatal("unknown writer admitted replacement")
 	}
-	d.Backends["zed"] = backendFunc{fence: func(context.Context, Job) error { return errors.New("identity unproved") }}
+	d.Backends["codex"] = backendFunc{fence: func(context.Context, Job) error { return errors.New("identity unproved") }}
 	if err = recoverAttempts(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +629,7 @@ func TestOutputAliasesAndMissingHeadingsRejected(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+			d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 				if err := os.WriteFile(req.OutputPath, []byte("unfinished"), 0600); err != nil {
 					return RunResult{}, err
 				}
@@ -657,13 +653,13 @@ func TestPinnedQuotaIdentityCannotBeSelfAsserted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 		q := quota(time.Now(), 0)
 		q.IdentityBinding = "attacker"
 		q.ExpectedIdentity = "attacker"
 		return q, nil
 	})
-	snapshot, err := d.Quotas["zed"].Read(context.Background())
+	snapshot, err := d.Quotas["codex"].Read(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,11 +675,11 @@ func TestIdentifiedTurnWithoutEndNeverCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		r, e := beginTurn(ctx, spec, k)
 		r.Outcome = "completed"
 		if e == nil {
-			e = k.Record(ctx, EventCheckpointSaved, map[string]string{"conversation_id": r.ConversationID, "turn_id": r.TurnID})
+			e = k.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(r))
 		}
 		return r, e
 	}}
@@ -715,7 +711,7 @@ func TestNestedChildExplicitRecoveryReleasesParentOnce(t *testing.T) {
 			}
 			var childID string
 			parentRuns := 0
-			d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+			d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 				result, err := recordTurn(ctx, spec, k)
 				if err != nil {
 					return result, err
@@ -739,7 +735,7 @@ func TestNestedChildExplicitRecoveryReleasesParentOnce(t *testing.T) {
 				} else if spec.Job.Round == 1 {
 					result.Outcome = outcome
 					if outcome == "recovery_required" {
-						err = k.Record(ctx, "checkpoint_saved", map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
+						err = k.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(result))
 					}
 				}
 				return result, err
@@ -785,7 +781,7 @@ func TestContinueRetryReturnsOriginalRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: recordTurn}
+	d.Backends["codex"] = backendFunc{run: recordTurn}
 	runBounded(t, d)
 	cont := ContinueRequest{SchemaVersion: 1, RequestKey: "continue1", ExpectedRound: 1, Prompt: "second round"}
 	first, err := s.Continue(context.Background(), a.JobID, cont)
@@ -811,7 +807,7 @@ func TestFenceDoesNotRewriteCompletedRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: recordTurn}
+	d.Backends["codex"] = backendFunc{run: recordTurn}
 	runBounded(t, d)
 	before, err := s.Result(a.JobID, 1)
 	if err != nil {
@@ -821,6 +817,9 @@ func TestFenceDoesNotRewriteCompletedRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, err := s.Result(a.JobID, 1)
+	// Recovery is a fresh view of the current scope, not part of the saved round.
+	before.Recovery = nil
+	after.Recovery = nil
 	if err != nil || before != after {
 		t.Fatalf("before=%+v after=%+v err=%v", before, after, err)
 	}
@@ -860,7 +859,7 @@ func TestChildCannotStartWithoutYieldHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	var starts atomic.Int32
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		starts.Add(1)
 		result, e := recordTurn(ctx, spec, k)
 		if e != nil {
@@ -943,7 +942,7 @@ func TestYieldRetainsOutputReservationUntilFinalRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		if spec.Job.ID != root.JobID {
 			ix, _ := store.ReadIndex(s.Brain)
 			log, e := events.Read(store.EventsPath(ix["work1"].Dir))
@@ -1000,7 +999,7 @@ func TestUnknownBackendOutcomeRemainsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		r, e := recordTurn(ctx, spec, k)
 		r.Outcome = "unknown"
 		return r, e
@@ -1022,7 +1021,7 @@ func TestRecoveryVersusChildContinuationIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	var childID string
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		result, e := recordTurn(ctx, spec, k)
 		if e != nil {
 			return result, e
@@ -1071,7 +1070,7 @@ func TestRecoveryVersusChildContinuationIsAtomic(t *testing.T) {
 	if (one == nil) == (two == nil) {
 		t.Fatalf("want one winner: %v %v", one, two)
 	}
-	d.Backends["zed"] = backendFunc{run: recordTurn}
+	d.Backends["codex"] = backendFunc{run: recordTurn}
 	runBounded(t, d)
 	parent, err := s.Job(root.JobID)
 	if err != nil || parent.Round != 2 || parent.State != "completed" {

@@ -511,7 +511,9 @@ func TestFactoryUnselectedCodexRuntimeDoesNotRecoverRetainedState(t *testing.T) 
 		t.Run(kind, func(t *testing.T) {
 			var w *world
 			if kind == "retained-z" {
-				w, _, _ = nativeWorld(t)
+				w = newWorld(t)
+				w.epic("e1", "planned")
+				put(t, filepath.Join(w.brain, "factory/executors/e1/selection.json"), `{"schema_version":1,"executor":"z","epic_id":"e1","created_at":"2026-10-09T12:00:00Z"}`)
 			} else {
 				w = newWorld(t)
 				w.epic("e1", "planned")

@@ -23,7 +23,7 @@ func TestReadSelectionIncompleteNeverLegacy(t *testing.T) {
 }
 
 func TestWriteSelectionDurableOrdering(t *testing.T) {
-	sourceBrain, b, _, profile := fixture(t)
+	sourceBrain, b, _, profile := codexFixture(t)
 	selection := prepare(t, sourceBrain, b, profile, "e-order")
 	brain := filepath.Join(t.TempDir(), "new-brain")
 	path := selectionPath(brain, selection.EpicID)
@@ -64,7 +64,7 @@ func TestWriteSelectionDurableOrdering(t *testing.T) {
 func TestWriteSelectionDurabilityFailures(t *testing.T) {
 	for _, stage := range []string{"file-sync", "link", "epic-dir", "executors-dir", "factory-dir", "brain-dir", "brain-parent"} {
 		t.Run(stage, func(t *testing.T) {
-			brain, b, _, profile := fixture(t)
+			brain, b, _, profile := codexFixture(t)
 			selection := prepare(t, brain, b, profile, "e-error")
 			path := selectionPath(brain, selection.EpicID)
 			target := map[string]string{"epic-dir": filepath.Dir(path), "executors-dir": filepath.Join(brain, "factory", "executors"), "factory-dir": filepath.Join(brain, "factory"), "brain-dir": brain, "brain-parent": filepath.Dir(brain)}[stage]
@@ -113,7 +113,7 @@ func TestWriteSelectionDurabilityFailures(t *testing.T) {
 }
 
 func TestWriteSelectionRetrySyncsExistingFile(t *testing.T) {
-	brain, b, _, profile := fixture(t)
+	brain, b, _, profile := codexFixture(t)
 	selection := prepare(t, brain, b, profile, "e-retry")
 	if err := WriteSelection(brain, selection); err != nil {
 		t.Fatal(err)

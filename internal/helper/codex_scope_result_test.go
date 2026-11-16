@@ -147,22 +147,3 @@ func TestCodexScopeUnknownIsNullAndMissingBarrierStillFailsClosed(t *testing.T) 
 		t.Fatal("failed scope read mutated ledger")
 	}
 }
-func TestZResultKeepsStoredJSONWithoutRecoveryMetadata(t *testing.T) {
-	s, _, req := setup(t)
-	accepted, err := s.Submit(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stored []byte
-	if err = s.transaction(context.Background(), false, func(db *ledger) error { stored, _ = json.Marshal(db.Jobs[accepted.JobID].Rounds[1].Result); return nil }); err != nil {
-		t.Fatal(err)
-	}
-	result, err := s.Result(accepted.JobID, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, _ := json.Marshal(result)
-	if !bytes.Equal(stored, data) || result.Recovery != nil {
-		t.Fatalf("legacy Z JSON changed: stored=%s returned=%s", stored, data)
-	}
-}

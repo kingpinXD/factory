@@ -95,7 +95,7 @@ func (r *run) beginNativeBoundary(sess *entity, kind, key string) (nativeBoundar
 	if err != nil {
 		return nativeBoundary{}, err
 	}
-	if selection.Executor != "z" && selection.Executor != "codex" {
+	if selection.Executor != "codex" {
 		return nativeBoundary{}, nil
 	}
 	owner := r.ents[sess.session.Task]

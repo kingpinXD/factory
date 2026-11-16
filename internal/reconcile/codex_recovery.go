@@ -56,6 +56,9 @@ func indexedCodexSelection(brain string, ix store.Index) (bool, error) {
 		}
 		seen[epic] = true
 		selection, err := NativeSelection(brain, epic)
+		if errors.Is(err, executor.ErrUnsupportedExecutor) {
+			continue
+		}
 		if err != nil {
 			holds = append(holds, err)
 			continue

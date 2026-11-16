@@ -200,6 +200,13 @@ func (s Service) transaction(ctx context.Context, mutate bool, fn func(*ledger) 
 	if err = validateLedger(&db); err != nil {
 		return err
 	}
+	// Retired providers remain readable without participating in scheduling.
+	for _, r := range db.Jobs {
+		if r.Job.Route.Provider == "zed" {
+			setState(r, "failed", "unsupported_provider")
+			r.Rounds[r.Job.Round].Result.ErrorText = "Z executor is no longer supported; use Codex"
+		}
+	}
 	var before []byte
 	if mutate {
 		before, err = json.Marshal(db)
@@ -263,7 +270,11 @@ func validateLedger(db *ledger) error {
 			return fmt.Errorf("corrupt pinned selection: %w", err)
 		}
 		routes := selection.Routes[r.Job.Request.Component]
-		if selection.SchemaVersion != 1 || !brokerSelection(selection) || selection.EpicID != r.Job.Scope.EpicID || helperProvider(selection) != r.Job.Route.Provider || len(routes) != 1 || routes[0] != r.Job.Route {
+		provider := helperProvider(selection)
+		if selection.Executor == "z" {
+			provider = "zed"
+		}
+		if selection.SchemaVersion != 1 || provider == "" || selection.EpicID != r.Job.Scope.EpicID || provider != r.Job.Route.Provider || len(routes) != 1 || routes[0] != r.Job.Route {
 			return fmt.Errorf("job differs from immutable pinned route")
 		}
 		if err := validateExistingPRMode(r.Job); err != nil {

@@ -20,7 +20,7 @@ type sparseDescendantFixture struct {
 
 func sparseDescendants(t *testing.T, ctx context.Context) sparseDescendantFixture {
 	t.Helper()
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +234,7 @@ func TestGitPromotionSparseDescendantsExcludeExternalGitlinks(t *testing.T) {
 }
 
 func TestRecursiveIndexVerificationRejectsMissingDescendantBlob(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))

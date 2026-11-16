@@ -41,11 +41,6 @@ func TestBootstrapPolicySubprocess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, _, request := bindingFixture(t, "zed")
-	old, err := legacy.Submit(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, item := range []struct {
 		name           string
 		args           []string
@@ -55,7 +50,6 @@ func TestBootstrapPolicySubprocess(t *testing.T) {
 		{"control", []string{"codex-control", "--brain", modern.Brain, "--job", accepted.JobID}, true, false},
 		{"helper", []string{"helper", "control", accepted.JobID, "--brain", modern.Brain}, true, false},
 		{"unknown", []string{"codex-control", "--brain", modern.Brain, "--job", "unknown"}, true, false},
-		{"legacy", []string{"helper", "control", old.JobID, "--brain", legacy.Brain}, false, true},
 		{"programme", []string{"version"}, false, true},
 		{"effect-claim-first", []string{"effect-dispatch"}, false, false},
 	} {

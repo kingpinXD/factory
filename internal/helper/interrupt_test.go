@@ -24,7 +24,7 @@ func TestBrokerInterruptPreservesConversationAndRequiresExplicitRecovery(t *test
 	started := make(chan RunResult, 1)
 	var runs atomic.Int32
 	var nativeSaved RunResult
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		runs.Add(1)
 		if spec.Resume {
 			if spec.Job.ConversationID == "" || spec.Prompt != "explicit recovery\n\nAuthoritative output path: "+req.OutputPath || spec.OutputPath != req.OutputPath {
@@ -46,7 +46,7 @@ func TestBrokerInterruptPreservesConversationAndRequiresExplicitRecovery(t *test
 		<-ctx.Done()
 		saveCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err = k.Record(saveCtx, EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
+		err = k.Record(saveCtx, EventPersistedTurnVerified, persistedTurnFields(result))
 		result.Outcome = "recovery_required"
 		if err == nil {
 			nativeSaved = result
@@ -121,7 +121,7 @@ func TestInterruptUnknownDeathRetainsWriterBarrier(t *testing.T) {
 	}
 	started := make(chan struct{})
 	var runs atomic.Int32
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		runs.Add(1)
 		result, err := beginTurn(ctx, spec, k)
 		if err != nil {
@@ -170,11 +170,11 @@ func TestInterruptIntentRecoversThroughInspectAfterBrokerRestart(t *testing.T) {
 	}
 	restarted := Service{Brain: s.Brain, Authority: s.Authority}
 	d.Service = restarted
-	d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
 		t.Error("replayed prompt")
 		return RunResult{}, nil
 	}, inspect: func(ctx context.Context, _ RunSpec, k Sink) (RunResult, bool, error) {
-		err := k.Record(ctx, EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
+		err := k.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(result))
 		result.Outcome = "interrupted"
 		return result, err == nil, err
 	}}

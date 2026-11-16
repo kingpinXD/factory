@@ -155,7 +155,7 @@ func TestCodexHelperMissingKnowledgeCLIUsesBoundAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	checked := false
-	deps.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (helper.RunResult, error) {
+	deps.Backends = map[string]helper.Backend{"codex": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (helper.RunResult, error) {
 		result, err := controlTurn(ctx, spec, sink, true)
 		if err != nil {
 			return result, err

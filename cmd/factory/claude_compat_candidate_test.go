@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
@@ -27,9 +26,6 @@ func init() {
 			return fmt.Errorf("forbidden native runtime fence in legacy CLI lane")
 		})
 		d.Helpers = &service
-		d.NativePreflight = func(context.Context, executor.Selection) error {
-			return fmt.Errorf("forbidden native preflight in Claude CLI lane")
-		}
 		d.StartHelpers = func(context.Context) error {
 			jobs, err := (helper.Service{Brain: d.Brain}).Jobs()
 			if err != nil {
@@ -99,7 +95,7 @@ func TestClaudeCompatCandidateProductionConstructor(t *testing.T) {
 	_, claudeExec := d.Claude.Runner.(proc.Exec)
 	_, account := d.Account.(reconcile.PlanAccount)
 	_, slack := d.Notify.(notify.Slack)
-	cliCompatRequire(t, ghExec && claudeExec && account && slack && d.Helpers != nil && d.StartHelpers != nil && d.NativePreflight != nil, "production adapter wiring missing")
+	cliCompatRequire(t, ghExec && claudeExec && account && slack && d.Helpers != nil && d.StartHelpers != nil, "production adapter wiring missing")
 	jobs, err := d.Helpers.Jobs()
 	if err != nil {
 		t.Fatal(err)

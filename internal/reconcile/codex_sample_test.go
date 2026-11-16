@@ -277,3 +277,36 @@ func TestCodexSampleEpicSimulationPreservesDependenciesAndMergeChecks(t *testing
 		t.Fatalf("sample did not merge each PR once: %v", w.called("gh pr merge"))
 	}
 }
+
+func TestRemovedExecutorHoldsOnlyItsSavedEpic(t *testing.T) {
+	w, d, runtime := codexSampleWorld(t)
+	w.epic("old-z", epicChecking)
+	put(t, filepath.Join(store.Factory(w.brain), "executors", "old-z", "selection.json"), `{"schema_version":1,"executor":"z","epic_id":"old-z","created_at":"2026-10-09T12:00:00Z"}`)
+	if err := Tick(context.Background(), d, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.starts) != 1 || runtime.starts[0].EpicID != "e-codex" {
+		t.Fatalf("saved Z blocked Codex startup: %+v", runtime.starts)
+	}
+	report, err := Status(context.Background(), d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, epic := range report.Epics {
+		if epic.ID == "old-z" {
+			found = true
+			if !strings.Contains(epic.ExecutorHold, "unsupported executor") || !strings.Contains(epic.ExecutorHold, "old-z") {
+				t.Fatalf("saved Z lacked an explicit executor hold: %+v", epic)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("saved Z epic disappeared from status")
+	}
+	for _, spec := range runtime.starts {
+		if spec.EpicID == "old-z" {
+			t.Fatal("saved Z started through another executor")
+		}
+	}
+}

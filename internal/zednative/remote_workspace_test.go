@@ -21,7 +21,7 @@ import (
 
 func remoteFixture(t *testing.T, controlOnly bool) (*RemoteWorkspace, RemoteOwner, *fakeEngine, *int) {
 	t.Helper()
-	_, spec, engine := fixture(t)
+	spec, engine := fixture(t)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

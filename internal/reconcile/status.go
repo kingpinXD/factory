@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -157,23 +159,20 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 		return Report{}, err
 	}
 	for _, j := range jobs {
-		provider, attach := "z", "factory z-attach "+j.ID
-		if j.Route.Provider == "codex" {
-			provider = "codex"
-			attach = "factory helper status " + j.ID
-		}
-		rep.Native = append(rep.Native, NativeLoad{j.ID, j.Scope.EpicID, j.Route.Model, j.State, j.HoldReason, attach, provider})
+		rep.Native = append(rep.Native, NativeLoad{j.ID, j.Scope.EpicID, j.Route.Model, j.State, j.HoldReason, "factory helper status " + j.ID, j.Route.Provider})
 	}
 	for i := range rep.Epics {
 		s, err := NativeSelection(d.Brain, rep.Epics[i].ID)
 		if err != nil {
-			return Report{}, err
-		}
-		if s.Executor == "z" || s.Executor == "codex" {
-			rep.Epics[i].Executor = s.Executor
-			if s.Executor == "codex" {
-				rep.Epics[i].ExecutorHold = r.ents[rep.Epics[i].ID].st.ExecutorHold
+			if !errors.Is(err, executor.ErrUnsupportedExecutor) {
+				return Report{}, err
 			}
+			rep.Epics[i].ExecutorHold = err.Error()
+			continue
+		}
+		if s.Executor == "codex" {
+			rep.Epics[i].Executor = s.Executor
+			rep.Epics[i].ExecutorHold = r.ents[rep.Epics[i].ID].st.ExecutorHold
 		}
 	}
 	for _, ep := range o.Repairs {

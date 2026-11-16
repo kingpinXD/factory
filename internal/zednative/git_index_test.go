@@ -15,7 +15,7 @@ import (
 )
 
 func TestGitPromotionImportsStagedUncommittedBlob(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -77,7 +77,7 @@ func stageBlob(t *testing.T, ctx context.Context, g gitView, content string) str
 	return gitInput(t, ctx, g.Worktree, content, "--git-dir="+g.Private, "hash-object", "-w", "--stdin")
 }
 func TestGitPromotionPreservesConflictStagesAndUnusualPaths(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -119,7 +119,7 @@ func TestGitPromotionPreservesConflictStagesAndUnusualPaths(t *testing.T) {
 	}
 }
 func TestGitPromotionPreservesGitlinksIntentToAddAndModes(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -174,7 +174,7 @@ func TestGitPromotionRejectsMissingOrWrongTypeIndexObjectsBeforeCAS(t *testing.T
 			name = "wrong-type"
 		}
 		t.Run(name, func(t *testing.T) {
-			_, spec, _ := fixture(t)
+			spec, _ := fixture(t)
 			ctx, cancel := bounded(t)
 			defer cancel()
 			g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -211,7 +211,7 @@ func TestGitPromotionRejectsMissingOrWrongTypeIndexObjectsBeforeCAS(t *testing.T
 func TestGitStagedIndexImportRecoveryBoundaries(t *testing.T) {
 	for _, boundary := range []string{"snapshot", "objects", "imported", "ref_intent", "ref_done", "index_intent", "done"} {
 		t.Run(boundary, func(t *testing.T) {
-			_, spec, _ := fixture(t)
+			spec, _ := fixture(t)
 			ctx, cancel := bounded(t)
 			defer cancel()
 			g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -260,7 +260,7 @@ func TestGitStagedIndexImportRecoveryBoundaries(t *testing.T) {
 	}
 }
 func TestGitPromotionHoldsIfPrivateIndexChangesAfterImport(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -291,7 +291,7 @@ func TestGitPromotionHoldsIfPrivateIndexChangesAfterImport(t *testing.T) {
 	}
 }
 func TestGitPromotionStreamsLargeBlobAndIndexListing(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -349,7 +349,7 @@ func (c *indexListingCounter) Write(data []byte) (int, error) {
 }
 
 func TestGitPromotionImportsPackedUncommittedBlob(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -371,7 +371,7 @@ func TestGitPromotionImportsPackedUncommittedBlob(t *testing.T) {
 	}
 }
 func TestGitPromotionImportsSparseIndexTreeAndDescendants(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -433,52 +433,9 @@ func TestGitPromotionImportsSparseIndexTreeAndDescendants(t *testing.T) {
 		t.Fatal("sparse staged progress moved host branch")
 	}
 }
-func TestInterruptedRoundPreservesUncommittedStagedProgress(t *testing.T) {
-	b, spec, _ := fixture(t)
-	spec.Prompt = "RUNNING_STAGE"
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	sink := &recordSink{}
-	go func() { _, err := b.Run(ctx, spec, sink); done <- err }()
-	eventually(t, func() bool {
-		var a attempt
-		return readPrivate(filepath.Join(spec.RunDir, "adapter.json"), &a) == nil && a.Turn != ""
-	})
-	cancel()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("active writing turn was not interrupted")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Run did not return after cancellation")
-	}
-	fenceCtx, fenceCancel := bounded(t)
-	defer fenceCancel()
-	if err := b.Fence(fenceCtx, spec.Job); err != nil {
-		t.Fatal(err)
-	}
-	result, identified, err := b.Inspect(fenceCtx, spec, sink)
-	if err != nil || !identified || result.Outcome != "interrupted" {
-		t.Fatalf("interrupted result was not recovered: %v", err)
-	}
-	oid := gitMust(t, spec.Cwd, "rev-parse", ":interrupted-staged.txt")
-	if gitMust(t, spec.Cwd, "cat-file", "blob", oid) != "staged before interruption" {
-		t.Fatal("interruption lost staged object data")
-	}
-	gitMust(t, spec.Cwd, "diff", "--cached", "--numstat")
-	var a attempt
-	if err = readPrivate(filepath.Join(spec.RunDir, "adapter.json"), &a); err != nil {
-		t.Fatal(err)
-	}
-	if a.Git.Phase != "done" || !a.Git.IndexObjectsImported || gitMust(t, spec.Cwd, "rev-parse", "HEAD") != a.Git.OldSHA {
-		t.Fatal("interrupted progress import changed branch or skipped verification")
-	}
-}
 
 func TestGitPromotionRepairsPriorDoneRecordWithMissingStagedObjects(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -510,7 +467,7 @@ func TestGitPromotionRepairsPriorDoneRecordWithMissingStagedObjects(t *testing.T
 	}
 }
 func TestGitPromotionVerifiesObjectContentsAgainBeforeIndexInstall(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -553,7 +510,7 @@ func TestGitPromotionVerifiesObjectContentsAgainBeforeIndexInstall(t *testing.T)
 }
 
 func TestGitPromotionImportsCommitAndAdditionalStagedWork(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))

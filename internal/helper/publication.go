@@ -165,6 +165,9 @@ func flush(ctx context.Context, d RunnerDeps) error {
 	}
 	err := d.Service.transaction(ctx, true, func(db *ledger) error {
 		for _, r := range db.Jobs {
+			if r.Job.Route.Provider != "codex" {
+				continue
+			}
 			for n := 1; n <= r.Job.Round; n++ {
 				q := r.Rounds[n]
 				if !terminal(q.Result.State) && q.Result.State != "unknown" && q.Result.State != "blocked" {

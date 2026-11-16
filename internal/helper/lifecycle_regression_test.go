@@ -27,7 +27,7 @@ func TestLiveCancellationInspectsSavedInterruptionWithoutBrokerRestart(t *testin
 			identified := make(chan RunResult, 1)
 			var quotaPaused, stopped, removed atomic.Bool
 			var runs, inspections atomic.Int32
-			d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+			d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 				used := 10.0
 				if quotaPaused.Load() {
 					used = 95
@@ -35,7 +35,7 @@ func TestLiveCancellationInspectsSavedInterruptionWithoutBrokerRestart(t *testin
 				return quota(time.Now(), used), nil
 			})
 			savedPath := filepath.Join(s.Brain, "native-saved-interruption.json")
-			d.Backends["zed"] = backendFunc{
+			d.Backends["codex"] = backendFunc{
 				run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 					runs.Add(1)
 					if spec.Resume {
@@ -103,7 +103,7 @@ func TestLiveCancellationInspectsSavedInterruptionWithoutBrokerRestart(t *testin
 						fields map[string]string
 					}{
 						{EventNativeEnded, map[string]string{"turn_id": result.TurnID}},
-						{EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID}},
+						{EventPersistedTurnVerified, persistedTurnFields(result)},
 					} {
 						if err = k.Record(ctx, event.name, event.fields); err != nil {
 							return result, false, err
@@ -195,7 +195,7 @@ func TestLiveCancellationKeepsUnknownWithoutInspectionProof(t *testing.T) {
 			identified := make(chan RunResult, 1)
 			var saved RunResult
 			var calls atomic.Int32
-			d.Backends["zed"] = backendFunc{
+			d.Backends["codex"] = backendFunc{
 				run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 					result, err := beginTurn(ctx, spec, k)
 					if err != nil {
@@ -226,7 +226,7 @@ func TestLiveCancellationKeepsUnknownWithoutInspectionProof(t *testing.T) {
 					case "missing_checkpoint":
 						return result, true, nil
 					}
-					err := k.Record(ctx, EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
+					err := k.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(result))
 					return result, err == nil, err
 				},
 			}
@@ -268,7 +268,7 @@ func TestExplorerStartIsProgramOwnedAndPrecedesExternalWork(t *testing.T) {
 		t.Fatal("submission published execution start", log, err)
 	}
 	calls := 0
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		calls++
 		log, err := events.Read(path)
 		if err != nil {
@@ -308,7 +308,7 @@ func TestStartFailurePreventsNativeSideEffectAndCanRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls atomic.Int32
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		calls.Add(1)
 		if err := os.WriteFile(spec.OutputPath, []byte("## Result\nexplored\n"), 0600); err != nil {
 			return RunResult{}, err
@@ -343,12 +343,12 @@ func TestWorkflowStartWaitsForQuotaAndAuthority(t *testing.T) {
 				t.Fatal(err)
 			}
 			var calls atomic.Int32
-			d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+			d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 				calls.Add(1)
 				return recordTurn(ctx, spec, k)
 			}}
 			if hold == "quota" {
-				d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 95), nil })
+				d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 95), nil })
 				ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 				defer cancel()
 				if err = Run(ctx, d); !errors.Is(err, context.DeadlineExceeded) {

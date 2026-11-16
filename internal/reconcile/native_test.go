@@ -2,6 +2,8 @@ package reconcile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,15 +15,16 @@ import (
 
 	"github.com/kingpinXD/factory/internal/agents"
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/proc"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
-	"go.yaml.in/yaml/v3"
 )
 
-func nativeWorld(t *testing.T) (*world, helper.Service, helper.Request) {
+func nativeBaseWorld(t *testing.T) (*world, helper.Service, helper.Request) {
 	t.Helper()
 	w := newWorld(t)
 	real, err := filepath.EvalSymlinks(w.brain)
@@ -44,27 +47,66 @@ func nativeWorld(t *testing.T) (*world, helper.Service, helper.Request) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := executor.DefaultProfile(b)
-	profile.NativeWorker = "/fixture/native"
-	profile.NativeUsage = "/fixture/usage"
+	profile := executor.DefaultCodexProfile(b)
+	profile.CodexBinary = "/fixture/codex"
+	profile.CodexExecServer = "/fixture/exec"
 	profile.ContainerImage = "sha256:" + strings.Repeat("a", 64)
-	profile.CredentialNamespace = "factory-openai"
+	profile.CodexVersion = "0.162.1"
+	profile.CodexModelCatalog = "/fixture/models.json"
+	profile.CodexModelCatalogSHA256 = strings.Repeat("a", 64)
+	profile.ModelEvidencePolicy = executor.CodexModelEvidencePolicy
 	profile.IdentityBinding = "fixture-account"
 	routes := map[string][]executor.Route{}
 	for name, cs := range profile.Routes {
 		c := cs[0]
-		model := executor.NativeModel
-		if c.Provider == "claude" {
-			model = executor.ClaudeModel
-		}
-		routes[name] = []executor.Route{{Provider: c.Provider, Tier: c.Tier, Effort: c.Effort, Model: model}}
+		routes[name] = []executor.Route{{Provider: "codex", Tier: c.Tier, Effort: c.Effort, Model: executor.CodexModel}}
 	}
-	selection := executor.Selection{SchemaVersion: 1, Executor: "z", EpicID: "e1", Profile: profile, Routes: routes, Binaries: map[string]executor.Binary{"worker": {Path: profile.NativeWorker, SHA256: strings.Repeat("a", 64)}, "usage": {Path: profile.NativeUsage, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: profile.ContainerImage, CreatedAt: t0}
+	selection := executor.Selection{SchemaVersion: 1, Executor: "codex", EpicID: "e1", Profile: profile, Routes: routes, Binaries: map[string]executor.Binary{"codex": {Path: profile.CodexBinary, SHA256: strings.Repeat("a", 64)}, "codex-executor": {Path: profile.CodexExecServer, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: profile.ContainerImage, CreatedAt: t0}
 	if err = executor.WriteSelection(w.brain, selection); err != nil {
 		t.Fatal(err)
 	}
 	service := NativeService(w.brain, func(context.Context, helper.Job) error { return nil })
 	return w, service, helper.Request{SchemaVersion: 1, RequestKey: "review-1", OwnerID: "e1-s1", WorkID: "e1-w1", SetID: "e1-s1", Lease: 1, Component: "reviewer-code", Prompt: "review it"}
+}
+func nativeWorld(t *testing.T) (*world, helper.Service, helper.Request) {
+	t.Helper()
+	w, s, req := nativeBaseWorld(t)
+	nativeCoordinatorFixture(t, w, req.OwnerID, componentOrchestrator, req.Lease)
+	return w, s, req
+}
+
+// nativeCoordinatorFixture supplies explicit v1 unit metadata, without v2 acceptance or a live host.
+func nativeCoordinatorFixture(t *testing.T, w *world, owner, component string, lease int) {
+	t.Helper()
+	selection, err := executor.ReadSelection(w.brain, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "factory:" + owner + ":" + component
+	id := sessionID(owner, component)
+	if component == babysitterComponent {
+		name = babysitterName(owner, 1)
+		id = babysitterID(owner, 1)
+	}
+	w.put(id, blueprint.MachineSession, "e1", filepath.Join(w.dir(owner), "sessions", component), sessionRunning, &SessionInputs{Name: name, Component: component, Task: owner})
+	spec := session.Spec{Name: name, Task: owner, EpicID: "e1", Generation: fmt.Sprintf("%s:%d:%s", owner, lease, component), SelectionHash: selectionHash(selection)}
+	if err := b2WriteLegacyContract(w.brain, spec, selection); err != nil {
+		t.Fatal(err)
+	}
+	recordID := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	rp := filepath.Join(store.Factory(w.brain), "codex/sessions", recordID, "state.json")
+	var record codex.Record
+	if err := store.ReadJSON(rp, &record); err != nil {
+		t.Fatal(err)
+	}
+	record.Host, err = codex.CaptureProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ThreadID, record.TurnID = "thread", "turn"
+	if err := store.WriteJSON(rp, record); err != nil {
+		t.Fatal(err)
+	}
 }
 func TestNativeAuthorityRejectsStaleAndBroadScope(t *testing.T) {
 	w, s, req := nativeWorld(t)
@@ -84,6 +126,7 @@ func TestNativeAuthorityRejectsStaleAndBroadScope(t *testing.T) {
 	if err = s.Authority.Check(ctx, helper.Job{Request: req, Scope: scope}); err == nil {
 		t.Fatal("old owner retained authority")
 	}
+	nativeCoordinatorFixture(t, w, req.WorkID, babysitterComponent, 0)
 	fresh, err := s.Authority.Refresh(ctx, scope)
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +169,7 @@ func TestNativeFencePrecedesLeasePublicationAndReopensNewGeneration(t *testing.T
 	if _, err = r.grantLease(set, "new owner generation"); err != nil {
 		t.Fatal(err)
 	}
+	nativeCoordinatorFixture(t, w, req.SetID, componentOrchestrator, 2)
 	if err = r.reopenHelpers(set); err != nil {
 		t.Fatal(err)
 	}
@@ -174,11 +218,11 @@ func TestNativePinnedSessionUsesIsolatedPromptsAndNoClaudeHelpers(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Model != "claude-opus-5-5" || spec.Agents != "{}" || spec.PromptFile != agents.PromptPathFor(filepath.Join(store.Factory(w.brain), "executors", "e1"), "planner") {
+	if spec.Model != executor.CodexModel || spec.Agents != "{}" || spec.PromptFile != agents.PromptPathFor(filepath.Join(store.Factory(w.brain), "executors", "e1"), "planner") {
 		t.Fatalf("unpinned spec: %+v", spec)
 	}
 	data, err := os.ReadFile(spec.PromptFile)
-	if err != nil || !strings.Contains(string(data), "Top-level Claude transport") {
+	if err != nil || !strings.Contains(string(data), "factory_control") {
 		t.Fatalf("real isolated prompt missing: %v", err)
 	}
 	put(t, filepath.Join(w.brain, "factory", "executors", "e1", "selection.json"), `{"schema_version":900}`)
@@ -207,7 +251,7 @@ func (b dBackend) Run(ctx context.Context, s helper.RunSpec, k helper.Sink) (hel
 	for _, ev := range []struct {
 		name   string
 		fields map[string]string
-	}{{helper.EventProcessOwned, map[string]string{"pid": "42", "process_group": "42", "start_identity": "fixture"}}, {helper.EventConversationRecorded, map[string]string{"conversation_id": "conversation"}}, {helper.EventTurnRequested, nil}, {helper.EventTurnIdentified, map[string]string{"turn_id": "turn-1"}}, {helper.EventNativeEnded, map[string]string{"turn_id": "turn-1"}}, {helper.EventCheckpointSaved, map[string]string{"conversation_id": "conversation", "turn_id": "turn-1"}}} {
+	}{{helper.EventProcessOwned, map[string]string{"pid": "42", "process_group": "42", "start_identity": "fixture"}}, {helper.EventConversationRecorded, map[string]string{"conversation_id": "conversation"}}, {helper.EventTurnRequested, nil}, {helper.EventTurnIdentified, map[string]string{"turn_id": "turn-1"}}, {helper.EventNativeEnded, map[string]string{"turn_id": "turn-1"}}} {
 		if err := k.Record(ctx, ev.name, ev.fields); err != nil {
 			return helper.RunResult{}, err
 		}
@@ -217,7 +261,13 @@ func (b dBackend) Run(ctx context.Context, s helper.RunSpec, k helper.Sink) (hel
 			return helper.RunResult{}, err
 		}
 	}
-	return helper.RunResult{Outcome: "completed", Reply: "reviewed", ConversationID: "conversation", TurnID: "turn-1", ObservedModel: executor.NativeModel}, nil
+	result := helper.RunResult{Outcome: "completed", Reply: "reviewed", ConversationID: "conversation", TurnID: "turn-1", EvidencePolicy: executor.CodexModelEvidencePolicy, ConfiguredModel: s.Job.Route.Model, ConfiguredEffort: s.Job.Route.Effort}
+	sum := sha256.Sum256([]byte(result.Reply))
+	result.PersistedReplySHA256 = hex.EncodeToString(sum[:])
+	if err := k.Record(ctx, helper.EventPersistedTurnVerified, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID, "reply_sha256": result.PersistedReplySHA256, "configured_model": result.ConfiguredModel, "configured_effort": result.ConfiguredEffort, "evidence_policy": result.EvidencePolicy}); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 func (dBackend) Inspect(context.Context, helper.RunSpec, helper.Sink) (helper.RunResult, bool, error) {
 	return helper.RunResult{}, false, nil
@@ -229,7 +279,7 @@ type dUsage struct{}
 func (dUsage) Read(context.Context) (helper.QuotaSnapshot, error) {
 	yes := true
 	now := time.Now()
-	return helper.QuotaSnapshot{Provider: "zed", Known: true, AttributionKnown: true, IdentityBinding: "fixture-account", ExpectedIdentity: "fixture-account", OrdinaryUsageAllowed: &yes, ObservedAt: now, Windows: []helper.QuotaWindow{{Used: 5, ResetsAt: now.Add(time.Hour), Duration: 5 * time.Hour}, {Used: 5, ResetsAt: now.Add(24 * time.Hour), Duration: 7 * 24 * time.Hour}}}, nil
+	return helper.QuotaSnapshot{Provider: "codex", Known: true, AttributionKnown: true, IdentityBinding: "fixture-account", ExpectedIdentity: "fixture-account", OrdinaryUsageAllowed: &yes, ObservedAt: now, Windows: []helper.QuotaWindow{{Used: 5, ResetsAt: now.Add(time.Hour), Duration: 5 * time.Hour}, {Used: 5, ResetsAt: now.Add(24 * time.Hour), Duration: 7 * 24 * time.Hour}}}, nil
 }
 func TestNativePublicationContinuesWhileClaudeHeldAndListingFails(t *testing.T) {
 	for _, state := range []string{statePaused, ""} {
@@ -245,11 +295,12 @@ func TestNativePublicationContinuesWhileClaudeHeldAndListingFails(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			deps := helper.RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]helper.Backend{"zed": dBackend{}}, Quotas: map[string]helper.UsageReader{"zed": dUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
+			deps := helper.RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]helper.Backend{"codex": dBackend{}}, Quotas: map[string]helper.UsageReader{"codex": dUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			if err = helper.Run(ctx, deps); err != nil {
-				t.Fatal(err)
+				jobs, _ := s.Jobs()
+				t.Fatalf("runner: %v jobs=%+v", err, jobs)
 			}
 			result, err := s.Result(a.JobID, 1)
 			if err != nil || result.State != "completed" {
@@ -265,129 +316,11 @@ func TestNativePublicationContinuesWhileClaudeHeldAndListingFails(t *testing.T) 
 				t.Fatalf("durable owner inbox missing: %s", data)
 			}
 			if err = helper.Run(ctx, deps); err != nil {
-				t.Fatal(err)
+				jobs, _ := s.Jobs()
+				t.Fatalf("runner: %v jobs=%+v", err, jobs)
 			}
 			if len(events.Inbox(w.log(req.OwnerID))) != 1 {
 				t.Fatal("duplicate completion inbox")
-			}
-		})
-	}
-}
-
-func intakeNativeProfile(t *testing.T, w *world) string {
-	t.Helper()
-	b, err := blueprint.Load(blueprint.Path(w.brain))
-	if err != nil {
-		t.Fatal(err)
-	}
-	put(t, filepath.Join(w.brain, "AGENTS.md"), "## Model tiers\n\n| Tier | Claude | Zed |\n| --- | --- | --- |\n| ultra low | haiku | |\n| low | sonnet | |\n| medium | opus | openai-subscribed/gpt-6.1-sol |\n| high | claude-opus-5-5 | |\n")
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile := executor.DefaultProfile(b)
-	profile.NativeWorker = binary
-	profile.NativeUsage = binary
-	profile.ContainerImage = "sha256:" + strings.Repeat("a", 64)
-	profile.CredentialNamespace = "factory-openai"
-	profile.IdentityBinding = "fixture-account"
-	tools := t.TempDir()
-	docker := filepath.Join(tools, "docker")
-	put(t, docker, "#!/bin/sh\nprintf '%s\\n' '"+profile.ContainerImage+"'\n")
-	if err = os.Chmod(docker, 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
-	data, err := yaml.Marshal(profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(w.brain, "profile.yaml")
-	put(t, path, string(data))
-	return path
-}
-func TestNativeIntakePersistsSelectionAndPromptsBeforeIndex(t *testing.T) {
-	w := newWorld(t)
-	profile := intakeNativeProfile(t, w)
-	d := w.deps()
-	w.acct.state = statePaused
-	preflight := 0
-	d.NativePreflight = func(ctx context.Context, s executor.Selection) error {
-		preflight++
-		ix, err := store.ReadIndex(w.brain)
-		if err != nil {
-			return err
-		}
-		if _, ok := ix[s.EpicID]; ok {
-			return fmt.Errorf("epic already published at preflight")
-		}
-		return nil
-	}
-	id, err := AddWithOptions(context.Background(), d, "offline task", Overrides{}, executor.Options{Executor: "z", ProfilePath: profile})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if preflight != 1 {
-		t.Fatalf("preflight called %d times", preflight)
-	}
-	selection, err := executor.ReadSelection(w.brain, id)
-	if err != nil || selection.Executor != "z" {
-		t.Fatalf("missing durable selection: %+v %v", selection, err)
-	}
-	ix, err := store.ReadIndex(w.brain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := ix[id]; !ok {
-		t.Fatal("intake was not published")
-	}
-	if _, err = os.Stat(agents.PromptPathFor(filepath.Join(store.Factory(w.brain), "executors", id), "planner")); err != nil {
-		t.Fatal(err)
-	}
-}
-func TestNativePromptFailureLeavesUnpublishedReservedID(t *testing.T) {
-	w := newWorld(t)
-	profile := intakeNativeProfile(t, w)
-	d := w.deps()
-	w.acct.state = statePaused
-	d.NativePreflight = func(context.Context, executor.Selection) error {
-		return os.Remove(filepath.Join(w.brain, "factory", blueprint.RulesFile))
-	}
-	if id, err := AddWithOptions(context.Background(), d, "offline task", Overrides{}, executor.Options{Executor: "z", ProfilePath: profile}); err == nil || id != "" {
-		t.Fatalf("partial intake published: %s %v", id, err)
-	}
-	ix, err := store.ReadIndex(w.brain)
-	if err != nil || len(ix) != 0 {
-		t.Fatalf("partial intake indexed: %v %v", ix, err)
-	}
-	if _, err = executor.ReadSelection(w.brain, "e2610091"); err != nil {
-		t.Fatal(err)
-	}
-	put(t, filepath.Join(w.brain, "factory", blueprint.RulesFile), "# Factory rules v1\n")
-	d.NativePreflight = func(context.Context, executor.Selection) error { return nil }
-	id, err := AddWithOptions(context.Background(), d, "offline task", Overrides{}, executor.Options{Executor: "z", ProfilePath: profile})
-	if err != nil || id != "e2610092" {
-		t.Fatalf("orphan ID reused: %s %v", id, err)
-	}
-}
-func TestNativeIntakeRejectsGrantAndTierBeforePublication(t *testing.T) {
-	for _, test := range []string{"grant", "tier"} {
-		t.Run(test, func(t *testing.T) {
-			w := newWorld(t)
-			profile := intakeNativeProfile(t, w)
-			d := w.deps()
-			d.NativePreflight = func(context.Context, executor.Selection) error { return errors.New("grant unavailable") }
-			ov := Overrides{}
-			if test == "tier" {
-				ov.Tier = map[string]string{"planner": "medium"}
-			}
-			_, err := AddWithOptions(context.Background(), d, "offline task", ov, executor.Options{Executor: "z", ProfilePath: profile})
-			if err == nil || !strings.Contains(err.Error(), map[string]string{"grant": "grant unavailable", "tier": "pinned route"}[test]) {
-				t.Fatalf("wrong refusal: %v", err)
-			}
-			ix, err := store.ReadIndex(w.brain)
-			if err != nil || len(ix) != 0 {
-				t.Fatalf("rejected intake indexed: %v %v", ix, err)
 			}
 		})
 	}
@@ -425,7 +358,7 @@ func TestManagedAdmissionUsesStoredGenerationAndDoesNotTakeTickLock(t *testing.T
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	deps := helper.RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]helper.Backend{"zed": backend}, Quotas: map[string]helper.UsageReader{"zed": dUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
+	deps := helper.RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]helper.Backend{"codex": backend}, Quotas: map[string]helper.UsageReader{"codex": dUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
 	if err = helper.Run(ctx, deps); err != nil {
 		t.Fatal(err)
 	}
@@ -465,6 +398,7 @@ func TestEmptyNativeScopeRecoversOnlyAfterPersistedNewAuthority(t *testing.T) {
 			if _, err = r.grantLease(set, "replacement"); err != nil {
 				t.Fatal(err)
 			}
+			nativeCoordinatorFixture(t, w, req.SetID, componentOrchestrator, 2)
 			fresh := req
 			fresh.Lease = 2
 			switch via {
@@ -504,6 +438,7 @@ func TestEmptyNativeScopeRecoversOnlyAfterPersistedNewAuthority(t *testing.T) {
 func TestBabysitterArtifactsRetainHistoricalSetWithoutLeaseAuthority(t *testing.T) {
 	w, s, req := nativeWorld(t)
 	w.append(w.dir(req.WorkID), events.Event{Kind: events.KindHandover, Sender: events.SenderProgram})
+	nativeCoordinatorFixture(t, w, req.WorkID, babysitterComponent, 0)
 	req.OwnerID = req.WorkID
 	req.SetID = ""
 	req.Lease = 0
@@ -539,7 +474,7 @@ func TestBabysitterArtifactsRetainHistoricalSetWithoutLeaseAuthority(t *testing.
 	backend := dBackend{check: func(_ context.Context, spec helper.RunSpec) error {
 		return os.WriteFile(spec.OutputPath, []byte("## Status\nDONE\n## TODOs\nnone\n## Judgment calls\nnone\n## Red tests\nnone\n## Files touched\nnone\n"), 0600)
 	}}
-	deps := helper.RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]helper.Backend{"zed": backend}, Quotas: map[string]helper.UsageReader{"zed": dUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
+	deps := helper.RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]helper.Backend{"codex": backend}, Quotas: map[string]helper.UsageReader{"codex": dUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err = helper.Run(ctx, deps); err != nil {

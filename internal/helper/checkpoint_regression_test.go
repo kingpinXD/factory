@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -55,7 +54,7 @@ func uncheckpointedJob(t *testing.T, s Service, id string) (Job, RunResult) {
 }
 func acknowledgeCheckpoint(t *testing.T, s Service, j Job, result RunResult) {
 	t.Helper()
-	if err := (journalSink{service: s, job: j}).Record(context.Background(), EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID}); err != nil {
+	if err := (journalSink{service: s, job: j}).Record(context.Background(), EventPersistedTurnVerified, persistedTurnFields(result)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -65,7 +64,10 @@ func markCompleted(t *testing.T, s Service, j Job, result RunResult) {
 		r := db.Jobs[j.ID]
 		q := r.Rounds[r.Job.Round]
 		q.Stopped = true
-		q.Result.ObservedModel = result.ObservedModel
+		q.Result.EvidencePolicy = result.EvidencePolicy
+		q.Result.ConfiguredModel = result.ConfiguredModel
+		q.Result.ConfiguredEffort = result.ConfiguredEffort
+		q.Result.ReplySHA256 = digestBytes([]byte(result.Reply))
 		setState(r, "completed", "")
 		return nil
 	}); err != nil {
@@ -141,12 +143,17 @@ func TestManualContinuationRequiresMatchingCheckpoint(t *testing.T) {
 			case "wrong_turn", "wrong_conversation":
 				if err := s.transaction(context.Background(), true, func(db *ledger) error {
 					q := db.Jobs[j.ID].Rounds[1]
-					q.Evidence[EventCheckpointSaved+":conversation_id"] = result.ConversationID
-					q.Evidence[EventCheckpointSaved+":turn_id"] = result.TurnID
+					for key, value := range persistedTurnFields(result) {
+						q.Evidence[EventPersistedTurnVerified+":"+key] = value
+					}
+					q.Result.EvidencePolicy = result.EvidencePolicy
+					q.Result.ConfiguredModel = result.ConfiguredModel
+					q.Result.ConfiguredEffort = result.ConfiguredEffort
+					q.Result.PersistedReplySHA256 = result.PersistedReplySHA256
 					if kind == "wrong_turn" {
-						q.Evidence[EventCheckpointSaved+":turn_id"] = "previous-turn"
+						q.Evidence[EventPersistedTurnVerified+":turn_id"] = "previous-turn"
 					} else {
-						q.Evidence[EventCheckpointSaved+":conversation_id"] = "another-conversation"
+						q.Evidence[EventPersistedTurnVerified+":conversation_id"] = "another-conversation"
 					}
 					return nil
 				}); err != nil {
@@ -162,7 +169,7 @@ func TestManualContinuationRequiresMatchingCheckpoint(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), "checkpoint") {
+			if err == nil || err.Error() != "unattested helper completion" {
 				t.Fatalf("continued unsaved conversation: %+v %v", a, err)
 			}
 		})
@@ -191,6 +198,12 @@ func TestAutomaticContinuationRequiresParentAndChildCheckpoint(t *testing.T) {
 				acknowledgeCheckpoint(t, s, child, cr)
 			}
 			markCompleted(t, s, child, cr)
+			if missing == "child" {
+				if err = advanceParents(context.Background(), s); err == nil || err.Error() != "unattested helper completion" {
+					t.Fatalf("unsaved child allowed parent continuation: %v", err)
+				}
+				return
+			}
 			if err = s.transaction(context.Background(), true, func(db *ledger) error {
 				p := db.Jobs[parent.ID]
 				p.Rounds[1].Stopped = true
@@ -241,18 +254,27 @@ func TestAdmissionRequiresSavedParentAndPriorRound(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				markCompleted(t, s, j, result)
-				if err := s.transaction(context.Background(), true, func(db *ledger) error {
+				if err := s.transaction(context.Background(), false, func(db *ledger) error {
 					r := db.Jobs[j.ID]
+					q := r.Rounds[1]
+					q.Stopped = true
+					q.Result.EvidencePolicy = result.EvidencePolicy
+					q.Result.ConfiguredModel = result.ConfiguredModel
+					q.Result.ConfiguredEffort = result.ConfiguredEffort
+					setState(r, "completed", "")
 					r.Job.Round = 2
 					r.Job.Generation = 2
 					r.Job.TurnID = ""
 					r.Job.State = "queued"
 					r.Rounds[2] = newRound(r.Job, "next round", "")
+					if admissible(db, r) {
+						t.Error("admitted continuation without checkpoint")
+					}
 					return nil
 				}); err != nil {
 					t.Fatal(err)
 				}
+				return
 			}
 			if err := s.transaction(context.Background(), false, func(db *ledger) error {
 				if admissible(db, db.Jobs[target]) {
@@ -274,15 +296,11 @@ func TestPublicationRejectsPreviouslyCompletedUnsavedRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	markCompleted(t, s, j, result)
-	if err := s.transaction(context.Background(), true, func(db *ledger) error { return validateOutput(db, db.Jobs[j.ID]) }); err != nil {
-		t.Fatal(err)
+	if err := s.transaction(context.Background(), true, func(db *ledger) error { return validateOutput(db, db.Jobs[j.ID]) }); err == nil || err.Error() != "unattested helper completion" {
+		t.Fatalf("unsaved Codex completion loaded: %v", err)
 	}
-	if err := flush(context.Background(), d); err != nil {
-		t.Fatal(err)
-	}
-	r, err := s.Result(j.ID, 1)
-	if err != nil || r.State != "unknown" {
-		t.Errorf("unsaved completed record accepted: %+v %v", r, err)
+	if err := flush(context.Background(), d); err == nil || err.Error() != "unattested helper completion" {
+		t.Fatalf("unsaved Codex completion published: %v", err)
 	}
 	ix, _ := store.ReadIndex(s.Brain)
 	log, err := events.Read(store.EventsPath(ix["work1"].Dir))
@@ -295,7 +313,7 @@ func TestInspectCompletionRequiresCheckpointAcknowledgment(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s, d, req := setup(t)
 			j, result := uncheckpointedAttempt(t, s, req)
-			d.Backends["zed"] = backendFunc{inspect: func(ctx context.Context, _ RunSpec, k Sink) (RunResult, bool, error) {
+			d.Backends["codex"] = backendFunc{inspect: func(ctx context.Context, _ RunSpec, k Sink) (RunResult, bool, error) {
 				if kind == "failed" {
 					if err := k.Record(ctx, EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID}); err == nil {
 						t.Error("failed save accepted")
@@ -322,7 +340,7 @@ func TestParentReusesCompletedReviewerAcrossYieldRoundsPoolOne(t *testing.T) {
 	var active, maxActive atomic.Int32
 	var childID, childConversation, parentConversation string
 	parentRuns, childRuns := 0, 0
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		n := active.Add(1)
 		defer active.Add(-1)
 		if n != 1 {
@@ -386,7 +404,7 @@ func TestParentReusesCompletedReviewerAcrossYieldRoundsPoolOne(t *testing.T) {
 		if e = k.Record(ctx, EventNativeEnded, map[string]string{"turn_id": result.TurnID}); e != nil {
 			return result, e
 		}
-		e = k.Record(ctx, EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
+		e = k.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(result))
 		return result, e
 	}}
 	runBounded(t, d)

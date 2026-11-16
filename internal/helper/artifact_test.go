@@ -76,7 +76,7 @@ func TestWorkOwnedArtifactHierarchyDoesNotGrantHistoricalSetLease(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		if spec.Job.Scope.SetID != "" || spec.Job.Scope.Lease != 0 || spec.Job.Request.SetID != "" || spec.Job.Request.Lease != 0 {
 			t.Error("artifact path synthesized authority")
 		}

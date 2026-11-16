@@ -239,7 +239,7 @@ func fakeDockerProbe() {
 	os.Exit(92)
 }
 func TestDockerPreflightUsesInstalledNodeAndGoCapabilities(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	npmFixture(t, spec.Cwd)
 	requirements, err := repositoryRequirements(spec.Cwd)
 	if err != nil {
@@ -259,50 +259,6 @@ func TestDockerPreflightUsesInstalledNodeAndGoCapabilities(t *testing.T) {
 	intent.Endpoint = "unix:///fixture-capabilities-old-node"
 	if err = (dockerEngine{}).preflight(ctx, intent, strings.Repeat("a", 64), spec.Env); err == nil {
 		t.Fatal("unsupported image Node version accepted")
-	}
-}
-func TestNodeBackendForwardsTokenNamesWithoutLeakingValues(t *testing.T) {
-	b, spec, _ := fixture(t)
-	npmFixture(t, spec.Cwd)
-	putManifest(t, spec.Cwd, ".npmrc", "//registry.example.invalid/:_authToken=${NPM_TOKEN}\n")
-	spec.Env = append(spec.Env, "NPM_TOKEN=fixture-npm-secret")
-	ctx, cancel := bounded(t)
-	defer cancel()
-	if _, err := b.Run(ctx, spec, &recordSink{}); err != nil {
-		t.Fatal(err)
-	}
-	var a attempt
-	if err := readPrivate(filepath.Join(spec.RunDir, "adapter.json"), &a); err != nil {
-		t.Fatal(err)
-	}
-	names := strings.Join(a.Container.Environment, ",")
-	if !strings.Contains(names, "NPM_TOKEN") {
-		t.Fatal("Node container missing token name")
-	}
-	args := strings.Join(createArgs(a.Container), " ")
-	data, _ := os.ReadFile(filepath.Join(spec.RunDir, "adapter.json"))
-	if strings.Contains(args, "fixture-npm-secret") || strings.Contains(string(data), "fixture-npm-secret") {
-		t.Fatal("npm token exposed in argv or journal")
-	}
-}
-func TestNodePreflightHoldsBeforeCreatingResources(t *testing.T) {
-	b, spec, e := fixture(t)
-	npmFixture(t, spec.Cwd)
-	putManifest(t, spec.Cwd, ".npmrc", "//registry.example.invalid/:_authToken=${NPM_TOKEN}\n")
-	ctx, cancel := bounded(t)
-	defer cancel()
-	if _, err := b.Run(ctx, spec, &recordSink{}); err == nil {
-		t.Fatal("Node job started without explicit NPM_TOKEN")
-	}
-	if c, err := e.read(); err != nil || c != nil {
-		t.Fatal("container created before missing-auth hold")
-	}
-	var a attempt
-	if err := readPrivate(filepath.Join(spec.RunDir, "adapter.json"), &a); err != nil {
-		t.Fatal(err)
-	}
-	if a.PrelaunchError != "explicit container NPM_TOKEN required" || a.LaunchIntent || a.ContainerPhase != "" {
-		t.Fatalf("missing-auth rejection lacks prelaunch evidence: %+v", a)
 	}
 }
 
@@ -389,25 +345,5 @@ func TestExplicitProjectNPMAuthRequirements(t *testing.T) {
 				t.Fatal("literal credential persisted in requirements")
 			}
 		})
-	}
-}
-func TestPublicNodeBackendNeedsNoNPMToken(t *testing.T) {
-	b, spec, _ := fixture(t)
-	npmFixture(t, spec.Cwd)
-	putManifest(t, spec.Cwd, ".npmrc", "@public-scope:registry=https://registry.npmjs.org/\n")
-	ctx, cancel := bounded(t)
-	defer cancel()
-	result, err := b.Run(ctx, spec, &recordSink{})
-	if err != nil || result.Outcome != "completed" {
-		t.Fatalf("public Node job failed without npm token: %v", err)
-	}
-	var a attempt
-	if err = readPrivate(filepath.Join(spec.RunDir, "adapter.json"), &a); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range a.Container.Environment {
-		if name == "NPM_TOKEN" {
-			t.Fatal("public container inherited an npm credential")
-		}
 	}
 }

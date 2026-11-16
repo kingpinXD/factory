@@ -1,7 +1,6 @@
 package reconcile
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
-	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/proc"
@@ -460,55 +458,6 @@ func TestBabysitterStallRegressionUnwatchedWorkGetsNoRecovery(t *testing.T) {
 	}
 }
 
-func TestBabysitterStallRegressionNativeHelperPreventsTakeover(t *testing.T) {
-	tmp, err := filepath.EvalSymlinks(os.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TMPDIR", tmp)
-	for _, action := range []string{"nudge", "restart"} {
-		t.Run(action, func(t *testing.T) {
-			w, posted, baseline := stalledBabysitterWorld(t, true, true)
-			at := 10 * time.Minute
-			if action == "restart" {
-				babysitterTickAt(w, at)
-				baseline++
-				at = 55 * time.Minute
-			}
-			native, _, _ := nativeWorld(t)
-			selection, err := executor.ReadSelection(native.brain, "e1")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := executor.WriteSelection(w.brain, selection); err != nil {
-				t.Fatal(err)
-			}
-			ready, ok := worktreeReady(&entity{evs: w.log(item)})
-			if !ok {
-				t.Fatal("missing handed-over worktree")
-			}
-			if err := os.MkdirAll(ready.Text, 0700); err != nil {
-				t.Fatal(err)
-			}
-			svc := NativeService(w.brain, func(context.Context, helper.Job) error { return nil })
-			if _, err := svc.Submit(context.Background(), helper.Request{SchemaVersion: 1, RequestKey: "busy-review", OwnerID: item, WorkID: item, Component: "reviewer-code", Prompt: "review unfinished changes"}); err != nil {
-				t.Fatal(err)
-			}
-			before := len(itemRestarts(&entity{evs: w.log(item)}))
-			babysitterTickAt(w, at)
-			if got := len(posted()) - baseline; got != 0 {
-				t.Errorf("posted while native helper busy: %d", got)
-			}
-			if got := len(w.called("claude stop")); got != 0 {
-				t.Errorf("stopped while native helper busy: %d", got)
-			}
-			if got := len(itemRestarts(&entity{evs: w.log(item)})); got != before {
-				t.Errorf("helper busy consumed recovery budget: %d -> %d", before, got)
-			}
-		})
-	}
-}
-
 func TestBabysitterStallRegressionStopRechecksAccountAfterFence(t *testing.T) {
 	w, _, _ := stalledBabysitterWorld(t, true, true)
 	r := boundaryRun(t, w, helper.Service{Brain: w.brain})
@@ -533,112 +482,6 @@ func TestBabysitterStallRegressionStopRechecksAccountAfterFence(t *testing.T) {
 	}
 	if sess.has("stop:"+key) || len(itemRestarts(r.ents[item])) != 0 {
 		t.Error("deferred stop consumed recovery budget or logged a successful stop")
-	}
-}
-
-// Pause during the real empty-scope fence, after the restart intent exists.
-type pauseBabysitterFenceAuthority struct {
-	helper.Authority
-	pause func()
-}
-
-func (a pauseBabysitterFenceAuthority) Refresh(ctx context.Context, scope helper.Scope) (helper.Scope, error) {
-	fresh, err := a.Authority.Refresh(ctx, scope)
-	if err == nil {
-		a.pause()
-	}
-	return fresh, err
-}
-
-func TestBabysitterStallRegressionDeferredNativeStopCountsOriginalRestartOnce(t *testing.T) {
-	tmp, err := filepath.EvalSymlinks(os.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TMPDIR", tmp)
-	w, _, _ := stalledBabysitterWorld(t, true, true)
-	babysitterTickAt(w, 10*time.Minute)
-	native, _, _ := nativeWorld(t)
-	selection, err := executor.ReadSelection(native.brain, "e1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := executor.WriteSelection(w.brain, selection); err != nil {
-		t.Fatal(err)
-	}
-	ready, ok := worktreeReady(&entity{evs: w.log(item)})
-	if !ok {
-		t.Fatal("missing handed-over worktree")
-	}
-	if err := os.MkdirAll(ready.Text, 0700); err != nil {
-		t.Fatal(err)
-	}
-	writePolicy := func(state string) {
-		t.Helper()
-		if err := os.MkdirAll(accountDir(w.brain), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.WriteJSON(store.StatusPath(accountDir(w.brain)), AccountStatus{State: state}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	paused := false
-	svc := NativeService(w.brain, func(context.Context, helper.Job) error { return nil })
-	svc.Authority = pauseBabysitterFenceAuthority{Authority: svc.Authority, pause: func() {
-		if !paused && nativeBoundaryState(&entity{evs: w.log(babysitterID(item, 1))}).pending() {
-			writePolicy(statePaused)
-			paused = true
-		}
-	}}
-	tick := func(at time.Duration) {
-		t.Helper()
-		w.at(at)
-		w.fullNext()
-		d := w.deps()
-		d.Helpers = &svc
-		if err := Tick(context.Background(), d, false); err != nil {
-			t.Fatal(err)
-		}
-	}
-	tick(55 * time.Minute)
-	if !paused {
-		t.Fatal("fixture never paused during the actual native fence")
-	}
-	boundary := nativeBoundaryState(&entity{evs: w.log(babysitterID(item, 1))})
-	originalKey := strings.TrimPrefix(boundary.intent.Key, nativeBoundaryPrefix)
-	if !boundary.pending() || !strings.HasPrefix(originalKey, babysitterRestartPrefix) {
-		t.Fatalf("missing original pending recovery intent: %+v", boundary)
-	}
-	w.acct.state = statePaused
-	tick(55*time.Minute + 30*time.Second)
-	if len(w.called("claude stop")) != 0 || len(w.kinds(item, events.KindRestart)) != 0 {
-		t.Fatal("fence or held retry counted a restart without stopping")
-	}
-	writePolicy(stateOK)
-	w.acct.state = stateOK
-	for _, at := range []time.Duration{56 * time.Minute, 57 * time.Minute, 58 * time.Minute} {
-		tick(at)
-		w.noErrors()
-	}
-	if got := len(w.called("claude stop")); got != 1 {
-		t.Errorf("recovered stop calls = %d, want 1", got)
-	}
-	if got := len(w.called("claude --bg --resume")); got != 1 {
-		t.Errorf("recovered resume calls = %d, want 1", got)
-	}
-	restarts := w.kinds(item, events.KindRestart)
-	if len(restarts) != 1 {
-		t.Fatalf("recovered native stop counted %d restarts, want exactly 1 under original key %s", len(restarts), originalKey)
-	}
-	if restarts[0].Key != originalKey {
-		t.Fatalf("restart key = %q, want original recovery key %q", restarts[0].Key, originalKey)
-	}
-	// A later dead-session restart shares the hourly component budget.
-	w.append(w.dir(item), events.Event{At: w.now, Kind: events.KindRestart, Sender: events.SenderProgram,
-		Key: deadRestartPrefix + babysitterID(item, 1) + ":later"})
-	tick(59 * time.Minute)
-	if got := w.status(item).State; got != stateNeedsYou {
-		t.Errorf("state after recovered stop plus dead restart = %s, want needs_you at hourly limit", got)
 	}
 }
 

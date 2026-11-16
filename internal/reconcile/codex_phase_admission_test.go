@@ -73,14 +73,8 @@ func TestCodexDownstreamAdmissionRequiresCurrentPhase(t *testing.T) {
 	}
 }
 
-func TestNativePhaseAdmissionLeavesLegacyAndOtherComponentsUnchanged(t *testing.T) {
-	w, s, req := nativeWorld(t)
-	req.Component = "verifier"
-	req.OutputPath = filepath.Join(w.dir(req.WorkID), "verify.v1.md")
-	if _, err := s.Submit(context.Background(), req); err != nil {
-		t.Fatal("legacy admission changed", err)
-	}
-	_, s, req, _, _ = codexStartFixture(t)
+func TestCodexPhaseAdmissionLeavesOtherComponentsUnchanged(t *testing.T) {
+	_, s, req, _, _ := codexStartFixture(t)
 	if _, err := s.Submit(context.Background(), req); err != nil {
 		t.Fatal("reviewer phase was restricted", err)
 	}

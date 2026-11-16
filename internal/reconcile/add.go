@@ -135,7 +135,7 @@ func addParsed(ctx context.Context, d Deps, input string, kind intake.InputKind,
 	if err != nil {
 		return "", err
 	}
-	if selection.Executor == "z" || selection.Executor == "codex" {
+	if selection.Executor == "codex" {
 		for name, tier := range ov.Tier {
 			if routes := selection.Routes[name]; len(routes) != 1 || routes[0].Tier != tier {
 				return "", fmt.Errorf("tier override %s conflicts with pinned route", name)
@@ -146,14 +146,6 @@ func addParsed(ctx context.Context, d Deps, input string, kind intake.InputKind,
 				if routes := selection.Routes[name]; len(routes) != 1 || routes[0].Effort != effort {
 					return "", fmt.Errorf("effort override %s conflicts with pinned route", name)
 				}
-			}
-		}
-		if selection.Executor == "z" && d.NativePreflight == nil {
-			return "", fmt.Errorf("native intake preflight unavailable")
-		}
-		if selection.Executor == "z" {
-			if err := d.NativePreflight(ctx, selection); err != nil {
-				return "", err
 			}
 		}
 		if err := executor.WriteSelection(d.Brain, selection); err != nil {

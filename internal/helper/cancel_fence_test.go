@@ -6,14 +6,11 @@ import (
 	"testing"
 )
 
-func TestPublicCancelFenceFailurePreservesNativeRecovery(t *testing.T) {
-	for _, kind := range []string{"startup", "prelaunch"} {
+func TestPublicCancelFenceFailurePreservesRecovery(t *testing.T) {
+	for _, kind := range []string{"persisted_turn"} {
 		t.Run(kind, func(t *testing.T) {
-			attempt := prelaunchAttempt
-			if kind == "startup" {
-				attempt = startupAttempt
-			}
-			s, d, j, proof := attempt(t)
+			s, d, req := setup(t)
+			j, proof := preparedAttempt(t, s, req, true)
 			ctx := context.Background()
 
 			transient := errors.New("transient fence failure")
@@ -57,15 +54,10 @@ func TestPublicCancelFenceFailurePreservesNativeRecovery(t *testing.T) {
 			// Reconstruct the broker from the durable public Cancel result.
 			d.Service = Service{Brain: s.Brain, Authority: s.Authority}
 			fences, inspections := 0, 0
-			d.Backends["zed"] = backendFunc{
+			d.Backends["codex"] = backendFunc{
 				fence: func(context.Context, Job) error { fences++; return nil },
 				inspect: func(ctx context.Context, _ RunSpec, sink Sink) (RunResult, bool, error) {
 					inspections++
-					if kind == "startup" {
-						if err := sink.Record(ctx, EventProcessOwned, startupProcessEvidence()); err != nil {
-							return RunResult{}, false, err
-						}
-					}
 					return proof, true, nil
 				},
 			}
@@ -73,7 +65,10 @@ func TestPublicCancelFenceFailurePreservesNativeRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			s = Service{Brain: s.Brain, Authority: s.Authority}
-			assertCancellationMarker(t, s, j.ID, "fencing")
+			job, err = s.Job(j.ID)
+			if err != nil || job.State != "unknown" || job.HoldReason != "fencing" {
+				t.Fatalf("recovery lost cancellation marker: %+v %v", job, err)
+			}
 			if publicFences != 1 || fences != 1 || inspections != 1 {
 				t.Fatalf("missing mandatory operations: public=%d recovery=%d inspect=%d", publicFences, fences, inspections)
 			}

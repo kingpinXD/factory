@@ -1,7 +1,7 @@
 # Codex executor
 
 The factory retains three independent execution choices. The default uses Claude.
-The optional `z` choice uses Claude coordinators and GPT helpers in native Zed.
+
 The additive `codex` choice uses Codex app-server for every model role.
 
 Codex admission remains held until the pinned configuration passes the live

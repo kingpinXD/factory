@@ -85,7 +85,7 @@ func TestImmutableSnapshotDurabilityFailures(t *testing.T) {
 }
 
 func TestBuildForRetrySyncsExistingSources(t *testing.T) {
-	brain, b, _, out := nativeBrain(t)
+	brain, b, out := codexBrain(t)
 	if _, _, err := BuildFor(brain, out, b, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestBuildForRetrySyncsExistingSources(t *testing.T) {
 func TestBuildForSourceSyncFailureStopsGeneration(t *testing.T) {
 	for _, stage := range []string{"source-file", "epic-dir", "executors-dir", "brain-parent"} {
 		t.Run(stage, func(t *testing.T) {
-			brain, b, _, out := nativeBrain(t)
+			brain, b, out := codexBrain(t)
 			target := map[string]string{"epic-dir": out, "executors-dir": filepath.Dir(out), "brain-parent": filepath.Dir(brain)}[stage]
 			injected := errors.New("source durability failed")
 			old := snapshotSync

@@ -25,9 +25,6 @@ func init() {
 			return fmt.Errorf("forbidden native runtime fence in legacy lane")
 		})
 		d.Helpers = &service
-		d.NativePreflight = func(context.Context, executor.Selection) error {
-			return fmt.Errorf("forbidden native preflight in Claude lane")
-		}
 		// Tick calls this callback even for Claude. Guard the process-launch
 		// condition, not entry to the callback. Never invoke StartRunner here.
 		d.StartHelpers = func(context.Context) error {
@@ -69,11 +66,6 @@ func TestClaudeCompatCandidateIsolation(t *testing.T) {
 			c := &compatCapture{t: t, trace: compatTrace{Version: 1, Package: "reconcile"}, roots: map[string]string{}}
 			x := c.newWorld("candidate_isolation")
 			d := compatCandidateDeps(x.deps())
-			preflights := 0
-			d.NativePreflight = func(context.Context, executor.Selection) error {
-				preflights++
-				return fmt.Errorf("forbidden native preflight")
-			}
 			var id string
 			var err error
 			if explicit {
@@ -87,7 +79,6 @@ func TestClaudeCompatCandidateIsolation(t *testing.T) {
 			if err = Tick(context.Background(), d, false); err != nil {
 				t.Fatal(err)
 			}
-			x.check("no native preflight", preflights == 0)
 			service := helper.Service{Brain: x.brain, Authority: NativeAuthority{Brain: x.brain}}
 			jobs, err := service.Jobs()
 			if err != nil {
@@ -97,7 +88,7 @@ func TestClaudeCompatCandidateIsolation(t *testing.T) {
 			// Drive the actual in-process broker with an empty ledger and sentinels
 			// for every native backend method. This starts no broker subprocess.
 			backend := compatForbiddenBackend{t}
-			err = helper.Run(context.Background(), helper.RunnerDeps{Service: service, FactoryBin: "/nonexistent/factory", Now: func() time.Time { return x.now }, Backends: map[string]helper.Backend{"zed": backend, "claude": backend}})
+			err = helper.Run(context.Background(), helper.RunnerDeps{Service: service, FactoryBin: "/nonexistent/factory", Now: func() time.Time { return x.now }, Backends: map[string]helper.Backend{"codex": backend, "claude": backend}})
 			if err != nil {
 				t.Fatal(err)
 			}

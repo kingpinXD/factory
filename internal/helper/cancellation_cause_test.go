@@ -21,7 +21,7 @@ func TestRunnerRetainsCancellationCauseForBackendDiagnostics(t *testing.T) {
 				t.Fatal(err)
 			}
 			var paused atomic.Bool
-			d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+			d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 				used := 10.0
 				if paused.Load() {
 					used = 100
@@ -29,7 +29,7 @@ func TestRunnerRetainsCancellationCauseForBackendDiagnostics(t *testing.T) {
 				return quota(time.Now(), used), nil
 			})
 			observed := make(chan string, 1)
-			d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+			d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 				if _, err := beginTurn(ctx, spec, k); err != nil {
 					return RunResult{}, err
 				}

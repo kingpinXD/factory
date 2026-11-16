@@ -62,7 +62,6 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 		return nil, nil, errors.New("BuildFor requires an isolated output directory")
 	}
 	var selection executor.Selection
-	native := false
 	codex := false
 	// A canonical per-epic directory requires a complete selection. Missing
 	// records in a partial native intake must never generate legacy prompts.
@@ -73,7 +72,6 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 			return nil, nil, err
 		}
 		codex = selection.Executor == "codex"
-		native = selection.Executor == "z" || codex
 	} else if _, err := os.Lstat(filepath.Join(outDir, "selection.json")); err == nil {
 		return nil, nil, errors.New("selection directory is not canonical")
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -86,7 +84,7 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 		if !ok || c.Placeholder {
 			return nil, nil, fmt.Errorf("unknown tier override %s", name)
 		}
-		if native {
+		if codex {
 			routes := selection.Routes[name]
 			if len(routes) != 1 || tier != routes[0].Tier {
 				return nil, nil, fmt.Errorf("tier override for %s conflicts with immutable native route", name)
@@ -97,24 +95,19 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 	sourcesExist := err == nil
 	if errors.Is(err, os.ErrNotExist) {
 		snapshot = sourceSnapshot{SchemaVersion: 1, Components: maps.Clone(b.Components), Instructions: map[string]blueprint.Instructions{}, Bridge: nativeBridge}
-		if native {
-			snapshot.PromptProtocol = 1
-			snapshot.HelperTransport = nativeToolTransport
-			snapshot.SessionTransport = claudeCLITransport
-			if codex {
-				snapshot.Executor = "codex"
-				snapshot.PromptProtocol = CodexPromptProtocol
-				snapshot.HelperTransport = codexHelperTransport
-				snapshot.SessionTransport = codexSessionTransport
-				snapshot.Bridge = codexBridge
-			}
+		if codex {
+			snapshot.Executor = "codex"
+			snapshot.PromptProtocol = CodexPromptProtocol
+			snapshot.HelperTransport = codexHelperTransport
+			snapshot.SessionTransport = codexSessionTransport
+			snapshot.Bridge = codexBridge
 		}
 		rules, readErr := os.ReadFile(filepath.Join(brain, "factory", blueprint.RulesFile))
 		if readErr != nil {
 			return nil, nil, readErr
 		}
 		snapshot.Rules = string(rules)
-		if !native {
+		if !codex {
 			snapshot.Tiers, err = blueprint.ReadTiers(brain)
 			if err != nil {
 				return nil, nil, err
@@ -140,14 +133,11 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 	} else if err != nil {
 		return nil, nil, err
 	}
-	if snapshot.SchemaVersion != 1 || snapshot.Components == nil || snapshot.Instructions == nil || (native && snapshot.Bridge == "") {
+	if snapshot.SchemaVersion != 1 || snapshot.Components == nil || snapshot.Instructions == nil || (codex && snapshot.Bridge == "") {
 		return nil, nil, errors.New("invalid source snapshot")
 	}
 	if codex && (snapshot.Executor != "codex" || (snapshot.PromptProtocol != 3 && snapshot.PromptProtocol != CodexPromptProtocol) || snapshot.HelperTransport == "" || snapshot.SessionTransport == "") {
 		return nil, nil, errors.New("unsupported or incomplete Codex prompt transport snapshot")
-	}
-	if native && !codex && (snapshot.Executor != "" || snapshot.PromptProtocol < 0 || snapshot.PromptProtocol > 1 || snapshot.PromptProtocol == 1 && (snapshot.HelperTransport == "" || snapshot.SessionTransport == "")) {
-		return nil, nil, errors.New("unsupported or incomplete prompt transport snapshot")
 	}
 	if sourcesExist {
 		if err := syncExistingSnapshot(filepath.Join(outDir, "sources.json"), syncRoot); err != nil {
@@ -159,7 +149,7 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 	seenNames := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(snapshot.Components)) {
 		c := snapshot.Components[name]
-		if c.Instructions == "" || (native && c.Placeholder) {
+		if c.Instructions == "" || (codex && c.Placeholder) {
 			continue
 		}
 		ins, ok := snapshot.Instructions[name]
@@ -170,7 +160,7 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 			return nil, nil, fmt.Errorf("invalid component %q", name)
 		}
 		prompt := strings.TrimSpace(ins.Body) + "\n\n" + snapshot.Rules
-		if native {
+		if codex {
 			if c.RunsAs == blueprint.RunsAsHelper && ins.Name != name {
 				return nil, nil, fmt.Errorf("helper source name %q differs from component %s", ins.Name, name)
 			}
@@ -179,30 +169,12 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 				return nil, nil, fmt.Errorf("missing pinned route for %s", name)
 			}
 			helper := c.RunsAs == blueprint.RunsAsHelper
-			if codex {
-				prompt = codexPrompt(name, ins.Body, snapshot, helper)
-			} else if snapshot.PromptProtocol == 0 {
-				// Older selections retain their snapshotted bridge and original transform.
-				if helper {
-					prompt = transformHelper(ins.Body) + "\n\n" + transformHelperRules(snapshot.Rules) + "\n\n" + snapshot.Bridge
-				} else {
-					prompt = transformDispatch(ins.Body) + "\n\n" + transformSessionRules(snapshot.Rules) + "\n\n" + snapshot.Bridge
-				}
-			} else if helper {
-				prompt = managedToolText(transformHelper(ins.Body)) + "\n\n" + managedToolText(transformHelperRules(snapshot.Rules)) + "\n\n" + snapshot.HelperTransport + "\n\n" + snapshot.Bridge
-			} else {
-				prompt = transformDispatch(ins.Body) + "\n\n" + transformSessionRules(snapshot.Rules) + "\n\n" + snapshot.SessionTransport + "\n\n" + snapshot.Bridge
-			}
+			prompt = codexPrompt(name, ins.Body, snapshot, helper)
 			if err := checkTransformed(prompt, helper); err != nil {
 				return nil, nil, fmt.Errorf("component %s: %w", name, err)
 			}
 			if codex {
 				if err := checkCodexPrompt(prompt, helper); err != nil {
-					return nil, nil, fmt.Errorf("component %s: %w", name, err)
-				}
-			}
-			if helper && snapshot.PromptProtocol == 1 {
-				if err := checkManagedToolText(prompt); err != nil {
 					return nil, nil, fmt.Errorf("component %s: %w", name, err)
 				}
 			}
@@ -238,7 +210,7 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 		}
 	}
 	// A changed live blueprint cannot add an unpinned native component.
-	if native {
+	if codex {
 		for name := range selection.Routes {
 			if _, ok := snapshot.Instructions[name]; !ok {
 				return nil, nil, fmt.Errorf("route %s has no snapshotted instructions", name)

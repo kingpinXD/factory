@@ -34,7 +34,7 @@ func programObjectSource(t *testing.T, cwd, parent string) (string, string, stri
 }
 
 func TestProgramGitImportCoexistsWithActualPrivatePromotion(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	g, err := prepareGit(ctx, spec.Cwd, filepath.Join(spec.RunDir, "private-index"))
@@ -75,7 +75,7 @@ func TestProgramGitImportCoexistsWithActualPrivatePromotion(t *testing.T) {
 }
 
 func TestProgramGitVerificationRejectsActualWrongBlobBytes(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	common := gitMust(t, spec.Cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -107,7 +107,7 @@ func TestProgramGitVerificationRejectsActualWrongBlobBytes(t *testing.T) {
 }
 
 func TestProgramGitSourceConfigurationAndAliasesCannotEscape(t *testing.T) {
-	_, spec, _ := fixture(t)
+	spec, _ := fixture(t)
 	ctx, cancel := bounded(t)
 	defer cancel()
 	common := gitMust(t, spec.Cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")

@@ -25,7 +25,8 @@ import (
 
 const SchemaVersion = 1
 const ClaudeModel = "claude-opus-5-5"
-const NativeModel = "openai-subscribed/gpt-6.1-sol"
+
+var ErrUnsupportedExecutor = errors.New("unsupported executor; use claude or codex")
 
 type Options struct {
 	Executor    string
@@ -87,64 +88,16 @@ func effortOK(e string) bool {
 }
 
 func validateRoutes(p Profile) error {
-	if p.Executor == "codex" {
-		return validateCodexRoutes(p)
+	if p.Executor != "codex" {
+		return ErrUnsupportedExecutor
 	}
-	if p.SchemaVersion != SchemaVersion || p.Executor != "z" {
-		return errors.New("unsupported executor profile schema or executor")
-	}
-	if p.MaxActiveHelpers != 1 {
-		return errors.New("z requires max_active_helpers: 1")
-	}
-	for _, name := range []string{"planner", "orchestrator", "babysitter"} {
-		if len(p.Routes[name]) != 1 {
-			return fmt.Errorf("required route %s must have exactly one candidate", name)
-		}
-	}
-	for name, candidates := range p.Routes {
-		if !idPattern.MatchString(name) || len(candidates) != 1 {
-			return fmt.Errorf("route %q must have exactly one candidate", name)
-		}
-		c := candidates[0]
-		provider, tier := "zed", "medium"
-		if top(name) {
-			provider, tier = "claude", "high"
-		}
-		if c.Provider != provider || c.Tier != tier || !effortOK(c.Effort) {
-			return fmt.Errorf("unsupported route %s: want %s/%s and valid effort", name, provider, tier)
-		}
-	}
-	return nil
+	return validateCodexRoutes(p)
 }
-
 func validateProfile(p Profile) error {
-	if p.Executor == "codex" {
-		return validateCodexProfile(p)
+	if p.Executor != "codex" {
+		return ErrUnsupportedExecutor
 	}
-	if p.CodexBinary != "" || p.CodexExecServer != "" || len(p.CodexDisabledMCP) != 0 || p.CodexVersion != "" || p.CodexModelCatalog != "" || p.CodexModelCatalogSHA256 != "" || p.ModelEvidencePolicy != "" {
-		return errors.New("Codex settings require executor codex")
-	}
-	if err := validateRoutes(p); err != nil {
-		return err
-	}
-	for name, path := range map[string]string{"native_worker": p.NativeWorker, "native_usage": p.NativeUsage} {
-		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return fmt.Errorf("%s must be a clean absolute executable path", name)
-		}
-	}
-	if !digestPattern.MatchString(p.ContainerImage) {
-		_, digest, ok := strings.Cut(p.ContainerImage, "@")
-		if !ok || !digestPattern.MatchString(digest) {
-			return errors.New("container_image must be pinned by sha256 digest")
-		}
-	}
-	if !idPattern.MatchString(p.CredentialNamespace) {
-		return errors.New("credential_namespace must be an explicit namespace identifier")
-	}
-	if strings.TrimSpace(p.IdentityBinding) == "" || strings.TrimSpace(p.IdentityBinding) != p.IdentityBinding || strings.ContainsAny(p.IdentityBinding, "\r\n\x00") {
-		return errors.New("identity_binding must be an explicit opaque expected identity")
-	}
-	return nil
+	return validateCodexProfile(p)
 }
 
 // LoadProfile rejects unknown keys, duplicate keys, aliases and multiple documents.
@@ -203,12 +156,7 @@ func Resolve(profile Profile, tiers blueprint.Tiers, deny []string) (map[string]
 	routes := map[string][]Route{}
 	for name, candidates := range profile.Routes {
 		c := candidates[0]
-		product, want := "Zed", NativeModel
-		if c.Provider == "claude" {
-			product, want = blueprint.ProductClaude, ClaudeModel
-		} else if c.Provider == "codex" {
-			product, want = "Codex", CodexModel
-		}
+		product, want := "Codex", CodexModel
 		model, err := tiers.ModelFor(product, c.Tier, deny)
 		if err != nil {
 			return nil, fmt.Errorf("route %s: %w", name, err)
@@ -221,26 +169,6 @@ func Resolve(profile Profile, tiers blueprint.Tiers, deny []string) (map[string]
 	return routes, nil
 }
 
-// DefaultProfile supplies routes only; executable, image and grant bindings must
-// be configured explicitly before it can be prepared.
-func DefaultProfile(b *blueprint.Blueprint) Profile {
-	p := Profile{SchemaVersion: 1, Executor: "z", MaxActiveHelpers: 1, Routes: map[string][]Candidate{}}
-	if b == nil {
-		return p
-	}
-	for name, c := range b.Components {
-		if c.Placeholder || (c.RunsAs != blueprint.RunsAsSession && c.RunsAs != blueprint.RunsAsHelper) {
-			continue
-		}
-		provider, tier := "zed", "medium"
-		if top(name) {
-			provider, tier = "claude", "high"
-		}
-		p.Routes[name] = []Candidate{{Provider: provider, Tier: tier, Effort: c.Effort}}
-	}
-	return p
-}
-
 // Prepare validates and snapshots values without writing an epic or selection.
 // The default profile file is <brain>/factory/executors/<executor>.yaml.
 func Prepare(brain, epicID string, b *blueprint.Blueprint, options Options) (Selection, error) {
@@ -249,58 +177,14 @@ func Prepare(brain, epicID string, b *blueprint.Blueprint, options Options) (Sel
 	}
 	if options.Executor == "" || options.Executor == "claude" {
 		if options.ProfilePath != "" {
-			return Selection{}, errors.New("a native profile requires executor z")
+			return Selection{}, errors.New("an executor profile requires executor codex")
 		}
 		return Selection{SchemaVersion: 1, Executor: "claude", EpicID: epicID, CreatedAt: time.Now().UTC()}, nil
 	}
 	if options.Executor == "codex" {
 		return prepareCodex(brain, epicID, b, options.ProfilePath)
 	}
-	if options.Executor != "z" {
-		return Selection{}, errors.New("unsupported executor")
-	}
-	if b == nil {
-		return Selection{}, errors.New("missing blueprint")
-	}
-	path := options.ProfilePath
-	if path == "" {
-		path = filepath.Join(brain, "factory", "executors", "z.yaml")
-	}
-	p, err := LoadProfile(path)
-	if err != nil {
-		return Selection{}, err
-	}
-	if err := checkComponents(p, b); err != nil {
-		return Selection{}, err
-	}
-	tiers, err := blueprint.ReadTiers(brain)
-	if err != nil {
-		return Selection{}, err
-	}
-	routes, err := Resolve(p, tiers, b.Deny.Models)
-	if err != nil {
-		return Selection{}, err
-	}
-	binaries := map[string]Binary{}
-	for name, path := range map[string]string{"worker": p.NativeWorker, "usage": p.NativeUsage} {
-		binary, err := fingerprint(path)
-		if err != nil {
-			return Selection{}, err
-		}
-		binaries[name] = binary
-	}
-	image, err := inspectImage(p.ContainerImage)
-	if err != nil {
-		return Selection{}, err
-	}
-	s := Selection{SchemaVersion: 1, Executor: "z", EpicID: epicID, Profile: p, Routes: routes, Binaries: binaries, ContainerImageID: image, CreatedAt: time.Now().UTC()}
-	if err := validateSelection(s); err != nil {
-		return Selection{}, err
-	}
-	if err := checkActive(brain, s); err != nil {
-		return Selection{}, err
-	}
-	return s, nil
+	return Selection{}, ErrUnsupportedExecutor
 }
 
 func checkComponents(p Profile, b *blueprint.Blueprint) error {
@@ -402,39 +286,7 @@ func validateSelection(s Selection) error {
 	if s.Executor == "codex" {
 		return validateCodexSelection(s)
 	}
-	if s.Executor != "z" {
-		return errors.New("unsupported selection executor")
-	}
-	if err := validateProfile(s.Profile); err != nil {
-		return err
-	}
-	if !digestPattern.MatchString(s.ContainerImageID) {
-		return errors.New("selection has no immutable container image ID")
-	}
-	if len(s.Routes) != len(s.Profile.Routes) || len(s.Binaries) != 2 {
-		return errors.New("selection routes or binary fingerprints missing")
-	}
-	for name, candidates := range s.Profile.Routes {
-		routes := s.Routes[name]
-		if len(routes) != 1 {
-			return errors.New("selection candidate count mismatch")
-		}
-		c, r := candidates[0], routes[0]
-		want := NativeModel
-		if top(name) {
-			want = ClaudeModel
-		}
-		if r.Provider != c.Provider || r.Tier != c.Tier || r.Effort != c.Effort || r.Model != want {
-			return fmt.Errorf("selection route %s differs from pinned profile", name)
-		}
-	}
-	for name, path := range map[string]string{"worker": s.Profile.NativeWorker, "usage": s.Profile.NativeUsage} {
-		bin, ok := s.Binaries[name]
-		if !ok || bin.Path != path || !hashPattern.MatchString(bin.SHA256) {
-			return fmt.Errorf("selection %s fingerprint invalid", name)
-		}
-	}
-	return nil
+	return fmt.Errorf("%w: %q for epic %s", ErrUnsupportedExecutor, s.Executor, s.EpicID)
 }
 
 func decodeJSON(data []byte, v any) error {
@@ -544,7 +396,7 @@ func WriteSelection(brain string, s Selection) error {
 }
 
 func checkActive(brain string, want Selection) error {
-	if want.Executor != "z" && want.Executor != "codex" {
+	if want.Executor != "codex" {
 		return nil
 	}
 	data, err := os.ReadFile(filepath.Join(brain, "factory", "index.json"))
@@ -595,7 +447,7 @@ func checkActive(brain string, want Selection) error {
 			continue
 		}
 		other, err := ReadSelection(brain, id)
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrUnsupportedExecutor) {
 			continue
 		}
 		if err != nil {

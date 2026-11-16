@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -38,6 +39,11 @@ func (r *run) runtimeFor(provider string) session.Runtime {
 func (r *run) providerForEpic(epic string) string {
 	s, err := NativeSelection(r.d.Brain, epic)
 	if err != nil {
+		if errors.Is(err, executor.ErrUnsupportedExecutor) {
+			if e := r.ents[epic]; e != nil {
+				e.st.ExecutorHold = err.Error()
+			}
+		}
 		return "unknown"
 	}
 	return coordinatorProvider(s)
@@ -137,6 +143,9 @@ func onlyCodex(brain string) bool {
 			return false
 		}
 		selection, err := NativeSelection(brain, entry.Epic)
+		if errors.Is(err, executor.ErrUnsupportedExecutor) {
+			continue
+		}
 		if err != nil {
 			return false
 		}
@@ -256,7 +265,7 @@ func selectionReadError(brain string) error {
 			continue
 		}
 		seen[entry.Epic] = true
-		if _, err := NativeSelection(brain, entry.Epic); err != nil {
+		if _, err := NativeSelection(brain, entry.Epic); err != nil && !errors.Is(err, executor.ErrUnsupportedExecutor) {
 			return err
 		}
 	}

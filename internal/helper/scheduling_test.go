@@ -51,7 +51,7 @@ func TestRunningBrokerRetriesTransientFenceAndInspectWithoutReplay(t *testing.T)
 			recovered := make(chan struct{})
 			var notice sync.Once
 			var saved RunResult
-			d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+			d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 				used := 10.0
 				if reset.Load() {
 					used = 0
@@ -64,7 +64,7 @@ func TestRunningBrokerRetriesTransientFenceAndInspectWithoutReplay(t *testing.T)
 				}
 				return nil
 			}
-			d.Backends["zed"] = backendFunc{
+			d.Backends["codex"] = backendFunc{
 				run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 					runs.Add(1)
 					if spec.Resume {
@@ -98,7 +98,7 @@ func TestRunningBrokerRetriesTransientFenceAndInspectWithoutReplay(t *testing.T)
 					if spec.Job.ID != a.JobID || spec.Job.Round != 1 {
 						t.Error("reconciled another attempt")
 					}
-					if err := k.Record(ctx, EventCheckpointSaved, map[string]string{"conversation_id": saved.ConversationID, "turn_id": saved.TurnID}); err != nil {
+					if err := k.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(saved)); err != nil {
 						return saved, false, err
 					}
 					return saved, true, nil
@@ -169,8 +169,8 @@ func TestFreshQuotaCacheIsReusedAcrossFastControlTicks(t *testing.T) {
 	d.Now = clock.Now
 	var reads atomic.Int32
 	started := make(chan struct{})
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) { reads.Add(1); return quota(clock.Now(), 10), nil })
-	d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) { reads.Add(1); return quota(clock.Now(), 10), nil })
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 		r, err := beginTurn(ctx, spec, k)
 		if err != nil {
 			return r, err
@@ -216,7 +216,7 @@ func TestSlowQuotaRefreshDoesNotDelayInterruptOrAuthorityObservation(t *testing.
 			release := make(chan struct{})
 			cancelled := make(chan struct{})
 			identified := make(chan RunResult, 1)
-			d.Quotas["zed"] = usageFunc(func(ctx context.Context) (QuotaSnapshot, error) {
+			d.Quotas["codex"] = usageFunc(func(ctx context.Context) (QuotaSnapshot, error) {
 				if reads.Add(1) > 1 {
 					close(refreshStarted)
 					select {
@@ -227,7 +227,7 @@ func TestSlowQuotaRefreshDoesNotDelayInterruptOrAuthorityObservation(t *testing.
 				}
 				return quota(clock.Now(), 10), nil
 			})
-			d.Backends["zed"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+			d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
 				r, err := beginTurn(ctx, spec, k)
 				if err != nil {
 					return r, err
@@ -294,7 +294,7 @@ func TestRecoveryBackoffIsBoundedPerAttemptAndNeverRunsPrompt(t *testing.T) {
 	clock := &schedulingClock{at: time.Now().UTC()}
 	d.Now = clock.Now
 	fences, inspections := 0, 0
-	d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
+	d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
 		t.Error("replayed prompt")
 		return RunResult{}, nil
 	}, fence: func(ctx context.Context, job Job) error {
@@ -366,7 +366,7 @@ func TestQuotaRefreshUsesConfiguredNormalAndNearIntervals(t *testing.T) {
 	var reads atomic.Int32
 	var used atomic.Int32
 	used.Store(20)
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 		reads.Add(1)
 		return quota(clock.Now(), float64(used.Load())), nil
 	})
@@ -418,7 +418,7 @@ func TestQuotaCacheExpiresAtExistingStaleAndResetBoundaries(t *testing.T) {
 			var reads atomic.Int32
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			d.Quotas["zed"] = usageFunc(func(ctx context.Context) (QuotaSnapshot, error) {
+			d.Quotas["codex"] = usageFunc(func(ctx context.Context) (QuotaSnapshot, error) {
 				if reads.Add(1) == 1 {
 					return initial, nil
 				}
@@ -470,7 +470,7 @@ func TestQuotaReadFailureUsesOnlyStillFreshEvidenceAndBacksOff(t *testing.T) {
 	d.Now = clock.Now
 	var calls atomic.Int32
 	var unattributed atomic.Bool
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 		if calls.Add(1) == 1 {
 			return quota(clock.Now(), 10), nil
 		}
@@ -525,7 +525,7 @@ func TestQuotaTimedOutReaderRemainsSingleFlightAndLateSuccessIsDiscarded(t *test
 	started, release := make(chan struct{}), make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	d.Quotas["zed"] = usageFunc(func(ctx context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(ctx context.Context) (QuotaSnapshot, error) {
 		n := active.Add(1)
 		defer active.Add(-1)
 		if n != 1 {
@@ -550,9 +550,9 @@ func TestQuotaTimedOutReaderRemainsSingleFlightAndLateSuccessIsDiscarded(t *test
 	clock.Advance(time.Second)
 	monitor.decision(ctx, j)
 	<-started
-	flight := monitor.states["zed"].flight
+	flight := monitor.states["codex"].flight
 	select {
-	case <-monitor.states["zed"].flightContext.Done():
+	case <-monitor.states["codex"].flightContext.Done():
 	case <-time.After(time.Second):
 		t.Fatal("usage read was not bounded")
 	}
@@ -571,7 +571,7 @@ func TestQuotaTimedOutReaderRemainsSingleFlightAndLateSuccessIsDiscarded(t *test
 	if got := monitor.decision(ctx, j); got.State != "unknown" {
 		t.Fatal("late timed-out response accepted", got)
 	}
-	if !monitor.states["zed"].snapshot.ObservedAt.Equal(initial) {
+	if !monitor.states["codex"].snapshot.ObservedAt.Equal(initial) {
 		t.Fatal("late response replaced trusted snapshot")
 	}
 }
@@ -586,7 +586,7 @@ func TestRecoveryIOIsSingleFlightAndLateFailureCannotReviveCancellation(t *testi
 	d.Now = clock.Now
 	entered := make(chan struct{})
 	var calls atomic.Int32
-	d.Backends["zed"] = backendFunc{fence: func(ctx context.Context, _ Job) error { calls.Add(1); close(entered); <-ctx.Done(); return ctx.Err() }}
+	d.Backends["codex"] = backendFunc{fence: func(ctx context.Context, _ Job) error { calls.Add(1); close(entered); <-ctx.Done(); return ctx.Err() }}
 	schedule := recoverySchedule{}
 	defer schedule.close()
 	if err := schedule.tick(context.Background(), d); err != nil {
@@ -650,7 +650,7 @@ func TestQuotaRefreshFloorNeverAssumesEligibilityAcrossReset(t *testing.T) {
 	initial := quota(clock.Now(), 10)
 	initial.Windows[0].ResetsAt = clock.Now().Add(10 * time.Millisecond)
 	var calls atomic.Int32
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 		if calls.Add(1) == 1 {
 			return initial, nil
 		}
@@ -685,7 +685,7 @@ func TestReadFailureCannotExtendSnapshotFreshness(t *testing.T) {
 	d.Now = clock.Now
 	initial := clock.Now()
 	var calls atomic.Int32
-	d.Quotas["zed"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
+	d.Quotas["codex"] = usageFunc(func(context.Context) (QuotaSnapshot, error) {
 		if calls.Add(1) == 1 {
 			return quota(clock.Now(), 10), nil
 		}
@@ -708,7 +708,7 @@ func TestReadFailureCannotExtendSnapshotFreshness(t *testing.T) {
 	if got := quotaReply(t, context.Background(), monitor, j); got.State != "unknown" || got.Reason != "stale_or_clock" {
 		t.Fatal("failed refresh extended stale permission", got)
 	}
-	if !monitor.states["zed"].snapshot.ObservedAt.Equal(initial) {
+	if !monitor.states["codex"].snapshot.ObservedAt.Equal(initial) {
 		t.Fatal("failed refresh rewrote observation time")
 	}
 }

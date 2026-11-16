@@ -155,7 +155,7 @@ func admissible(db *ledger, r *jobRecord) bool {
 		}
 	}
 	for id, other := range db.Jobs {
-		if id == r.Job.ID {
+		if id == r.Job.ID || other.Job.Route.Provider != "codex" {
 			continue
 		}
 		q := other.Rounds[other.Job.Round]
@@ -171,6 +171,9 @@ func recoverAttempts(ctx context.Context, d RunnerDeps) error {
 		return err
 	}
 	for _, j := range jobs {
+		if j.Route.Provider != "codex" {
+			continue
+		}
 		if err = recoverAttempt(ctx, d, j); err != nil {
 			return err
 		}
@@ -178,7 +181,7 @@ func recoverAttempts(ctx context.Context, d RunnerDeps) error {
 	return nil
 }
 func nativeCancellationPending(r *jobRecord) bool {
-	if (r.Job.Route.Provider != "zed" && r.Job.Route.Provider != "codex") || r.Job.State != "unknown" {
+	if r.Job.Route.Provider != "codex" || r.Job.State != "unknown" {
 		return false
 	}
 	code := r.Rounds[r.Job.Round].Result.ErrorCode
@@ -492,16 +495,6 @@ func knownRevisionInputFailure(ctx context.Context, s Service, j Job, q *roundRe
 	return q.Ended && checkpointed(q) && result.ConversationID != "" && result.TurnID != "" && result.ConversationID == j.ConversationID && result.TurnID == j.TurnID && result.ConversationID == q.Result.ConversationID && result.TurnID == q.Result.TurnID && runModelMatches(result, j.Route) && result.EvidencePolicy == q.Result.EvidencePolicy && result.ConfiguredModel == q.Result.ConfiguredModel && result.ConfiguredEffort == q.Result.ConfiguredEffort && result.ObservedModel == q.Result.ObservedModel && result.PersistedReplySHA256 == q.Result.PersistedReplySHA256 && result.PersistedReplySHA256 == digestBytes([]byte(result.Reply))
 }
 
-func startupProcessOnly(r *jobRecord) bool {
-	q := r.Rounds[r.Job.Round]
-	if r.Job.Round != 1 || r.Job.ConversationID != "" || r.Job.TurnID != "" || q.Phase != EventProcessOwned || len(q.Evidence) != 6 || q.Ended || q.Result.ConversationID != "" || q.Result.TurnID != "" || q.Result.ObservedModel != "" {
-		return false
-	}
-	prefix := EventProcessOwned + ":"
-	pid, err := strconv.Atoi(q.Evidence[prefix+"pid"])
-	return err == nil && pid > 0 && q.Evidence[prefix+"process_group"] == q.Evidence[prefix+"pid"] && q.Evidence[prefix+"recorded"] == "true" && q.Evidence[prefix+"start_identity"] != "" && q.Evidence[prefix+"generation"] == strconv.Itoa(r.Job.Generation) && validToken(q.Evidence[prefix+"epoch"])
-}
-
 func finish(ctx context.Context, s Service, j Job, result RunResult, runErr, fenceErr error, reason string, inspection bool) error {
 	stored := false
 	err := s.transaction(ctx, true, func(db *ledger) error {
@@ -558,16 +551,6 @@ func finish(ctx context.Context, s Service, j Job, result RunResult, runErr, fen
 			return nil
 		}
 		if j.Route.Provider == "codex" && r.Job.Route.Provider == "codex" && inspection && result.Outcome == "failed" && result.ErrorCode == "codex_prelaunch_failed" && result.ErrorText == "Codex live containment acceptance is pending" && result.ConversationID == "" && result.TurnID == "" && result.ObservedModel == "" && result.EvidencePolicy == "" && result.ConfiguredModel == "" && result.ConfiguredEffort == "" && result.PersistedReplySHA256 == "" && reason == "" && q.InterruptReason == "" && q.Phase == "launch_attempted" && len(q.Evidence) == 0 && !q.Ended && q.Result.ConversationID == "" && q.Result.TurnID == "" && q.Result.ObservedModel == "" {
-			setState(r, "failed", result.ErrorCode)
-			q.Result.ErrorText = result.ErrorText
-			return nil
-		}
-		if j.Route.Provider == "zed" && r.Job.Route.Provider == "zed" && inspection && result.Outcome == "failed" && result.ErrorCode == "native_prelaunch_failed" && result.ErrorText != "" && result.ConversationID == "" && result.TurnID == "" && result.ObservedModel == "" && reason == "" && q.InterruptReason == "" && q.Phase == "launch_attempted" && len(q.Evidence) == 0 && !q.Ended && q.Result.ConversationID == "" && q.Result.TurnID == "" && q.Result.ObservedModel == "" {
-			setState(r, "failed", result.ErrorCode)
-			q.Result.ErrorText = result.ErrorText
-			return nil
-		}
-		if j.Route.Provider == "zed" && r.Job.Route.Provider == "zed" && inspection && result.Outcome == "failed" && result.ErrorCode == "native_startup_failed" && result.ErrorText == "native worker exited before conversation acknowledgment" && result.ConversationID == "" && result.TurnID == "" && result.ObservedModel == "" && reason == "" && q.InterruptReason == "" && startupProcessOnly(r) {
 			setState(r, "failed", result.ErrorCode)
 			q.Result.ErrorText = result.ErrorText
 			return nil
@@ -743,6 +726,9 @@ func queuedCandidates(ctx context.Context, s Service) ([]Job, bool, error) {
 		sort.Strings(ids)
 		for _, id := range ids {
 			r := db.Jobs[id]
+			if r.Job.Route.Provider != "codex" {
+				continue
+			}
 			q := r.Rounds[r.Job.Round]
 			if !settled(r) || !q.Delivered {
 				pending = true

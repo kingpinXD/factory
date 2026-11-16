@@ -30,7 +30,6 @@ import (
 
 // Deps are what the tick and `factory add` act through.
 type Deps struct {
-	NativePreflight   func(context.Context, executor.Selection) error
 	Helpers           *helper.Service
 	StartHelpers      func(context.Context) error
 	Brain             string

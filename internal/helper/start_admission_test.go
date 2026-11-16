@@ -43,7 +43,7 @@ func TestQueuedStartAuthorityIsRecheckedAtExecutionClaim(t *testing.T) {
 	}
 	a.denied = true
 	ran := false
-	d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) { ran = true; return RunResult{}, nil }}
+	d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) { ran = true; return RunResult{}, nil }}
 	err = execute(context.Background(), d, candidates[0], nil, nil)
 	if !errors.Is(err, ErrAuthority) || ran {
 		t.Fatalf("revocation before claim ignored: err=%v ran=%v", err, ran)

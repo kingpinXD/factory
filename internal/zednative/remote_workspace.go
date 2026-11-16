@@ -34,8 +34,7 @@ type RemoteEnvironment struct {
 	Roots               []string
 }
 
-// RemoteWorkspace shares Docker attestation and private Git promotion with the
-// native backend without starting Zed or reading its credentials.
+// RemoteWorkspace manages Docker attestation and private Git promotion.
 type RemoteWorkspace struct {
 	PrepareGit   func(context.Context, string, string) error
 	PrepareGitV2 func(context.Context, string, string) error

@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/kingpinXD/factory/internal/executor"
 )
 
 func eventually(t *testing.T, fn func() bool) {
@@ -56,7 +58,8 @@ func crashBackend(brain, binary, boundary string) Backend {
 			if err := sink.Record(ctx, "process_owned", map[string]string{"pid": strconv.Itoa(cmd.Process.Pid), "start_identity": "fake-owned-epoch", "process_group": strconv.Itoa(cmd.Process.Pid)}); err != nil {
 				return RunResult{}, err
 			}
-			result := RunResult{Outcome: "completed", ConversationID: "crash-conversation", TurnID: "crash-turn", ObservedModel: spec.Job.Route.Model, Reply: "completed but writer still alive"}
+			result := RunResult{Outcome: "completed", ConversationID: "crash-conversation", TurnID: "crash-turn", EvidencePolicy: executor.CodexModelEvidencePolicy, ConfiguredModel: spec.Job.Route.Model, ConfiguredEffort: spec.Job.Route.Effort, Reply: "completed but writer still alive"}
+			result.PersistedReplySHA256 = digestBytes([]byte(result.Reply))
 			if boundary != "launch" {
 				for _, e := range []struct {
 					name   string
@@ -71,6 +74,9 @@ func crashBackend(brain, binary, boundary string) Backend {
 			}
 			if boundary == "result" {
 				if err := sink.Record(ctx, "native_ended", map[string]string{"turn_id": result.TurnID}); err != nil {
+					return result, err
+				}
+				if err := sink.Record(ctx, EventPersistedTurnVerified, persistedTurnFields(result)); err != nil {
 					return result, err
 				}
 				return result, nil
@@ -134,7 +140,7 @@ func TestBrokerCrashProcess(t *testing.T) {
 	}
 	authority := &fakeAuthority{scope: Scope{EpicID: "epic1", Generation: "g1", Worktree: filepath.Join(brain, "worktree"), OutputRoot: filepath.Join(brain, "outputs")}}
 	service := Service{Brain: brain, Authority: authority}
-	d := RunnerDeps{Service: service, FactoryBin: binary, Backends: map[string]Backend{"zed": crashBackend(brain, binary, os.Getenv("HELPER_CRASH_BOUNDARY"))}, Quotas: map[string]UsageReader{"zed": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: func(context.Context, Job, RoundResult) error { return nil }}
+	d := RunnerDeps{Service: service, FactoryBin: binary, Backends: map[string]Backend{"codex": crashBackend(brain, binary, os.Getenv("HELPER_CRASH_BOUNDARY"))}, Quotas: map[string]UsageReader{"codex": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: func(context.Context, Job, RoundResult) error { return nil }}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err = Run(ctx, d); err != nil {
@@ -188,7 +194,7 @@ func TestRealBrokerCrashRetainsDetachedWriterBarrier(t *testing.T) {
 			}
 			var replacementStarts int
 			backend := crashBackend(s.Brain, binary, "")
-			d.Backends["zed"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
+			d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
 				replacementStarts++
 				return RunResult{}, fmt.Errorf("replacement should remain barred")
 			}, fence: backend.Fence}

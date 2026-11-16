@@ -280,78 +280,69 @@ func TestDispatchAuthorizationAndLegacyJSON(t *testing.T) {
 }
 
 func TestSubmitManagedDerivesParentAtomicallyAndPreservesFanout(t *testing.T) {
-	for _, provider := range []string{"zed", "codex"} {
-		t.Run(provider, func(t *testing.T) {
-			s, _, r := setup(t)
-			if provider == "codex" {
-				s, _, r, _ = setupStep(t)
+	s, _, r, _ := setupStep(t)
+	a := mustSubmit(t, s, r)
+	if e := s.transaction(context.Background(), true, func(db *ledger) error {
+		j := db.Jobs[a.JobID]
+		setState(j, "running", "")
+		j.Rounds[1].Phase = "launch_attempted"
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	j, e := s.Job(a.JobID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, key := range []string{"first-area", "second-area"} {
+		child, e := s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: key, Component: "reviewer", Prompt: key})
+		if e != nil {
+			t.Fatal(e)
+		}
+		c, e := s.Job(child.JobID)
+		if e != nil || c.Request.ParentJobID != j.ID || c.Scope.StepSlot != "" || c.Scope.Authorization() != j.Scope.Authorization() {
+			t.Fatal(c, e)
+		}
+	}
+	if _, e = s.SubmitManaged(context.Background(), j.ID, j.Generation+1, toolcontract.NestedSubmitInput{RequestKey: "stale", Component: "reviewer", Prompt: "stale"}); e == nil {
+		t.Fatal("stale generation admitted")
+	}
+	q := r
+	q.ParentJobID = j.ID
+	q.RequestKey = "spoofed"
+	if _, e = s.Submit(context.Background(), q); e == nil || !strings.Contains(e.Error(), "cannot claim") {
+		t.Fatal(e)
+	}
+	if e = s.Yield(context.Background(), j.ID, func() []string {
+		jobs, _ := s.Jobs()
+		ids := []string{}
+		for _, child := range jobs {
+			if child.Request.ParentJobID == j.ID {
+				ids = append(ids, child.ID)
 			}
-			a := mustSubmit(t, s, r)
-			if e := s.transaction(context.Background(), true, func(db *ledger) error {
-				j := db.Jobs[a.JobID]
-				setState(j, "running", "")
-				j.Rounds[1].Phase = "launch_attempted"
-				return nil
-			}); e != nil {
-				t.Fatal(e)
-			}
-			j, e := s.Job(a.JobID)
-			if e != nil {
-				t.Fatal(e)
-			}
-			for _, key := range []string{"first-area", "second-area"} {
-				child, e := s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: key, Component: "reviewer", Prompt: key})
-				if e != nil {
-					t.Fatal(e)
-				}
-				c, e := s.Job(child.JobID)
-				if e != nil || c.Request.ParentJobID != j.ID || c.Scope.StepSlot != "" || c.Scope.Authorization() != j.Scope.Authorization() {
-					t.Fatal(c, e)
-				}
-			}
-			if _, e = s.SubmitManaged(context.Background(), j.ID, j.Generation+1, toolcontract.NestedSubmitInput{RequestKey: "stale", Component: "reviewer", Prompt: "stale"}); e == nil {
-				t.Fatal("stale generation admitted")
-			}
-			if provider == "codex" {
-				q := r
-				q.ParentJobID = j.ID
-				q.RequestKey = "spoofed"
-				if _, e = s.Submit(context.Background(), q); e == nil || !strings.Contains(e.Error(), "cannot claim") {
-					t.Fatal(e)
-				}
-			}
-			if e = s.Yield(context.Background(), j.ID, func() []string {
-				jobs, _ := s.Jobs()
-				ids := []string{}
-				for _, child := range jobs {
-					if child.Request.ParentJobID == j.ID {
-						ids = append(ids, child.ID)
-					}
-				}
-				return ids
-			}()); e != nil {
-				t.Fatal(e)
-			}
-			recovered, e := s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: "first-area", Component: "reviewer", Prompt: "first-area"})
-			if e != nil || recovered.Round != 1 || recovered.State != "queued" {
-				t.Fatal("yielding same-key recovery failed:", recovered, e)
-			}
-			if _, e = s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: "first-area", Component: "reviewer", Prompt: "changed"}); !errors.Is(e, ErrConflict) {
-				t.Fatal("yielding changed-key payload:", e)
-			}
-			if e = s.transaction(context.Background(), false, func(db *ledger) error {
-				q := db.Jobs[j.ID].Rounds[1]
-				if len(db.Jobs) != 3 || len(q.Children) != 2 || !q.Yield {
-					t.Fatal("same-key recovery changed graph")
-				}
-				return nil
-			}); e != nil {
-				t.Fatal(e)
-			}
-			if _, e = s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: "after-yield", Component: "reviewer", Prompt: "late"}); e == nil {
-				t.Fatal("child admitted after yield")
-			}
-		})
+		}
+		return ids
+	}()); e != nil {
+		t.Fatal(e)
+	}
+	recovered, e := s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: "first-area", Component: "reviewer", Prompt: "first-area"})
+	if e != nil || recovered.Round != 1 || recovered.State != "queued" {
+		t.Fatal("yielding same-key recovery failed:", recovered, e)
+	}
+	if _, e = s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: "first-area", Component: "reviewer", Prompt: "changed"}); !errors.Is(e, ErrConflict) {
+		t.Fatal("yielding changed-key payload:", e)
+	}
+	if e = s.transaction(context.Background(), false, func(db *ledger) error {
+		q := db.Jobs[j.ID].Rounds[1]
+		if len(db.Jobs) != 3 || len(q.Children) != 2 || !q.Yield {
+			t.Fatal("same-key recovery changed graph")
+		}
+		return nil
+	}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.SubmitManaged(context.Background(), j.ID, j.Generation, toolcontract.NestedSubmitInput{RequestKey: "after-yield", Component: "reviewer", Prompt: "late"}); e == nil {
+		t.Fatal("child admitted after yield")
 	}
 }
 
@@ -403,47 +394,37 @@ func TestSubmitManagedStopRaceLeavesOneCompleteFrontier(t *testing.T) {
 }
 
 func TestSubmitManagedActualRunnerKeepsSameRoleFanout(t *testing.T) {
-	for _, provider := range []string{"zed", "codex"} {
-		t.Run(provider, func(t *testing.T) {
-			s, d, r := setup(t)
-			if provider == "codex" {
-				s, d, r, _ = setupStep(t)
-			}
-			a := mustSubmit(t, s, r)
-			d.Backends[provider] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
-				if spec.Job.ID == a.JobID && spec.Job.Round == 1 {
-					children := []string{}
-					for _, key := range []string{"area-one", "area-two"} {
-						child, e := s.SubmitManaged(ctx, spec.Job.ID, spec.Job.Generation, toolcontract.NestedSubmitInput{RequestKey: key, Component: "reviewer", Prompt: key})
-						if e != nil {
-							return RunResult{}, e
-						}
-						children = append(children, child.JobID)
-					}
-					if e := s.Yield(ctx, spec.Job.ID, children); e != nil {
-						return RunResult{}, e
-					}
+	s, d, r, _ := setupStep(t)
+	a := mustSubmit(t, s, r)
+	d.Backends["codex"] = backendFunc{run: func(ctx context.Context, spec RunSpec, k Sink) (RunResult, error) {
+		if spec.Job.ID == a.JobID && spec.Job.Round == 1 {
+			children := []string{}
+			for _, key := range []string{"area-one", "area-two"} {
+				child, e := s.SubmitManaged(ctx, spec.Job.ID, spec.Job.Generation, toolcontract.NestedSubmitInput{RequestKey: key, Component: "reviewer", Prompt: key})
+				if e != nil {
+					return RunResult{}, e
 				}
-				if provider == "codex" {
-					return recordCodexTurn(ctx, spec, k)
-				}
-				return recordTurn(ctx, spec, k)
-			}}
-			runBounded(t, d)
-			j, e := s.Job(a.JobID)
-			if e != nil || j.State != "completed" || j.Round != 2 {
-				t.Fatal(j, e)
+				children = append(children, child.JobID)
 			}
-			jobs, e := s.Jobs()
-			if e != nil || len(jobs) != 3 {
-				t.Fatal(jobs, e)
+			if e := s.Yield(ctx, spec.Job.ID, children); e != nil {
+				return RunResult{}, e
 			}
-			for _, j := range jobs {
-				if j.State != "completed" {
-					t.Fatal(j)
-				}
-			}
-		})
+		}
+		return recordCodexTurn(ctx, spec, k)
+	}}
+	runBounded(t, d)
+	j, e := s.Job(a.JobID)
+	if e != nil || j.State != "completed" || j.Round != 2 {
+		t.Fatal(j, e)
+	}
+	jobs, e := s.Jobs()
+	if e != nil || len(jobs) != 3 {
+		t.Fatal(jobs, e)
+	}
+	for _, j := range jobs {
+		if j.State != "completed" {
+			t.Fatal(j)
+		}
 	}
 }
 

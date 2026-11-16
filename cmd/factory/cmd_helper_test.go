@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -22,6 +21,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/reconcile"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -192,7 +192,7 @@ func (q *controlUsage) Read(context.Context) (helper.QuotaSnapshot, error) {
 	q.reads.Add(1)
 	now := time.Now()
 	yes := true
-	return helper.QuotaSnapshot{Provider: "zed", Known: true, AttributionKnown: true, IdentityBinding: "fixture-account", ExpectedIdentity: "fixture-account", OrdinaryUsageAllowed: &yes, ObservedAt: now, Windows: []helper.QuotaWindow{{Used: 1, Duration: 5 * time.Hour, ResetsAt: now.Add(time.Hour)}, {Used: 1, Duration: 7 * 24 * time.Hour, ResetsAt: now.Add(24 * time.Hour)}}}, nil
+	return helper.QuotaSnapshot{Provider: "codex", Known: true, AttributionKnown: true, IdentityBinding: "fixture-account", ExpectedIdentity: "fixture-account", OrdinaryUsageAllowed: &yes, ObservedAt: now, Windows: []helper.QuotaWindow{{Used: 1, Duration: 5 * time.Hour, ResetsAt: now.Add(time.Hour)}, {Used: 1, Duration: 7 * 24 * time.Hour, ResetsAt: now.Add(24 * time.Hour)}}}, nil
 }
 
 func controlFixture(t *testing.T) (helper.Service, helper.RunnerDeps, helper.Request) {
@@ -224,22 +224,21 @@ func controlFixture(t *testing.T) (helper.Service, helper.RunnerDeps, helper.Req
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile := executor.DefaultProfile(b)
-	profile.NativeWorker = binary
-	profile.NativeUsage = binary
+	profile := executor.DefaultCodexProfile(b)
+	profile.CodexBinary = binary
+	profile.CodexExecServer = binary
 	profile.ContainerImage = "sha256:" + strings.Repeat("a", 64)
-	profile.CredentialNamespace = "factory-openai"
+	profile.CodexVersion = "0.162.1"
+	profile.CodexModelCatalog = "/fixture/models.json"
+	profile.CodexModelCatalogSHA256 = strings.Repeat("a", 64)
+	profile.ModelEvidencePolicy = executor.CodexModelEvidencePolicy
 	profile.IdentityBinding = "fixture-account"
 	routes := map[string][]executor.Route{}
 	for name, cs := range profile.Routes {
 		c := cs[0]
-		model := executor.NativeModel
-		if c.Provider == "claude" {
-			model = executor.ClaudeModel
-		}
-		routes[name] = []executor.Route{{Provider: c.Provider, Tier: c.Tier, Model: model, Effort: c.Effort}}
+		routes[name] = []executor.Route{{Provider: "codex", Tier: c.Tier, Effort: c.Effort, Model: executor.CodexModel}}
 	}
-	selection := executor.Selection{SchemaVersion: 1, Executor: "z", EpicID: "epic1", Profile: profile, Routes: routes, Binaries: map[string]executor.Binary{"worker": {Path: binary, SHA256: strings.Repeat("a", 64)}, "usage": {Path: binary, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: profile.ContainerImage, CreatedAt: time.Now().UTC()}
+	selection := executor.Selection{SchemaVersion: 1, Executor: "codex", EpicID: "epic1", Profile: profile, Routes: routes, Binaries: map[string]executor.Binary{"codex": {Path: binary, SHA256: strings.Repeat("a", 64)}, "codex-executor": {Path: binary, SHA256: strings.Repeat("b", 64)}}, ContainerImageID: profile.ContainerImage, CreatedAt: time.Now().UTC()}
 	if err = executor.WriteSelection(brain, selection); err != nil {
 		t.Fatal(err)
 	}
@@ -273,9 +272,10 @@ func controlFixture(t *testing.T) (helper.Service, helper.RunnerDeps, helper.Req
 	if err = store.WriteIndex(brain, ix); err != nil {
 		t.Fatal(err)
 	}
+	registerLegacyCoordinatorFixture(t, brain, selection, session.Spec{Name: "factory:owner1:orchestrator", Task: "owner1", EpicID: "epic1", Generation: "owner1:1:orchestrator"})
 	service := reconcile.NativeService(brain, func(context.Context, helper.Job) error { return nil })
 	req := helper.Request{SchemaVersion: 1, RequestKey: "request1", OwnerID: "owner1", WorkID: "work1", SetID: "owner1", Lease: 1, Component: "reviewer-code", Prompt: "offline review"}
-	deps := helper.RunnerDeps{Service: service, FactoryBin: binary, Quotas: map[string]helper.UsageReader{"zed": &controlUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
+	deps := helper.RunnerDeps{Service: service, FactoryBin: binary, Quotas: map[string]helper.UsageReader{"codex": &controlUsage{}}, Notify: func(context.Context, helper.Job, helper.RoundResult) error { return nil }}
 	return service, deps, req
 }
 func controlTurn(ctx context.Context, s helper.RunSpec, k helper.Sink, ended bool) (helper.RunResult, error) {
@@ -284,7 +284,9 @@ func controlTurn(ctx context.Context, s helper.RunSpec, k helper.Sink, ended boo
 		conversation = "conversation"
 	}
 	turn := fmt.Sprintf("turn-%d", s.Job.Round)
-	result := helper.RunResult{Outcome: "completed", Reply: "reviewed", ConversationID: conversation, TurnID: turn, ObservedModel: executor.NativeModel}
+	result := helper.RunResult{Outcome: "completed", Reply: fmt.Sprintf("reviewed round %d", s.Job.Round), ConversationID: conversation, TurnID: turn, EvidencePolicy: executor.CodexModelEvidencePolicy, ConfiguredModel: s.Job.Route.Model, ConfiguredEffort: s.Job.Route.Effort}
+	sum := sha256.Sum256([]byte(result.Reply))
+	result.PersistedReplySHA256 = hex.EncodeToString(sum[:])
 	evs := []struct {
 		name   string
 		fields map[string]string
@@ -293,15 +295,16 @@ func controlTurn(ctx context.Context, s helper.RunSpec, k helper.Sink, ended boo
 		evs = append(evs, struct {
 			name   string
 			fields map[string]string
-		}{helper.EventNativeEnded, map[string]string{"turn_id": turn}}, struct {
-			name   string
-			fields map[string]string
-		}{helper.EventCheckpointSaved, map[string]string{"conversation_id": conversation, "turn_id": turn}})
+		}{helper.EventNativeEnded, map[string]string{"turn_id": turn}})
 	}
+
 	for _, ev := range evs {
 		if err := k.Record(ctx, ev.name, ev.fields); err != nil {
 			return result, err
 		}
+	}
+	if err := k.Record(ctx, helper.EventPersistedTurnVerified, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID, "reply_sha256": result.PersistedReplySHA256, "configured_model": result.ConfiguredModel, "configured_effort": result.ConfiguredEffort, "evidence_policy": result.EvidencePolicy}); err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -324,80 +327,6 @@ func awaitResult(ctx context.Context, s helper.Service, id, state string) (helpe
 	}
 }
 
-func TestRustBrainReadFixturePassesThroughManagedGoControl(t *testing.T) {
-	// Reuse the actual native tool-input fixture, rather than a second Go-only
-	// JSON shape that could hide a cross-language payload mismatch.
-	source, err := os.ReadFile("../../native/zed/overlay/crates/eval_cli/src/lifecycle_managed_tests.rs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	anchor := "async fn every_native_helper_operation_uses_fixed_scope_and_fake_executor"
-	_, body, ok := strings.Cut(string(source), anchor)
-	if !ok {
-		t.Fatal("native tool fixture missing")
-	}
-	fixture := regexp.MustCompile(`json!\((\{"path":"docs/safe.md","max_bytes":128\})\)`).FindStringSubmatch(body)
-	if len(fixture) != 2 {
-		t.Fatal("actual Rust brain_read fixture changed; update the ABI check")
-	}
-	s, d, req := controlFixture(t)
-	dir := filepath.Join(s.Brain, "docs")
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(dir, "safe.md"), []byte("safe fixture knowledge"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	accepted, err := s.Submit(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := store.Lock(s.Brain, "tick")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer unlock()
-	checked := false
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, k helper.Sink) (helper.RunResult, error) {
-		result, err := controlTurn(ctx, spec, k, true)
-		if err != nil {
-			return result, err
-		}
-		envelope, _ := json.Marshal(controlRequest{Op: "brain_read", Payload: json.RawMessage(fixture[1])})
-		reply, err := managedControl(ctx, s, spec.Job.ID, spec.Job.Generation, envelope)
-		if err != nil {
-			return result, err
-		}
-		data, _ := json.Marshal(reply)
-		if string(data) != `{"op":"brain_read","schema_version":1,"text":"safe fixture knowledge"}` {
-			return result, fmt.Errorf("wrong read result: %s", data)
-		}
-		lease, err := managedControl(ctx, s, spec.Job.ID, spec.Job.Generation, []byte(`{"op":"lease_check","payload":{}}`))
-		if err != nil {
-			return result, err
-		}
-		receipt, ok := lease.(leaseReceipt)
-		if !ok || !receipt.Allowed || receipt.JobID != spec.Job.ID || receipt.Generation != spec.Job.Generation {
-			return result, fmt.Errorf("bound lease receipt refused")
-		}
-		// The event callback executes under helper-ledger while tick is held here.
-		// It must append without calling Service again or trying to acquire tick.
-		if _, err = managedControl(ctx, s, spec.Job.ID, spec.Job.Generation, []byte(`{"op":"heartbeat","payload":{"text":"native fixture"}}`)); err != nil {
-			return result, err
-		}
-		checked = true
-		return result, nil
-	}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err = helper.Run(ctx, d); err != nil {
-		t.Fatal(err)
-	}
-	result, err := s.Result(accepted.JobID, 1)
-	if err != nil || result.State != "completed" || !checked {
-		t.Fatalf("native fixture refused: %+v checked=%v %v", result, checked, err)
-	}
-}
 func TestBrainReadMaxBytesMatchesNativeIntegerBounds(t *testing.T) {
 	for _, value := range []string{"0", "65537", "-1", "1.5", "1e2", "null", `"128"`, "true", "18446744073709551616"} {
 		if _, err := decodeBrainRead([]byte(`{"path":"docs/safe.md","max_bytes":` + value + `}`)); err == nil {
@@ -424,136 +353,13 @@ func TestBrainReadMaxBytesMatchesNativeIntegerBounds(t *testing.T) {
 		t.Fatal("read exceeded explicit byte bound")
 	}
 }
-func TestAttachInterruptJournalsIntentThenStartsRunnerAndReadsActualState(t *testing.T) {
-	s, d, req := controlFixture(t)
-	a, err := s.Submit(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	saved := make(chan helper.RunResult, 1)
-	var inspections atomic.Int32
-	var fences atomic.Int32
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, k helper.Sink) (helper.RunResult, error) {
-		result, err := controlTurn(ctx, spec, k, spec.Resume)
-		if err != nil {
-			return result, err
-		}
-		if spec.Resume {
-			return result, nil
-		}
-		close(started)
-		<-ctx.Done()
-		saveCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		err = k.Record(saveCtx, helper.EventCheckpointSaved, map[string]string{"conversation_id": result.ConversationID, "turn_id": result.TurnID})
-		result.Outcome = "recovery_required"
-		if err == nil {
-			saved <- result
-		}
-		return result, err
-	}, fence: func(context.Context, helper.Job) error { fences.Add(1); return nil }, inspect: func(_ context.Context, spec helper.RunSpec, _ helper.Sink) (helper.RunResult, bool, error) {
-		select {
-		case result := <-saved:
-			if spec.Job.ID != a.JobID || result.ConversationID != "conversation" || result.TurnID != "turn-1" {
-				return helper.RunResult{}, false, errors.New("wrong saved attempt")
-			}
-			inspections.Add(1)
-			return result, true, nil
-		default:
-			return helper.RunResult{}, false, errors.New("no saved attempt")
-		}
-	}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- helper.Run(ctx, d) }()
-	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal("turn not identified")
-	}
-	checkIntent := func(stopped bool) error {
-		data, err := os.ReadFile(filepath.Join(s.Brain, "factory", "helpers", "ledger.json"))
-		if err != nil {
-			return err
-		}
-		var journal struct {
-			Jobs map[string]struct {
-				Rounds map[int]struct {
-					InterruptReason string `json:"interrupt_reason"`
-					Stopped         bool   `json:"stopped"`
-				} `json:"rounds"`
-			} `json:"jobs"`
-		}
-		if err := json.Unmarshal(data, &journal); err != nil {
-			return err
-		}
-		round := journal.Jobs[a.JobID].Rounds[1]
-		if round.InterruptReason != "attach request" {
-			return fmt.Errorf("runner started before durable intent: round 1 interrupt_reason=%q", round.InterruptReason)
-		}
-		if stopped && !round.Stopped {
-			return fmt.Errorf("recovery result published before writer stopped")
-		}
-		return nil
-	}
-	oldStart := startHelperRunner
-	t.Cleanup(func() { startHelperRunner = oldStart })
-	startHelperRunner = func(_ context.Context, brain string) error {
-		if brain != s.Brain {
-			return fmt.Errorf("interrupt restarted wrong brain")
-		}
-		if err := checkIntent(false); err != nil {
-			return err
-		}
-		// The active broker may finish the interrupt before the restart hint is read.
-		_, err := awaitResult(ctx, s, a.JobID, "recovery_required")
-		if err != nil {
-			result, _ := s.Result(a.JobID, 1)
-			select {
-			case runnerErr := <-done:
-				return fmt.Errorf("%w; result=%+v; runner=%v", err, result, runnerErr)
-			default:
-				return fmt.Errorf("%w; result=%+v", err, result)
-			}
-		}
-		return checkIntent(true)
-	}
-	var stdout, stderr bytes.Buffer
-	code := run([]string{"z-attach", a.JobID, "--brain", s.Brain, "--action", "interrupt", "--round", "1", "--reason", "attach request"}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("attach interrupt: %d %s", code, &stderr)
-	}
-	var result helper.RoundResult
-	err = json.Unmarshal(stdout.Bytes(), &result)
-	if err != nil || result.State != "recovery_required" || result.Outcome != "recovery_required" || result.ConversationID != "conversation" || fences.Load() == 0 || inspections.Load() != 1 {
-		t.Fatalf("interrupt became cancellation or skipped barrier: %+v %v", result, err)
-	}
-	cancel()
-	if err = <-done; !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if _, err = s.Continue(context.Background(), a.JobID, helper.ContinueRequest{SchemaVersion: 1, RequestKey: "explicit-recovery", ExpectedRound: 1, Prompt: "continue saved conversation"}); err != nil {
-		t.Fatal(err)
-	}
-	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer recoveryCancel()
-	if err = helper.Run(recoveryCtx, d); err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := s.Result(a.JobID, 2)
-	if err != nil || recovered.State != "completed" || recovered.ConversationID != result.ConversationID {
-		t.Fatalf("recovery lost conversation: %+v %v", recovered, err)
-	}
-}
 func TestHelperDrainClosesAdmissionAndFlushesWithoutInference(t *testing.T) {
 	s, d, req := controlFixture(t)
 	a, err := s.Submit(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(context.Context, helper.RunSpec, helper.Sink) (helper.RunResult, error) {
+	d.Backends = map[string]helper.Backend{"codex": controlBackend{run: func(context.Context, helper.RunSpec, helper.Sink) (helper.RunResult, error) {
 		return helper.RunResult{}, errors.New("drain must never start inference")
 	}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -562,7 +368,7 @@ func TestHelperDrainClosesAdmissionAndFlushesWithoutInference(t *testing.T) {
 	if err != nil || !report.Drained || report.Jobs != 1 || len(report.Epics) != 1 {
 		t.Fatalf("drain incomplete: %+v %v", report, err)
 	}
-	if d.Quotas["zed"].(*controlUsage).reads.Load() != 0 {
+	if d.Quotas["codex"].(*controlUsage).reads.Load() != 0 {
 		t.Fatal("drain queried live usage")
 	}
 	result, err := s.Result(a.JobID, 1)
@@ -603,7 +409,7 @@ func TestHelperDrainRefusesUnconfirmedWriterDeath(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, k helper.Sink) (helper.RunResult, error) {
+	d.Backends = map[string]helper.Backend{"codex": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, k helper.Sink) (helper.RunResult, error) {
 		result, err := controlTurn(ctx, spec, k, false)
 		if err != nil {
 			return result, err

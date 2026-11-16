@@ -8,8 +8,6 @@ import (
 
 func helperProvider(s executor.Selection) string {
 	switch s.Executor {
-	case "z":
-		return "zed"
 	case "codex":
 		return "codex"
 	}

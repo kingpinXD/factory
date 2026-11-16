@@ -126,7 +126,7 @@ func TestCommitCrashProcess(t *testing.T) {
 	authority := &fakeAuthority{scope: Scope{EpicID: "epic1", Generation: "g1", Worktree: filepath.Join(brain, "worktree"), OutputRoot: filepath.Join(brain, "outputs")}}
 	boundary := os.Getenv("HELPER_COMMIT_BOUNDARY")
 	s := Service{Brain: brain, Authority: authority, testCheckpoint: commitCrashCheckpoint(brain, boundary)}
-	d := RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]Backend{"zed": commitCrashBackend(brain, binary, boundary)}, Quotas: map[string]UsageReader{"zed": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: commitCrashNotify(brain)}
+	d := RunnerDeps{Service: s, FactoryBin: binary, Backends: map[string]Backend{"codex": commitCrashBackend(brain, binary, boundary)}, Quotas: map[string]UsageReader{"codex": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: commitCrashNotify(brain)}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err = Run(ctx, d); err != nil {
@@ -173,7 +173,7 @@ func TestRealCommitBoundaryCrashesPublishExactlyOnceWithoutReplay(t *testing.T) 
 				t.Fatal(err)
 			}
 			cmd.Wait()
-			d.Backends["zed"] = commitCrashBackend(s.Brain, binary, "")
+			d.Backends["codex"] = commitCrashBackend(s.Brain, binary, "")
 			d.Notify = commitCrashNotify(s.Brain)
 			runBounded(t, d)
 			runBounded(t, d)

@@ -35,7 +35,7 @@ func recoveryCoordinator(t *testing.T) (helper.Service, helper.Request, codex.Re
 		t.Fatal(err)
 	}
 	p := executor.DefaultCodexProfile(b)
-	p.CodexBinary, p.CodexExecServer = selected.Profile.NativeWorker, selected.Profile.NativeWorker
+	p.CodexBinary, p.CodexExecServer = selected.Profile.CodexBinary, selected.Profile.CodexExecServer
 	p.CodexModelCatalog, p.CodexModelCatalogSHA256 = "/fixture/models.json", strings.Repeat("a", 64)
 	p.CodexVersion, p.IdentityBinding = "0.162.1", "fixture-account"
 	p.ContainerImage, p.ModelEvidencePolicy = selected.ContainerImageID, executor.CodexModelEvidencePolicy
@@ -188,7 +188,12 @@ func TestCodexNestedReplyOnlySubmissionCanCorrectWithoutAdmission(t *testing.T) 
 		t.Fatal(err)
 	}
 	checked := false
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (helper.RunResult, error) {
+	d.Backends = map[string]helper.Backend{"codex": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (result helper.RunResult, runErr error) {
+		defer func() {
+			if runErr != nil {
+				t.Errorf("nested backend: %v", runErr)
+			}
+		}()
 		result, err := controlTurn(ctx, spec, sink, true)
 		if err != nil {
 			return result, err
@@ -229,7 +234,8 @@ func TestCodexNestedReplyOnlySubmissionCanCorrectWithoutAdmission(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err = helper.Run(ctx, d); err != nil {
-		t.Fatal(err)
+		jobs, _ := s.Jobs()
+		t.Fatalf("runner: %v jobs=%+v", err, jobs)
 	}
 	job, err := s.Job(accepted.JobID)
 	if err != nil || !checked || job.State != "completed" || job.Round != 2 {
@@ -330,7 +336,7 @@ func TestCodexNestedReplyOnlyContinuationCanCorrectWithoutNewRound(t *testing.T)
 	checked := false
 	var first helper.RoundResult
 	var originalChild helper.Request
-	d.Backends = map[string]helper.Backend{"zed": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (result helper.RunResult, runErr error) {
+	d.Backends = map[string]helper.Backend{"codex": controlBackend{run: func(ctx context.Context, spec helper.RunSpec, sink helper.Sink) (result helper.RunResult, runErr error) {
 		defer func() {
 			if runErr != nil {
 				t.Errorf("nested continuation backend: %v", runErr)
@@ -340,7 +346,6 @@ func TestCodexNestedReplyOnlyContinuationCanCorrectWithoutNewRound(t *testing.T)
 		if err != nil {
 			return result, err
 		}
-		result.Reply = fmt.Sprintf("reviewed round %d", spec.Job.Round)
 		if spec.Job.Request.ParentJobID != "" || spec.Job.Round > 2 {
 			return result, nil
 		}

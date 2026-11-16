@@ -87,7 +87,6 @@ func depsForBrain(brain string, out io.Writer) (reconcile.Deps, error) {
 	}
 	service := helperService(brain)
 	d.Helpers = &service
-	d.NativePreflight = nativePreflight
 	d.StartHelpers = func(ctx context.Context) error {
 		jobs, err := service.Jobs()
 		if err != nil {

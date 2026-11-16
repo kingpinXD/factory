@@ -29,7 +29,7 @@ func b2Qualification(context.Context, string, executor.Selection) (codex.Contrac
 }
 func b2World(t *testing.T) (*world, *run, helper.Request) {
 	t.Helper()
-	w, _, req := nativeWorld(t)
+	w, _, req := nativeBaseWorld(t)
 	selection, err := executor.ReadSelection(w.brain, "e1")
 	if err != nil {
 		t.Fatal(err)

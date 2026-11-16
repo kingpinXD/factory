@@ -158,28 +158,7 @@ One JSON object. Times are UTC RFC 3339; a list is `[]` when empty. `factory sta
 ```
 
 
-## Native Zed executor (offline integration; not live-ready)
-
-The default remains all-Claude. Opt-in intake uses `factory add <input>
---executor z --executor-profile <absolute-profile.yaml>`. Intake validates the
-profile, pinned binaries/image, managed capabilities and the scoped native grant.
-It writes the immutable selection and isolated prompts before publishing the epic.
-An interrupted snapshot reserves its epic ID; do not delete it to recycle that ID.
-A corrupt selection is an error, not permission to fall back to Claude.
-
-Native helpers use `openai-subscribed/gpt-6.1-sol`. Top-level planner, orchestrator
-and babysitter sessions use pinned `claude-opus-5-5`, with no Claude helper
-registrations. Stage model-table additions only in an isolated brain. Do not
-change a live brain or install this build over a running factory for a trial.
-`native/zed/README.md` describes building the separate native distribution.
-
-`factory z-preflight --brain <absolute-brain> --executor-profile <profile>` does
-not publish work, log in, or send an inference prompt. It checks local image
-availability, hashes, managed capability compatibility and scoped usage/grant
-identity. The usage check contacts the configured provider. A passing preflight
-is not evidence of live tool, credential-isolation or recovery readiness.
-
-### Helper CLI
+## Helper CLI
 
 Use the current executable through `FACTORY_BIN` and the selected `FACTORY_BRAIN`.
 Every command also accepts `--brain <absolute-brain>`.
@@ -196,18 +175,6 @@ Every command also accepts `--brain <absolute-brain>`.
 - `helper drain --brain <absolute-brain>` closes indexed native epics, fences
   their helper writers and finishes durable result delivery. It abandons queued
   and interrupted work; use recoverable interrupt instead when work must resume.
-- `z-runner --brain <absolute-brain>` runs the broker. Submission and tick also
-  start it detached, using the current executable. There is no new launchd job.
-- `z-attach <job-id> --action status|conversation` uses attested native APIs.
-  Conversation is an explicit private-content read, never part of normal status.
-- `z-attach <job-id> --action interrupt [--round <expected-round>] [--reason <text>]`
-  persists interrupt intent, ensures the selected runner, then reads the actual
-  RoundResult. The default expected round is the one observed by attach. The
-  response can still be running or unknown: checkpoint and writer death are not
-  inferred from the request acknowledgment. A matching saved checkpoint and
-  confirmed writer death settle the round as `recovery_required`, not cancelled.
-  Resume only through explicit `helper continue` with the expected round.
-
 Successful submit/continue returns schema-version-1 Accepted JSON. Reads of
 nonexistent jobs/rounds fail. Unknown fields, duplicate keys, trailing JSON and
 oversized requests fail. Never resubmit with a different request key merely
@@ -351,10 +318,7 @@ checks remain pending until executed. Both trial modes obey their account limits
 
 ### Licensing
 
-The Go factory remains MIT-licensed (`LICENSE`). The separate source-derived Zed
-runtime in `native/zed/` is GPL-3.0-or-later, with its own `LICENSE`, provenance and
-third-party notices. It is launched as a separate executable, not linked into Go.
-Distributing that runtime requires preserving its source and licensing obligations.
+The Go factory is MIT-licensed (`LICENSE`).
 
 ## Local browser UI
 

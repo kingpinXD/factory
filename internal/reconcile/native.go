@@ -17,7 +17,6 @@ import (
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
 )
 
 // NativeAuthority never acquires tick: broker callbacks run under helper-ledger,
@@ -384,7 +383,7 @@ func (r *run) nativeWorkScopes(e *entity) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if selection.Executor != "z" && selection.Executor != "codex" {
+	if selection.Executor != "codex" {
 		return nil, nil
 	}
 	ids := []string{}
@@ -564,8 +563,6 @@ func NativeSelection(brain, epic string) (executor.Selection, error) {
 func fenceCleanup(ctx context.Context, brain, id string) error {
 	service := NativeService(brain, func(ctx context.Context, j helper.Job) error {
 		switch j.Route.Provider {
-		case "zed":
-			return zednative.New(brain).Fence(ctx, j)
 		case "codex":
 			return codex.NewBackend(brain).Fence(ctx, j)
 		}
@@ -592,7 +589,7 @@ func fenceCleanup(ctx context.Context, brain, id string) error {
 	if err != nil {
 		return err
 	}
-	if selection.Executor == "z" || selection.Executor == "codex" {
+	if selection.Executor == "codex" {
 		it, err := loadEntity(id, entry)
 		if err != nil {
 			return err
@@ -619,8 +616,7 @@ type NativeDrainReport struct {
 // Holding tick excludes ownership changes and epic intake until the final check.
 // It does not switch binaries, stop Claude, or permit deleting retained state.
 func DrainHelpers(ctx context.Context, d helper.RunnerDeps) (NativeDrainReport, error) {
-	report := NativeDrainReport{SchemaVersion: 1, Executor: "z", Epics: []string{}}
-	selectedZ, selectedCodex := false, false
+	report := NativeDrainReport{SchemaVersion: 1, Executor: "codex", Epics: []string{}}
 	unlock, err := waitLock(ctx, d.Service.Brain, "tick")
 	if err != nil {
 		return report, err
@@ -638,16 +634,8 @@ func DrainHelpers(ctx context.Context, d helper.RunnerDeps) (NativeDrainReport, 
 		if err != nil {
 			return report, err
 		}
-		if selection.Executor == "z" || selection.Executor == "codex" {
+		if selection.Executor == "codex" {
 			report.Epics = append(report.Epics, id)
-			selectedZ = selectedZ || selection.Executor == "z"
-			selectedCodex = selectedCodex || selection.Executor == "codex"
-		}
-	}
-	if selectedCodex {
-		report.Executor = "codex"
-		if selectedZ {
-			report.Executor = "mixed"
 		}
 	}
 	slices.Sort(report.Epics)

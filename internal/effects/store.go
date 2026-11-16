@@ -84,6 +84,7 @@ func (s Service) withLedger(ctx context.Context, write bool, change func(*ledger
 		if readErr != nil {
 			return readErr
 		}
+		m = ledger{}
 		if err := decodeStrict(b, &m); err != nil {
 			return fmt.Errorf("%w: %v", ErrCorrupt, err)
 		}

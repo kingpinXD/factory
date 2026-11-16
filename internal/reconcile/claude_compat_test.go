@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"github.com/kingpinXD/factory/internal/epic"
 	"go.yaml.in/yaml/v3"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -356,7 +358,7 @@ func (x *compatWorld) worker() {
 			before[id] = len(x.log(id))
 		}
 	}
-	if err := RepoWorker(context.Background(), x.brain, git.Client{Runner: x.fake}, time.Second, &x.out, PublicationWorker{}); err != nil {
+	if err := compatRepoWorker(context.Background(), x.brain, git.Client{Runner: x.fake}, time.Second, &x.out); err != nil {
 		x.t.Fatal(err)
 	}
 	for _, id := range slices.Sorted(maps.Keys(before)) {
@@ -2374,4 +2376,17 @@ func (c *compatCapture) programTimestampGuards() {
 		coordinates[coordinate] = true
 	}
 	compatRequire(c.t, len(seen) == 10, "program timestamp guard family coverage: %d", len(seen))
+}
+
+// compatRepoWorker calls RepoWorker with zero values for any parameters this
+// shared harness does not know. claude-compat compiles this file against
+// main too, where RepoWorker takes fewer parameters.
+func compatRepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Duration, out io.Writer) error {
+	f := reflect.ValueOf(RepoWorker)
+	in := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(brain), reflect.ValueOf(g), reflect.ValueOf(timeout), reflect.ValueOf(out)}
+	for i := len(in); i < f.Type().NumIn(); i++ {
+		in = append(in, reflect.Zero(f.Type().In(i)))
+	}
+	err, _ := f.Call(in)[0].Interface().(error)
+	return err
 }

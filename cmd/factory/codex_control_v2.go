@@ -49,10 +49,6 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if err != nil {
 		return nil, err
 	}
-	originalRef, err := controlrecord.StoreOriginal(brain, original)
-	if err != nil {
-		return nil, err
-	}
 	writer, err := (reconcile.NativeAuthority{Brain: brain}).CaptureControlOutputWriter()
 	if err != nil {
 		return nil, err
@@ -75,6 +71,10 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		}
 	}()
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
+		return nil, err
+	}
+	originalRef, err := controlrecord.StoreOriginal(brain, original)
+	if err != nil {
 		return nil, err
 	}
 	ownerAuthority, err := reconcile.ResolveOwnerAuthority(ctx, brain, spec.EpicID, spec.Task)
@@ -228,6 +228,17 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		release()
 		release = nil
 		result, readErr := reconcile.RunProgramRead(ctx, brain, binary, read)
+		release, err = controlLock(ctx, brain)
+		if err != nil {
+			return nil, err
+		}
+		retained, err := reconcile.FindControlReadAdmissionLocal(ctx, brain, originalRef, reconcile.ControlReadDirect)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(retained, admission) {
+			return nil, effects.ErrEvidence
+		}
 		var noAction *reconcile.ProgramReadNoActionError
 		var unavailable *gh.ProgramReadUnavailable
 		if errors.As(readErr, &noAction) {
@@ -237,10 +248,6 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		} else {
 			return nil, readErr
 		}
-		if err != nil {
-			return nil, err
-		}
-		release, err = controlLock(ctx, brain)
 		if err != nil {
 			return nil, err
 		}
@@ -451,10 +458,6 @@ func helperControlV2(ctx context.Context, brain, id string, generation, round in
 	if err != nil {
 		return nil, err
 	}
-	originalRef, err := controlrecord.StoreOriginal(brain, original)
-	if err != nil {
-		return nil, err
-	}
 	writer, err := (reconcile.NativeAuthority{Brain: brain}).CaptureControlOutputWriter()
 	if err != nil {
 		return nil, err
@@ -470,6 +473,10 @@ func helperControlV2(ctx context.Context, brain, id string, generation, round in
 	}()
 	service := helperService(brain)
 	if err := recheckHelperV2(ctx, brain, service, job, call); err != nil {
+		return nil, err
+	}
+	originalRef, err := controlrecord.StoreOriginal(brain, original)
+	if err != nil {
 		return nil, err
 	}
 	if invocation.Tool == toolcontract.FactoryHelper && (envelope.Op == "submit" || envelope.Op == "continue" || envelope.Op == "yield") {
@@ -523,6 +530,17 @@ func helperControlV2(ctx context.Context, brain, id string, generation, round in
 		release()
 		release = nil
 		result, readErr := reconcile.RunProgramRead(ctx, brain, binary, request)
+		release, err = controlLock(ctx, brain)
+		if err != nil {
+			return nil, err
+		}
+		retained, err := reconcile.FindControlReadAdmissionLocal(ctx, brain, originalRef, reconcile.ControlReadDirect)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(retained, admission) {
+			return nil, effects.ErrEvidence
+		}
 		var reply json.RawMessage
 		var noAction *reconcile.ProgramReadNoActionError
 		var unavailable *gh.ProgramReadUnavailable

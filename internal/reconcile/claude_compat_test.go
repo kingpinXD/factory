@@ -356,7 +356,7 @@ func (x *compatWorld) worker() {
 			before[id] = len(x.log(id))
 		}
 	}
-	if err := RepoWorker(context.Background(), x.brain, git.Client{Runner: x.fake}, time.Second, &x.out); err != nil {
+	if err := RepoWorker(context.Background(), x.brain, git.Client{Runner: x.fake}, time.Second, &x.out, PublicationWorker{}); err != nil {
 		x.t.Fatal(err)
 	}
 	for _, id := range slices.Sorted(maps.Keys(before)) {

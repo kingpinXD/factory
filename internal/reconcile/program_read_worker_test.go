@@ -27,7 +27,7 @@ func TestProgrammeReadPublicRepoWorkerReportsUnknownAndKeepsLegacyWork(t *testin
 	if err := os.MkdirAll(filepath.Join(w.home, "src/r/.git"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := RepoWorker(context.Background(), brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+	if err := RepoWorker(context.Background(), brain, git.Client{Runner: w.fake}, time.Second, &w.out, PublicationWorker{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(w.out.String(), "raw-temp: programme read evidence held") {

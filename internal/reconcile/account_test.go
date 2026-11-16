@@ -268,7 +268,7 @@ func TestAHungCloneDoesNotDelayTheStop(t *testing.T) {
 	}}
 	done := make(chan error, 1)
 	go func() {
-		done <- RepoWorker(context.Background(), w.brain, git.Client{Runner: hung}, 10*time.Minute, io.Discard)
+		done <- RepoWorker(context.Background(), w.brain, git.Client{Runner: hung}, 10*time.Minute, io.Discard, PublicationWorker{})
 	}()
 	for len(hung.Calls()) == 0 {
 		time.Sleep(10 * time.Millisecond)

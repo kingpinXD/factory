@@ -235,6 +235,7 @@ func TestVerificationActualTickFailureRequiresFreshReportBeforeOpener(t *testing
 	if !closed {
 		t.Fatal("original verification hold disappeared or changed its start")
 	}
+	adoptVerifiedWorktreeForTest(t, ctx, w, initial.WorkID)
 	opener := initial
 	opener.Component, opener.RequestKey = "pr-opener", "one-opener-after-real-repair"
 	opener.OutputPath = filepath.Join(w.dir(initial.WorkID), "pr.v1.md")

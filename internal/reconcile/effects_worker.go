@@ -553,8 +553,8 @@ func runEffectJobs(ctx context.Context, brain string, out io.Writer) error {
 			}
 			logged, e := events.Read(store.EventsPath(ix[id].Dir))
 			if e != nil {
-				err = e
-				break
+				fmt.Fprintf(out, "%s: effect queue held: %v\n", id, e)
+				continue
 			}
 			seenTerminal := map[string]bool{}
 			for _, ev := range logged {
@@ -617,12 +617,16 @@ func runEffectJobs(ctx context.Context, brain string, out io.Writer) error {
 		return err
 	}
 	for _, physical := range records {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if physical.Subject.Kind != "normal_effect" || physical.Stage == "closed" {
 			continue
 		}
 		r, e := p.Service().Result(ctx, physical.SubjectID)
 		if e != nil {
-			return e
+			fmt.Fprintf(out, "%s: effect writer held: %v\n", physical.OwnerID, e)
+			continue
 		}
 		if effectTerminal(r.State) {
 			if e := p.finishEffectProcess(ctx, physical); e != nil {

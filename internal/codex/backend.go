@@ -757,6 +757,9 @@ func ValidateHelperAttempt(brain string, job helper.Job) error {
 
 func helperInstructions(job helper.Job, prompt string) (string, error) {
 	if job.Request.Mode == "" {
+		if job.Request.Component == "pr-opener" && job.Route.Provider == "codex" && job.Scope.CodexContract == 2 {
+			prompt += "\nAuthoritative publication procedure: produce the PR title and body only. Never push, commit, or create a PR. This procedure overrides publication actions in the component snapshot.\nKeep the reserved headings ## PR, ## Checks, and ## Reviewers. Under ## PR, return one fenced JSON object:\n```json\n{\"title\":\"...\",\"body\":\"...\"}\n```\nUse valid JSON strings and escape newlines in the body. Factory publishes the verified commit and ignores the opener workspace.\n"
+		}
 		return prompt, nil
 	}
 	s := job.Scope

@@ -55,6 +55,9 @@ func (r *run) enter(e *entity, t events.Event) error {
 // state and logs a done when it succeeds, so it runs once. The DMs of a move
 // to needs_you are dmNeedsYou's, which also runs every tick.
 func (r *run) entryActions(it *entity) error {
+	if err := r.preparePublication(it); err != nil {
+		return err
+	}
 	t := it.enteredBy
 	switch it.cur.State {
 	case stateWaitingUser:

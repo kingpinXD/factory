@@ -1078,6 +1078,8 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 			n, r.restartLimit(babysitterComponent), r.b.Values.Supervision.RestartsPerItem, e.st.PRURL)
 	case strings.HasPrefix(ref, timedOutRef):
 		return fmt.Sprintf("%s timed out %d times, and its planner was restarted each time", t.From, r.b.Values.Supervision.PlannerRunsPerProblem)
+	case strings.HasPrefix(ref, publicationHoldRef):
+		return strings.TrimPrefix(ref, publicationHoldRef) + "; use factory settle-publication " + e.id + " --write <key> --outcome landed (--head <sha> for push, --pr <N> for PR), or --outcome not-landed after resolving the conflict; then factory retry " + e.id
 	case strings.HasPrefix(ref, unknownCodexDeliveryRef):
 		return "Codex session " + strings.TrimPrefix(ref, unknownCodexDeliveryRef) + " has an unknown receipt; factory retry authorizes one delivery"
 	case strings.HasPrefix(ref, missingRecheckScopeRef):

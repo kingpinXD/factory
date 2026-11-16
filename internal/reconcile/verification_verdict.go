@@ -109,5 +109,10 @@ func (r *run) contract2VerdictUsing(e *entity, expectedEnd events.Event, want st
 	if !passed {
 		return false, "", nil
 	}
+	if want == "pass" {
+		if err := r.recordVerifiedPublication(e, selected, next); err != nil {
+			return false, "", err
+		}
+	}
 	return true, seqRef(selected), nil
 }

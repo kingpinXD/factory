@@ -17,6 +17,7 @@ import (
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/executor"
+	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -286,17 +287,35 @@ func registryActualCheckWorldForPhase(t *testing.T, bridge, phase string) (*worl
 		t.Fatal("unsupported initial fixture phase", phase)
 	}
 	w, _, baseRequest := b2World(t)
+	canonicalHome, err := filepath.EvalSymlinks(w.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.home = canonicalHome
 	w.item("e1", "e1-s1", "e1-w2", phase)
 	if err := store.WriteInputs(w.dir("e1-s1"), &SetInputs{ID: "e1-s1", Epic: "e1", Items: []string{"e1-w1", "e1-w2"}}); err != nil {
 		t.Fatal(err)
 	}
 	trees := map[string]string{}
+	primary := filepath.Join(w.home, "src/r")
 	for _, id := range []string{"e1-w1", "e1-w2"} {
+		var inputs WorkInputs
+		if err := store.ReadInputs(w.dir(id), &inputs); err != nil {
+			t.Fatal(err)
+		}
+		inputs.Clone = primary
+		if err := store.WriteInputs(w.dir(id), &inputs); err != nil {
+			t.Fatal(err)
+		}
+		tree := git.WorktreePath(primary, id)
 		logged := w.log(id)
 		logged[0].Sender = events.SenderProgram
 		logged[0].To = phase
 		var data []byte
 		for _, event := range logged {
+			if event.Kind == events.KindWorktreeReady {
+				event.Text = tree
+			}
 			row, err := json.Marshal(event)
 			if err != nil {
 				t.Fatal(err)
@@ -308,16 +327,11 @@ func registryActualCheckWorldForPhase(t *testing.T, bridge, phase string) (*worl
 		}
 		put(t, store.EventsPath(w.dir(id)), string(data))
 		if trees[id] == "" {
-			tree, err := filepath.EvalSymlinks(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
 			request := w.append(w.dir(id), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker, Request: worktreeRequest})
 			w.append(w.dir(id), events.Event{Kind: events.KindWorktreeReady, Sender: events.SenderProgram, Text: tree, TriggerRef: seqRef(request), Key: repoResultKey(request)})
 			trees[id] = tree
 		}
 	}
-	primary := filepath.Join(w.home, "src/r")
 	if err := os.MkdirAll(primary, 0700); err != nil {
 		t.Fatal(err)
 	}

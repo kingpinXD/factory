@@ -10,6 +10,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/codex"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
 	"github.com/kingpinXD/factory/internal/helper"
@@ -202,6 +203,9 @@ func nativeStepFromHistoryWithVerification(id string, evs []events.Event, b *blu
 		if n != 1 {
 			return out, fmt.Errorf("work root output contract ambiguous")
 		}
+	}
+	if verification != nil && component == "pr-opener" && !verifiedWorktreeReady(&entity{id: id, evs: evs}) {
+		return helper.StepBasis{}, fmt.Errorf("%w: verified commit adoption pending", effects.ErrBusy)
 	}
 	return out, nil
 }

@@ -128,7 +128,7 @@ func runRepoWorker(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	g := git.Client{Runner: proc.Exec{}}
-	if err := reconcile.RepoWorker(context.Background(), blueprint.Brain(), g, repoJobTimeout, stdout); err != nil {
+	if err := reconcile.RepoWorker(context.Background(), blueprint.Brain(), g, repoJobTimeout, stdout, reconcile.PublicationWorker{GitHub: gh.Client{Runner: proc.Exec{}}, Token: os.Getenv("GH_TOKEN")}); err != nil {
 		fmt.Fprintf(stderr, "factory repo-worker: %v\n", err)
 		return 1
 	}

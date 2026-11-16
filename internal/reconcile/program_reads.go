@@ -1238,7 +1238,8 @@ func runProgramReadJobsTraced(ctx context.Context, brain string, out io.Writer, 
 	for _, id := range ids {
 		logged, err := events.Read(store.EventsPath(ix[id].Dir))
 		if err != nil {
-			return err
+			fmt.Fprintf(out, "%s: programme read queue held: %v\n", id, err)
+			continue
 		}
 		for _, event := range logged {
 			if event.Request != programReadQueueRequest {

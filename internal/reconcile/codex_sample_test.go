@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/helper"
+	"github.com/kingpinXD/factory/internal/publication"
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -227,8 +229,29 @@ func TestCodexSampleEpicSimulationPreservesDependenciesAndMergeChecks(t *testing
 		w.pulls.checks[sha] = []gh.Check{{Name: "ci", State: "IN_PROGRESS", Required: true}}
 		comment := gh.Comment{ID: int64(100 + at), Author: "alice", Body: "Check the sample edge case.", CreatedAt: w.now}
 		w.pulls.threads[number] = []gh.Thread{{ID: fmt.Sprintf("sample-thread-%d", number), First: comment, Last: comment}}
+		// This manager simulation supplies the repo worker's frozen request and
+		// ready result; its legacy model outputs grant no publication authority.
+		var inputs WorkInputs
+		if err := store.ReadInputs(w.dir(id), &inputs); err != nil {
+			t.Fatal(err)
+		}
+		frozen := publicationRequest{Request: publication.Request{Item: id, Repo: inputs.Repo, Branch: git.Branch(id), Base: inputs.Base, Commit: sha, Clone: inputs.Clone, Worktree: worktree, StartedAt: w.now.Add(-time.Minute), Title: "Sample " + name, Body: "Sample publication."}}
+		payload, err := json.Marshal(frozen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		publish := w.append(w.dir(id), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker, Request: publishRequest, Key: "sample:publish:" + id, Text: string(payload)})
 		w.fullNext()
 		tick()
+		if current := w.status(id); current.State != workPROpen || current.PR != 0 {
+			t.Fatalf("item %s adopted a PR before the repo worker settled: %+v", id, current)
+		}
+		ready := publication.Result{Commit: sha, PR: publication.PullRequest{Number: number, NodeID: fmt.Sprintf("PR_%d", number), URL: url, HeadRepo: inputs.Repo, Branch: git.Branch(id), Head: sha, CreatedAt: w.prs[git.Branch(id)].CreatedAt}}
+		result, err := json.Marshal(ready)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.append(w.dir(id), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, Key: repoResultKey(publish), TriggerRef: seqRef(publish), Text: string(result)})
 		w.fullNext()
 		tick()
 		if got := w.status(id).State; got != workInReview {

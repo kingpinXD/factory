@@ -338,6 +338,7 @@ func TestVerificationPrivateTickKeepsPublicQualificationBoundary(t *testing.T) {
 	if cause.Seq == 0 || entered.Seq <= cause.Seq || entered.TriggerRef != seqRef(cause) {
 		t.Fatal("FSM consumed model PASS instead of actual programme decision", cause, entered)
 	}
+	adoptVerifiedWorktreeForTest(t, ctx, w, request.WorkID)
 	step, err := service.Authority.(helper.StepAuthority).ResolveStep(ctx, published.Scope, "pr-opener")
 	if err != nil || step.EntryRef != eventRef(request.WorkID, entered) {
 		t.Fatal("historical decision could not authorize actual opener entry", step, err)

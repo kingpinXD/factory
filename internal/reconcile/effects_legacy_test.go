@@ -20,7 +20,7 @@ func TestEffectWorkerLeavesTypedRequestsToTheirOwner(t *testing.T) {
 	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker, Request: "effect", Text: strings.Repeat("1", 64), Key: "effect:" + strings.Repeat("1", 64)})
 	w.append(w.dir("e1-w1"), events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker, Request: "program_read", Text: strings.Repeat("2", 64), Key: "program_read:" + strings.Repeat("2", 64)})
 	before := len(w.log("e1-w1"))
-	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out, PublicationWorker{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.log("e1-w1")) != before {

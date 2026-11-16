@@ -246,7 +246,7 @@ links: []
 
 	// The repo worker removes the worktree and branch with no merged SHA:
 	// it never checks the head the PR had.
-	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, 0, &w.out); err != nil {
+	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, 0, &w.out, PublicationWorker{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.called("git -C " + filepath.Join(w.home, "src", "r") + " cat-file"); len(got) != 0 {

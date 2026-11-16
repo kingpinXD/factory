@@ -15,6 +15,7 @@ var plannedCommands = []string{
 	"blueprint", "event", "heartbeat", "inbox", "query", "may-merge",
 	"deployed", "issue", "agents", "launchd", "lease-ok", "repo-worker",
 	"version", "helper", "ui", "codex-host", "codex-control", "codex-verify",
+	"settle-publication",
 }
 
 func TestRunHelpListsEveryCommand(t *testing.T) {

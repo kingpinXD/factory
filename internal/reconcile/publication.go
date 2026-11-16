@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
@@ -42,6 +43,7 @@ type PublicationWorker struct {
 	publisher    publication.GitHub
 	verified     func(context.Context, string, string) (VerifiedPublication, error)
 	copy         func(context.Context, string, repoJob, publicationRequest) error
+	revision     func(context.Context, string, string, codex.ProgramArtifact) (PublishedRevision, error)
 	importCommit func(context.Context, git.Client, publication.Request, VerifiedPublication) error
 }
 

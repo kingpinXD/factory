@@ -155,10 +155,7 @@ func (a NativeAuthority) resolveQualified(ctx context.Context, req helper.Reques
 			return s, err
 		}
 	}
-	if mode && !fencing && req.Mode != "" {
-		if s.CodexContract == 2 {
-			return s, fmt.Errorf("%w: selected existing-PR revision producer required", ErrCodexIntegration)
-		}
+	if mode && !fencing && (req.Mode != "" || s.CodexContract == 2 && req.ParentJobID == "" && req.Component == "implementor" && it.cur.State == workInReview) {
 		if err := a.codexHelperMode(ctx, req, it); err != nil {
 			return s, err
 		}
@@ -195,10 +192,26 @@ func (a NativeAuthority) checkNewRoundQualified(ctx context.Context, j helper.Jo
 		if j.Request.ParentJobID != "" {
 			return nil
 		}
-		if j.Request.Mode != "" {
-			return fmt.Errorf("%w: selected existing-PR revision producer required", ErrCodexIntegration)
+		_, item, err := nativeOwner(a.Brain, j.Scope.EpicID, j.Scope.WorkID)
+		if err != nil {
+			return err
 		}
-		_, err := a.resolveStepQualified(ctx, j.Scope.Authorization(), j.Request.Component, verify)
+		if j.Request.Mode == helper.ModeExistingPRRevision && j.State == "completed" {
+			key := publicationRevisionKey(j)
+			request, found := item.byKey(key)
+			if !found || !isRepoRequest(request, publishRevisionRequest) {
+				return fmt.Errorf("previous completed PR revision has not been queued for publication")
+			}
+			if _, applied := item.byKey(revisionAppliedKey(request)); !applied {
+				return fmt.Errorf("previous completed PR revision publication is pending")
+			}
+		}
+		if j.Request.Mode != "" || j.Request.Component == "implementor" && item.cur.State == workInReview {
+			if err := a.codexHelperMode(ctx, j.Request, item); err != nil {
+				return err
+			}
+		}
+		_, err = a.resolveStepQualified(ctx, j.Scope.Authorization(), j.Request.Component, verify)
 		return err
 	}
 	if j.Route.Provider != "codex" || j.Scope.SetID == "" || j.Scope.OwnerID != j.Scope.SetID {

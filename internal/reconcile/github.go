@@ -32,6 +32,9 @@ func (r *run) readPR(e *entity) error {
 	if n := max(e.st.PR, e.work.PR); n != 0 {
 		pr, err := r.d.GitHub.PR(ctx, e.work.Repo, n)
 		if err == nil {
+			if r.providerForEpic(e.entry.Epic) == "codex" && publicationRevisionPending(e) {
+				pr.HeadRefOid = e.st.HeadSHA
+			}
 			r.record(e, pr)
 		}
 		return err

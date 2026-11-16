@@ -78,19 +78,21 @@ func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Du
 					continue
 				}
 			}
-			if j.req.Request == verifiedWorktreeRequest || j.req.Request == publishRequest {
+			if j.req.Request == verifiedWorktreeRequest || j.req.Request == publishRequest || j.req.Request == publishRevisionRequest {
 				jobCtx, cancel := context.WithTimeout(ctx, timeout)
 				var result any
 				var jobErr error
 				if j.req.Request == verifiedWorktreeRequest {
 					result, jobErr = j.adoptVerified(jobCtx, brain, g, publisher)
+				} else if j.req.Request == publishRevisionRequest {
+					result, jobErr = j.publishRevision(jobCtx, brain, g, publisher)
 				} else {
 					result, jobErr = j.publish(jobCtx, brain, g, publisher)
 				}
 				cancel()
 				if jobErr != nil {
 					fmt.Fprintf(out, "%s: %s held: %v\n", j.id, j.req.Request, jobErr)
-					if j.req.Request == publishRequest && errors.Is(jobErr, publication.ErrHeld) {
+					if (j.req.Request == publishRequest || j.req.Request == publishRevisionRequest) && errors.Is(jobErr, publication.ErrHeld) {
 						if _, err := events.Append(store.EventsPath(j.dir), events.Event{Kind: events.KindError, Sender: events.SenderProgram, Recipient: "publication-worker", Request: "held", Key: "repo:publish-held:" + seqRef(j.req), Text: jobErr.Error()}); err != nil {
 							fmt.Fprintf(out, "%s: publish hold note failed: %v\n", j.id, err)
 						}
@@ -145,7 +147,7 @@ func repoJobs(brain string, out io.Writer) ([]repoJob, error) {
 		}
 		it := &entity{id: id, entry: entry, evs: evs}
 		for _, ev := range evs {
-			if ev.Kind != events.KindRequest || ev.Recipient != events.RecipientRepoWorker || (ev.Request != worktreeRequest && ev.Request != cleanupRequest && ev.Request != publishRequest && ev.Request != verifiedWorktreeRequest) {
+			if ev.Kind != events.KindRequest || ev.Recipient != events.RecipientRepoWorker || (ev.Request != worktreeRequest && ev.Request != cleanupRequest && ev.Request != publishRequest && ev.Request != publishRevisionRequest && ev.Request != verifiedWorktreeRequest) {
 				continue
 			}
 			if _, answered := repoResult(it, ev); answered {

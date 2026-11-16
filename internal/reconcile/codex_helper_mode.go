@@ -6,16 +6,19 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/proc"
+	"github.com/kingpinXD/factory/internal/publication"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
 var codexRevisionGitHub = func() gh.Client { return gh.Client{Runner: proc.Exec{}} }
 
 func (a NativeAuthority) codexHelperMode(ctx context.Context, req helper.Request, it *entity) error {
-	if req.Mode != helper.ModeExistingPRRevision || req.Component != "implementor" || req.OwnerID != it.id || req.WorkID != it.id || req.SetID != "" || req.Lease != 0 || req.ParentJobID != "" || !handedOver(it) {
+	if req.Mode != helper.ModeExistingPRRevision || req.Component != "implementor" || req.OwnerID != it.id || req.WorkID != it.id || req.SetID != "" || req.Lease != 0 || req.ParentJobID != "" || !handedOver(it) || it.cur.State != workInReview {
 		return fmt.Errorf("existing PR revision requires the owning babysitter")
 	}
 	ix, err := store.ReadIndex(a.Brain)
@@ -50,6 +53,25 @@ func (a NativeAuthority) codexHelperMode(ctx context.Context, req helper.Request
 	}
 	if it.st.PR <= 0 || it.st.PRState != prOpen || it.st.HeadRef == "" || it.work.Repo == "" || it.work.Base == "" {
 		return fmt.Errorf("existing PR revision has no recorded open PR")
+	}
+	_, _, modern, err := nativeReadActivation(it)
+	if err != nil {
+		return err
+	}
+	if modern {
+		if it.st.HeadRef != git.Branch(it.id) {
+			return fmt.Errorf("existing PR revision requires the recorded Factory branch %s", git.Branch(it.id))
+		}
+		if publicationRevisionPending(it) {
+			return fmt.Errorf("%w: previous PR revision publication is pending", effects.ErrBusy)
+		}
+		pending, err := (publication.Writer{Log: store.EventsPath(it.entry.Dir)}).Pending()
+		if err != nil {
+			return err
+		}
+		if pending.Key != "" {
+			return fmt.Errorf("%w: previous publication write %s is pending", effects.ErrBusy, pending.Key)
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

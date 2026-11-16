@@ -18,7 +18,7 @@ import (
 
 type nativePhase struct{ state, entry, plan, implementation, continuation string }
 
-var nativeRootRoles = map[string]string{"starting": "explorer", "exploring": "explorer", "planning": "plan-writer", "plan_review": "plan-reviewer", "implementing": "implementor", "verifying": "verifier", "pr_open": "pr-opener"}
+var nativeRootRoles = map[string]string{"starting": "explorer", "exploring": "explorer", "planning": "plan-writer", "plan_review": "plan-reviewer", "implementing": "implementor", "verifying": "verifier", "pr_open": "pr-opener", "in_review": "implementor"}
 
 func nativeTemporary(state string) bool {
 	return slices.Contains([]string{"waiting_user", "blocked", "rechecking", "needs_you"}, state)
@@ -187,6 +187,9 @@ func nativeStepFromHistoryWithVerification(id string, evs []events.Event, b *blu
 		step := steps[phase.state]
 		if phase.state == "starting" {
 			step = "explore"
+		}
+		if phase.state == workInReview {
+			step = "implement"
 		}
 		if component == "plan-writer" {
 			step = "plan"

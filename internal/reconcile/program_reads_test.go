@@ -27,7 +27,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -458,7 +458,7 @@ func normalReadContainmentFixture(t *testing.T, w *world, attempt codex.AttemptR
 	}
 	generation := fmt.Sprintf("%x", sha256.Sum256([]byte(record.Spec.Generation+"\x00"+attempt.AttemptID)))
 	run := filepath.Join(w.brain, "factory/codex/sessions", attempt.SessionID, "attempts", attempt.AttemptID, "remote")
-	owner := zednative.RemoteOwner{ID: record.ID, Generation: generation, Worktree: record.Spec.Cwd, RunDir: run, OutputRoot: record.Spec.Cwd, Image: record.Selection.ContainerImageID, ExecBinary: record.Selection.Binaries["codex-executor"], CodexVersion: record.Selection.Profile.CodexVersion, ControlOnly: true, CodexContract: 2}
+	owner := workspace.RemoteOwner{ID: record.ID, Generation: generation, Worktree: record.Spec.Cwd, RunDir: run, OutputRoot: record.Spec.Cwd, Image: record.Selection.ContainerImageID, ExecBinary: record.Selection.Binaries["codex-executor"], CodexVersion: record.Selection.Profile.CodexVersion, ControlOnly: true, CodexContract: 2}
 	bin := filepath.Join(w.brain, "normal-bin")
 	if err := os.MkdirAll(bin, 0700); err != nil {
 		t.Fatal(err)
@@ -583,7 +583,7 @@ func TestProgrammeReadWorkerRecoversActualCrashBeforeQueueAndKeepsHealthyRows(t 
 		t.Fatal(err)
 	}
 	child := exec.Command(binary, "e6-prepare-only")
-	child.Env = zednative.WithoutGitHubCredentials(os.Environ())
+	child.Env = workspace.WithoutGitHubCredentials(os.Environ())
 	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := child.Start(); err != nil {
 		t.Fatal(err)

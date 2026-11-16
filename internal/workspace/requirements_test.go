@@ -1,4 +1,4 @@
-package zednative
+package workspace
 
 import (
 	"encoding/json"

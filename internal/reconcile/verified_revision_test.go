@@ -3,32 +3,32 @@ package reconcile
 import (
 	"testing"
 
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func TestVerificationDispositionUsesActualFinalFacts(t *testing.T) {
-	input := zednative.RepositoryInput{Commit: "commit", Tree: "tree", IndexTree: "index", ContentSHA256: "content"}
+	input := workspace.RepositoryInput{Commit: "commit", Tree: "tree", IndexTree: "index", ContentSHA256: "content"}
 	zero := 0
-	valid := zednative.RegistryCheckObservation{Outcome: "completed", ExitCode: &zero,
-		ExitState: zednative.RevisionArtifact{Path: "exit"}, Output: zednative.RevisionArtifact{Path: "output"}, Content: zednative.RevisionArtifact{Path: "content"},
-		Final: zednative.RegistryCheckFinal{Commit: "commit", Tree: "tree", IndexTree: "index", ContentSHA256: "content", Manifest: zednative.RevisionArtifact{Path: "manifest", SHA256: "content"}}}
+	valid := workspace.RegistryCheckObservation{Outcome: "completed", ExitCode: &zero,
+		ExitState: workspace.RevisionArtifact{Path: "exit"}, Output: workspace.RevisionArtifact{Path: "output"}, Content: workspace.RevisionArtifact{Path: "content"},
+		Final: workspace.RegistryCheckFinal{Commit: "commit", Tree: "tree", IndexTree: "index", ContentSHA256: "content", Manifest: workspace.RevisionArtifact{Path: "manifest", SHA256: "content"}}}
 	for _, test := range []struct {
 		name string
-		edit func(*zednative.RegistryCheckObservation)
+		edit func(*workspace.RegistryCheckObservation)
 		want string
 	}{
-		{"restored-zero", func(*zednative.RegistryCheckObservation) {}, "passed"},
-		{"nonzero-dirty", func(c *zednative.RegistryCheckObservation) { exit := 7; c.ExitCode = &exit; c.Final.Tree = "dirty" }, "checks_failed"},
-		{"zero-changed-commit", func(c *zednative.RegistryCheckObservation) { c.Final.Commit = "changed" }, "checks_failed"},
-		{"zero-changed-tree", func(c *zednative.RegistryCheckObservation) { c.Final.Tree = "changed" }, "checks_failed"},
-		{"zero-changed-index", func(c *zednative.RegistryCheckObservation) { c.Final.IndexTree = "changed" }, "checks_failed"},
-		{"zero-changed-content", func(c *zednative.RegistryCheckObservation) { c.Final.ContentSHA256 = "changed" }, "checks_failed"},
-		{"unknown-final", func(c *zednative.RegistryCheckObservation) { c.Final.Tree = "" }, ""},
-		{"unknown-exit", func(c *zednative.RegistryCheckObservation) { c.ExitCode = nil }, ""},
-		{"unknown-content", func(c *zednative.RegistryCheckObservation) { c.Content.Path = "" }, ""},
-		{"unknown-manifest", func(c *zednative.RegistryCheckObservation) { c.Final.Manifest = zednative.RevisionArtifact{} }, ""},
-		{"not-started", func(c *zednative.RegistryCheckObservation) { c.Outcome = "not_started" }, ""},
-		{"aborted", func(c *zednative.RegistryCheckObservation) { c.Outcome = "aborted" }, ""},
+		{"restored-zero", func(*workspace.RegistryCheckObservation) {}, "passed"},
+		{"nonzero-dirty", func(c *workspace.RegistryCheckObservation) { exit := 7; c.ExitCode = &exit; c.Final.Tree = "dirty" }, "checks_failed"},
+		{"zero-changed-commit", func(c *workspace.RegistryCheckObservation) { c.Final.Commit = "changed" }, "checks_failed"},
+		{"zero-changed-tree", func(c *workspace.RegistryCheckObservation) { c.Final.Tree = "changed" }, "checks_failed"},
+		{"zero-changed-index", func(c *workspace.RegistryCheckObservation) { c.Final.IndexTree = "changed" }, "checks_failed"},
+		{"zero-changed-content", func(c *workspace.RegistryCheckObservation) { c.Final.ContentSHA256 = "changed" }, "checks_failed"},
+		{"unknown-final", func(c *workspace.RegistryCheckObservation) { c.Final.Tree = "" }, ""},
+		{"unknown-exit", func(c *workspace.RegistryCheckObservation) { c.ExitCode = nil }, ""},
+		{"unknown-content", func(c *workspace.RegistryCheckObservation) { c.Content.Path = "" }, ""},
+		{"unknown-manifest", func(c *workspace.RegistryCheckObservation) { c.Final.Manifest = workspace.RevisionArtifact{} }, ""},
+		{"not-started", func(c *workspace.RegistryCheckObservation) { c.Outcome = "not_started" }, ""},
+		{"aborted", func(c *workspace.RegistryCheckObservation) { c.Outcome = "aborted" }, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			check := valid

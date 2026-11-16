@@ -9,7 +9,7 @@ import (
 	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/helper"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type VerifiedRevision struct {
@@ -24,7 +24,7 @@ type VerifiedRevision struct {
 	Commit, Tree string
 }
 
-func registryCheckDisposition(input zednative.RepositoryInput, check zednative.RegistryCheckObservation) string {
+func registryCheckDisposition(input workspace.RepositoryInput, check workspace.RegistryCheckObservation) string {
 	final := check.Final
 	if check.Outcome != "completed" || check.ExitCode == nil || check.ExitState.Path == "" || check.Output.Path == "" || check.Content.Path == "" || final.Commit == "" || final.Tree == "" || final.IndexTree == "" || final.ContentSHA256 == "" || final.Manifest.Path == "" || final.Manifest.SHA256 == "" {
 		return ""

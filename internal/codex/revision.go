@@ -14,7 +14,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/helper"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type helperInputFailure struct {
@@ -43,7 +43,7 @@ type RevisionInputFailure struct {
 	Paths                       []string
 }
 
-func programmeRevisionRef(ref zednative.RevisionArtifact) (ProgramArtifact, error) {
+func programmeRevisionRef(ref workspace.RevisionArtifact) (ProgramArtifact, error) {
 	var sha effects.Digest
 	if err := sha.UnmarshalText([]byte(ref.SHA256)); err != nil {
 		return ProgramArtifact{}, err
@@ -54,8 +54,8 @@ func programmeRevisionRef(ref zednative.RevisionArtifact) (ProgramArtifact, erro
 	return ProgramArtifact{Path: ref.Path, SHA256: sha}, nil
 }
 
-func nativeRevisionRef(ref ProgramArtifact) zednative.RevisionArtifact {
-	return zednative.RevisionArtifact{Path: ref.Path, SHA256: ref.SHA256.String()}
+func nativeRevisionRef(ref ProgramArtifact) workspace.RevisionArtifact {
+	return workspace.RevisionArtifact{Path: ref.Path, SHA256: ref.SHA256.String()}
 }
 
 func (b *Backend) revisionWorkspace() (remoteWorkspace, error) {
@@ -282,7 +282,7 @@ func ReadRevisionInputFailureLocal(ctx context.Context, brain string, ref Progra
 	if _, err := readProgramArtifact(out.Containment); err != nil {
 		return out, err
 	}
-	failure, err := zednative.ReadFailedRepositoryInputLocal(ctx, remoteOwner(b.owner(a)), nativeRevisionRef(a.RevisionInputFailure.Cause), nativeRevisionRef(out.Containment))
+	failure, err := workspace.ReadFailedRepositoryInputLocal(ctx, remoteOwner(b.owner(a)), nativeRevisionRef(a.RevisionInputFailure.Cause), nativeRevisionRef(out.Containment))
 	if err != nil {
 		return out, err
 	}
@@ -331,8 +331,8 @@ func helperRevisionFailurePath(b *Backend, job helper.Job, attemptSHA effects.Di
 	return helperRevisionPath(b, job, "revision-input-failure-"+attemptSHA.String()+".json")
 }
 
-func revisionSettlement(o helper.ChildWorkspaceObservation) zednative.WorkspaceSettlement {
-	return zednative.WorkspaceSettlement{OwnerSHA256: o.OwnerSHA256, ContainmentRef: o.ContainmentRef, ContainmentSHA256: o.ContainmentSHA256, PromotionRef: o.PromotionRef, PromotionSHA256: o.PromotionSHA256, PublishedGitSHA256: o.PublishedGitSHA256}
+func revisionSettlement(o helper.ChildWorkspaceObservation) workspace.WorkspaceSettlement {
+	return workspace.WorkspaceSettlement{OwnerSHA256: o.OwnerSHA256, ContainmentRef: o.ContainmentRef, ContainmentSHA256: o.ContainmentSHA256, PromotionRef: o.PromotionRef, PromotionSHA256: o.PromotionSHA256, PublishedGitSHA256: o.PublishedGitSHA256}
 }
 
 func (b *Backend) ObserveHelperRevision(ctx context.Context, jobID string, round int) (HelperRevisionObservation, error) {
@@ -360,7 +360,7 @@ func (b *Backend) ObserveHelperRevision(ctx context.Context, jobID string, round
 	if current.ID != j.ID || current.Scope != j.Scope || current.Request != j.Request || current.Route != j.Route || current.Round < round || current.Round == round && current.Generation != j.Generation || result.JobID != j.ID || result.Round != round || result.State != "completed" || result.Recovery == nil || !result.Recovery.Stopped || !result.Recovery.DescendantsStopped || !result.Recovery.PublicationSettled || result.Recovery.StoredScope != j.Scope {
 		return out, ErrObservationUnknown
 	}
-	workspace, err := b.ObserveChildWorkspace(ctx, j)
+	observedWorkspace, err := b.ObserveChildWorkspace(ctx, j)
 	if err != nil {
 		return out, err
 	}
@@ -371,7 +371,7 @@ func (b *Backend) ObserveHelperRevision(ctx context.Context, jobID string, round
 	if _, _, err := w.workspace.ObserveRepositoryRevision(ctx, remoteOwner(b.owner(archived))); err != nil {
 		return out, err
 	}
-	inputRef, finalRef, err := zednative.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(archived)), revisionSettlement(workspace))
+	inputRef, finalRef, err := workspace.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(archived)), revisionSettlement(observedWorkspace))
 	if err != nil {
 		return out, err
 	}
@@ -386,7 +386,7 @@ func (b *Backend) ObserveHelperRevision(ctx context.Context, jobID string, round
 	if archived.RevisionInput == nil || *archived.RevisionInput != input || archived.RevisionInputFailure != nil {
 		return out, ErrObservationUnknown
 	}
-	return HelperRevisionObservation{Job: j, Workspace: workspace, Input: input, Final: final}, nil
+	return HelperRevisionObservation{Job: j, Workspace: observedWorkspace, Input: input, Final: final}, nil
 }
 
 func (b *Backend) CommitHelperRevisionLocked(ctx context.Context, observed HelperRevisionObservation) (ProgramArtifact, error) {
@@ -407,7 +407,7 @@ func (b *Backend) CommitHelperRevisionLocked(ctx context.Context, observed Helpe
 		if !ok {
 			return ErrCapabilitiesUnverified
 		}
-		remote, ok := actual.remote.(zednative.RepositoryRevisionGuard)
+		remote, ok := actual.remote.(workspace.RepositoryRevisionGuard)
 		if !ok {
 			return ErrCapabilitiesUnverified
 		}
@@ -426,8 +426,8 @@ func (b *Backend) CommitHelperRevisionLocked(ctx context.Context, observed Helpe
 		if err != nil {
 			return err
 		}
-		var inputFacts zednative.RepositoryInput
-		var finalFacts zednative.RepositoryFinal
+		var inputFacts workspace.RepositoryInput
+		var finalFacts workspace.RepositoryFinal
 		if strictDecodeRevision(input, &inputFacts) != nil || strictDecodeRevision(final, &finalFacts) != nil || finalFacts.Input != inputRef {
 			return ErrObservationUnknown
 		}
@@ -468,7 +468,7 @@ func ReadHelperRevisionLocal(ctx context.Context, brain string, ref ProgramArtif
 	if !reflect.DeepEqual(a.Job, j) || o != out.Settlement.Observation || o.AttemptRef != filepath.Join(b.directory(j), "codex.json") || o.AttemptSHA256 != attemptSHA || o.JobID != j.ID || o.Generation != j.Generation || o.Round != j.Round || out.Settlement.FinalLocalSHA256 != hash([]byte("factory-child-workspace-2\x00"+attemptSHA+o.ContainmentSHA256+o.PromotionSHA256+o.PublishedGitSHA256)) {
 		return out, ErrObservationUnknown
 	}
-	input, final, err := zednative.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(a)), revisionSettlement(o))
+	input, final, err := workspace.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(a)), revisionSettlement(o))
 	if err != nil {
 		return out, err
 	}
@@ -484,9 +484,9 @@ func ReadHelperRevisionLocal(ctx context.Context, brain string, ref ProgramArtif
 	return out, nil
 }
 
-func ReadHelperRepositoryRevisionLocal(ctx context.Context, brain string, ref ProgramArtifact) (zednative.RepositoryInput, zednative.RepositoryFinal, error) {
-	var input zednative.RepositoryInput
-	var final zednative.RepositoryFinal
+func ReadHelperRepositoryRevisionLocal(ctx context.Context, brain string, ref ProgramArtifact) (workspace.RepositoryInput, workspace.RepositoryFinal, error) {
+	var input workspace.RepositoryInput
+	var final workspace.RepositoryFinal
 	receipt, err := ReadHelperRevisionLocal(ctx, brain, ref)
 	if err != nil {
 		return input, final, err
@@ -534,7 +534,7 @@ func (b *Backend) helperToolOwner(ctx context.Context, a helperAttempt, environm
 	if err != nil {
 		return Owner{}, err
 	}
-	var input zednative.RepositoryInput
+	var input workspace.RepositoryInput
 	if err := strictDecodeRevision(data, &input); err != nil {
 		return Owner{}, err
 	}

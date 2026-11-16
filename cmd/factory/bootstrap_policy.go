@@ -6,7 +6,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/codex"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func bootstrapCredentials(name string, args []string) {
@@ -58,7 +58,7 @@ func argumentValue(args []string, name string) string {
 
 func isolateGitHubEnvironment() {
 	before := os.Environ()
-	clean := zednative.WithoutGitHubCredentials(before)
+	clean := workspace.WithoutGitHubCredentials(before)
 	kept := map[string]bool{}
 	for _, entry := range clean {
 		key, _, _ := strings.Cut(entry, "=")

@@ -1,5 +1,5 @@
-// Package zednative manages contained workspaces and private Git.
-package zednative
+// Package workspace manages contained workspaces and private Git.
+package workspace
 
 import (
 	"bytes"

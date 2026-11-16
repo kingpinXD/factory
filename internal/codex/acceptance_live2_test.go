@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func TestContract2ProbeCancelledGrantCannotCompleteOrSubmitModels(t *testing.T) {
@@ -54,7 +54,7 @@ func TestContract2LocalArtifactBindsRecordedOutcomeAndFullOwner(t *testing.T) {
 		"cancellation.json":                 map[string]string{"thread": "conversation-1", "turn": "cancelled-1", "writer_sha256": processDigest("actually stopped writer").String()},
 		"guard-denied.json":                 map[string]any{"owner": owner.ID, "generation": owner.Generation, "method": "fs/writeFile", "rejected_requests": 1, "absent_path": "/fixture/repository/revoked-generation-write"},
 		"missing-environment.json":          map[string]string{"method": "thread/start", "environment": "missing-" + owner.ID, "outcome": "rejected"},
-		"remote-round-two/containment.json": map[string]any{"SchemaVersion": 1, "Owner": zednative.RemoteOwner{ID: owner.ID, Generation: owner.Generation, Worktree: owner.Worktree, RunDir: owner.RunDir, OutputRoot: owner.OutputRoot, CodexContract: 2}, "Phase": "fenced", "Fenced": true},
+		"remote-round-two/containment.json": map[string]any{"SchemaVersion": 1, "Owner": workspace.RemoteOwner{ID: owner.ID, Generation: owner.Generation, Worktree: owner.Worktree, RunDir: owner.RunDir, OutputRoot: owner.OutputRoot, CodexContract: 2}, "Phase": "fenced", "Fenced": true},
 	}
 	for name, value := range valid {
 		data, _ := json.Marshal(value)
@@ -93,7 +93,7 @@ func TestContract2LocalArtifactBindsRecordedOutcomeAndFullOwner(t *testing.T) {
 	data, _ = json.Marshal(valid["remote-round-two/containment.json"])
 	var changed map[string]json.RawMessage
 	_ = json.Unmarshal(data, &changed)
-	var remote zednative.RemoteOwner
+	var remote workspace.RemoteOwner
 	_ = json.Unmarshal(changed["Owner"], &remote)
 	remote.Generation = "foreign-generation"
 	changed["Owner"], _ = json.Marshal(remote)

@@ -4,24 +4,24 @@ import (
 	"context"
 	"os"
 
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func remoteWorkspaceDefault() Containment {
-	workspace := zednative.NewRemoteWorkspace()
+	workspace := workspace.NewRemoteWorkspace()
 	workspace.PrepareGit = configureCodexPrivateGit
 	workspace.PrepareGitV2 = configureCodexPrivateGitV2
 	return remoteWorkspace{workspace: workspace}
 }
 
-type remoteWorkspace struct{ workspace *zednative.RemoteWorkspace }
+type remoteWorkspace struct{ workspace *workspace.RemoteWorkspace }
 
-func remoteOwner(owner Owner) zednative.RemoteOwner {
+func remoteOwner(owner Owner) workspace.RemoteOwner {
 	env := owner.Env
 	if env == nil {
 		env = os.Environ()
 	}
-	return zednative.RemoteOwner{ID: owner.ID, Generation: owner.Generation, Worktree: owner.Worktree, RunDir: owner.RunDir, OutputRoot: owner.OutputRoot, Image: owner.Selection.ContainerImageID, ExecBinary: owner.Selection.Binaries["codex-executor"], CodexVersion: owner.Selection.Profile.CodexVersion, ControlOnly: owner.ControlOnly, CodexContract: owner.CodexContract, RevisionRole: owner.RevisionRole, Env: environmentForContract(env, "", "", owner.CodexContract)}
+	return workspace.RemoteOwner{ID: owner.ID, Generation: owner.Generation, Worktree: owner.Worktree, RunDir: owner.RunDir, OutputRoot: owner.OutputRoot, Image: owner.Selection.ContainerImageID, ExecBinary: owner.Selection.Binaries["codex-executor"], CodexVersion: owner.Selection.Profile.CodexVersion, ControlOnly: owner.ControlOnly, CodexContract: owner.CodexContract, RevisionRole: owner.RevisionRole, Env: environmentForContract(env, "", "", owner.CodexContract)}
 }
 
 func (w remoteWorkspace) Prepare(ctx context.Context, owner Owner) (RemoteEnvironment, error) {

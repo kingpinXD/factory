@@ -18,7 +18,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 // Client runs git.
@@ -104,8 +104,8 @@ func (c Client) WorktreeFromCommit(ctx context.Context, clone, commit, workID st
 // ImportProgramCommit appends selected objects to the registry clone. The clone
 // lock excludes programme repository setup; contained promotion may still append
 // objects and advance refs independently. This method never writes those refs.
-func (c Client) ImportProgramCommit(ctx context.Context, clone, worktree, trustedBare, commit string) (zednative.ProgramGitImport, error) {
-	var result zednative.ProgramGitImport
+func (c Client) ImportProgramCommit(ctx context.Context, clone, worktree, trustedBare, commit string) (workspace.ProgramGitImport, error) {
+	var result workspace.ProgramGitImport
 	if err := checkClone(clone); err != nil {
 		return result, err
 	}
@@ -122,17 +122,17 @@ func (c Client) ImportProgramCommit(ctx context.Context, clone, worktree, truste
 	if err != nil || common != workCommon {
 		return result, fmt.Errorf("programme import worktree is outside its registry clone")
 	}
-	result, err = zednative.ImportProgramCommit(ctx, trustedBare, common, commit)
+	result, err = workspace.ImportProgramCommit(ctx, trustedBare, common, commit)
 	if err != nil {
-		return zednative.ProgramGitImport{}, err
+		return workspace.ProgramGitImport{}, err
 	}
 	nowCommon, nowClone, err := programGitCommon(clone)
 	if err != nil || nowCommon != common || nowClone != cloneTopology {
-		return zednative.ProgramGitImport{}, fmt.Errorf("registry clone Git topology changed during import")
+		return workspace.ProgramGitImport{}, fmt.Errorf("registry clone Git topology changed during import")
 	}
 	nowCommon, nowWork, err := programGitCommon(worktree)
 	if err != nil || nowCommon != common || nowWork != workTopology {
-		return zednative.ProgramGitImport{}, fmt.Errorf("assigned worktree Git topology changed during import")
+		return workspace.ProgramGitImport{}, fmt.Errorf("assigned worktree Git topology changed during import")
 	}
 	return result, nil
 }

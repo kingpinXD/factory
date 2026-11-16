@@ -19,7 +19,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -47,7 +47,7 @@ func revisionBackendFixture(t *testing.T) (*Backend, helperAttempt) {
 	selection.Routes["verifier"] = []executor.Route{route}
 	job := helper.Job{ID: "revision-verifier", Round: 1, Generation: 1, Route: route, Request: helper.Request{SchemaVersion: 1, RequestKey: "verify", OwnerID: "owner", WorkID: "work", Component: "verifier", Prompt: "verify actual source"}, Scope: helper.Scope{EpicID: selection.EpicID, OwnerID: "owner", WorkID: "work", Generation: "actual-owner", Worktree: work, OutputRoot: outputs, CodexContract: 2}}
 	a := helperAttempt{Schema: 1, Job: job, Selection: selection}
-	w := zednative.NewRemoteWorkspace()
+	w := workspace.NewRemoteWorkspace()
 	w.PrepareGitV2 = func(context.Context, string, string) error { return nil }
 	b := &Backend{Brain: brain, Containment: remoteWorkspace{workspace: w}}
 	if err := b.save(a); err != nil {
@@ -62,7 +62,7 @@ func TestRevisionInputFailureRecoversSelectedCauseBeforeBackendLink(t *testing.T
 		t.Fatal(err)
 	}
 	_, err := b.Containment.Prepare(context.Background(), b.owner(a))
-	var failed *zednative.RevisionInputError
+	var failed *workspace.RevisionInputError
 	if !errors.As(err, &failed) || failed.Reason != "tracked_dirty" {
 		t.Fatalf("actual capture did not fail before launch: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRevisionInputFailureUnknownCreateCannotClaimNoLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := b.Containment.Prepare(context.Background(), b.owner(a))
-	var failed *zednative.RevisionInputError
+	var failed *workspace.RevisionInputError
 	if !errors.As(err, &failed) {
 		t.Fatal(err)
 	}
@@ -446,7 +446,7 @@ func TestRevisionToolOwnerUsesSavedFrozenInputWithoutChangingAuthority(t *testin
 			}
 			// Local artifact/path test; separate integration tests cover actual capture
 			// and the contained source. This unit does not grant a revision receipt.
-			input := zednative.RepositoryInput{Version: 2, OwnerSHA256: hash(ownerBytes), SnapshotWorktree: cwd, SnapshotGit: filepath.Join(root, "source.git"), Tree: strings.Repeat("a", 40), IndexTree: strings.Repeat("a", 40)}
+			input := workspace.RepositoryInput{Version: 2, OwnerSHA256: hash(ownerBytes), SnapshotWorktree: cwd, SnapshotGit: filepath.Join(root, "source.git"), Tree: strings.Repeat("a", 40), IndexTree: strings.Repeat("a", 40)}
 			if fault == "foreign_input" {
 				input.SnapshotWorktree = original.Worktree
 			}
@@ -517,7 +517,7 @@ func TestRevisionDockerStoppedReceiptPrivateMutationAndLocalBindings(t *testing.
 	}
 	gitTest(t, a.Job.Scope.Worktree, "add", "value.go", "value_test.go")
 	gitTest(t, a.Job.Scope.Worktree, "commit", "-m", "contained mutation fixture")
-	w := zednative.NewRemoteWorkspace()
+	w := workspace.NewRemoteWorkspace()
 	w.PrepareGitV2 = func(context.Context, string, string) error { return nil }
 	b.Containment = remoteWorkspace{workspace: w}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -617,11 +617,11 @@ func TestRevisionDockerStoppedReceiptPrivateMutationAndLocalBindings(t *testing.
 	if stoppedSize == 0 || revisionFileSize(writer) != stoppedSize {
 		t.Fatal("detached contained writer survived whole-namespace fence")
 	}
-	workspace, err := b.ObserveChildWorkspace(ctx, a.Job)
+	observedWorkspace, err := b.ObserveChildWorkspace(ctx, a.Job)
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, final, err := zednative.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(a)), revisionSettlement(workspace))
+	input, final, err := workspace.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(a)), revisionSettlement(observedWorkspace))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +633,7 @@ func TestRevisionDockerStoppedReceiptPrivateMutationAndLocalBindings(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	observed := HelperRevisionObservation{Job: a.Job, Workspace: workspace, Input: inputRef, Final: finalRef}
+	observed := HelperRevisionObservation{Job: a.Job, Workspace: observedWorkspace, Input: inputRef, Final: finalRef}
 	unlock, err := store.Lock(b.Brain, "tick")
 	if err != nil {
 		t.Fatal(err)

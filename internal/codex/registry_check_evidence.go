@@ -12,7 +12,7 @@ import (
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type VerifierCandidate struct {
@@ -35,21 +35,21 @@ type RegistryChecksSelection struct {
 
 type RegistryCheckEvidence struct {
 	Version     int
-	Owner       zednative.RegistryCheckOwner
+	Owner       workspace.RegistryCheckOwner
 	Revision    ProgramArtifact
 	Containment ProgramArtifact
 }
 
-func ReadRegistryCheckResultLocal(ctx context.Context, brain string, ref ProgramReadResultRef) (zednative.RegistryCheckObservation, error) {
+func ReadRegistryCheckResultLocal(ctx context.Context, brain string, ref ProgramReadResultRef) (workspace.RegistryCheckObservation, error) {
 	result, err := readProgramReadEvidence(ctx, brain, ref, true, true)
 	if err != nil {
-		return zednative.RegistryCheckObservation{}, err
+		return workspace.RegistryCheckObservation{}, err
 	}
 	var evidence RegistryCheckEvidence
 	if result.Check == nil || readRegistryCheckArtifact(*result.Check, &evidence) != nil {
-		return zednative.RegistryCheckObservation{}, ErrObservationUnknown
+		return workspace.RegistryCheckObservation{}, ErrObservationUnknown
 	}
-	return zednative.ReadRegistryCheckLocal(ctx, zednative.RevisionArtifact{Path: evidence.Containment.Path, SHA256: evidence.Containment.SHA256.String()})
+	return workspace.ReadRegistryCheckLocal(ctx, workspace.RevisionArtifact{Path: evidence.Containment.Path, SHA256: evidence.Containment.SHA256.String()})
 }
 
 func readRegistryCheckArtifact(ref ProgramArtifact, value any) error {
@@ -86,8 +86,8 @@ func registryCheckEvent(brain string, ref effects.EventRef) (events.Event, error
 	return log[ref.Sequence-1], nil
 }
 
-func readRegistryCheckDomainEvidence(ctx context.Context, brain string, request ProgramReadRequest, process ProgramProcessRecord, result ProgramReadResult, snapshot *RegistryCheckSourceSnapshot) (zednative.RegistryCheckObservation, error) {
-	var none zednative.RegistryCheckObservation
+func readRegistryCheckDomainEvidence(ctx context.Context, brain string, request ProgramReadRequest, process ProgramProcessRecord, result ProgramReadResult, snapshot *RegistryCheckSourceSnapshot) (workspace.RegistryCheckObservation, error) {
+	var none workspace.RegistryCheckObservation
 	if request.Kind != "program_read" || request.Operation != "registry_checks" || process.Mode != "check" || !process.Deadline.Equal(request.Deadline) || result.Check == nil || result.Base != nil || len(result.ReadJSON) != 0 || result.Failure != "" {
 		return none, ErrObservationUnknown
 	}
@@ -109,13 +109,13 @@ func readRegistryCheckDomainEvidence(ctx context.Context, brain string, request 
 	}
 	owner := evidence.Owner
 	old := receipt.Settlement.Observation
-	if evidence.Version != 2 || evidence.Revision != candidate.Revision || owner.RequestID != request.RequestID || owner.ClaimID != process.ClaimID || owner.EnrollmentSHA256 != process.EnrollmentSHA256.String() || owner.RunDir != dir || !owner.Deadline.Equal(process.Deadline) || owner.Candidate != nativeRevisionRef(selected.Candidate) || owner.Input != nativeRevisionRef(receipt.Observation.Input) || owner.Registry != nativeRevisionRef(selected.Policy) || owner.OldModelSettlement != (zednative.RevisionArtifact{Path: old.ContainmentRef, SHA256: old.ContainmentSHA256}) || owner.Commit != candidate.Commit || owner.Tree != candidate.Tree || !reflect.DeepEqual(owner.Commands, policy.Commands) || owner.NetworkPolicy != policy.NetworkPolicy || evidence.Containment.Path != filepath.Join(dir, "containment.json") {
+	if evidence.Version != 2 || evidence.Revision != candidate.Revision || owner.RequestID != request.RequestID || owner.ClaimID != process.ClaimID || owner.EnrollmentSHA256 != process.EnrollmentSHA256.String() || owner.RunDir != dir || !owner.Deadline.Equal(process.Deadline) || owner.Candidate != nativeRevisionRef(selected.Candidate) || owner.Input != nativeRevisionRef(receipt.Observation.Input) || owner.Registry != nativeRevisionRef(selected.Policy) || owner.OldModelSettlement != (workspace.RevisionArtifact{Path: old.ContainmentRef, SHA256: old.ContainmentSHA256}) || owner.Commit != candidate.Commit || owner.Tree != candidate.Tree || !reflect.DeepEqual(owner.Commands, policy.Commands) || owner.NetworkPolicy != policy.NetworkPolicy || evidence.Containment.Path != filepath.Join(dir, "containment.json") {
 		return none, ErrObservationUnknown
 	}
 	if owner.Image != facts.image {
 		return none, ErrObservationUnknown
 	}
-	observation, err := zednative.ReadRegistryCheckLocal(ctx, nativeRevisionRef(evidence.Containment))
+	observation, err := workspace.ReadRegistryCheckLocal(ctx, nativeRevisionRef(evidence.Containment))
 	if err != nil {
 		return none, err
 	}
@@ -125,12 +125,12 @@ func readRegistryCheckDomainEvidence(ctx context.Context, brain string, request 
 	return observation, nil
 }
 
-func PublishRegistryCheckEvidence(ctx context.Context, brain string, request ProgramReadRef, process ProgramProcessRecord, owner zednative.RegistryCheckOwner, revision ProgramArtifact, observation zednative.RegistryCheckObservation) (ProgramArtifact, error) {
+func PublishRegistryCheckEvidence(ctx context.Context, brain string, request ProgramReadRef, process ProgramProcessRecord, owner workspace.RegistryCheckOwner, revision ProgramArtifact, observation workspace.RegistryCheckObservation) (ProgramArtifact, error) {
 	dir, err := RegistryCheckRunDirectory(brain, request, process)
 	if err != nil || owner.RunDir != dir || owner.RequestID != request.RequestID || owner.ClaimID != process.ClaimID || owner.EnrollmentSHA256 != process.EnrollmentSHA256.String() || !owner.Deadline.Equal(process.Deadline) || observation.OwnerSHA256 != ProgramProcessDigest(owner).String() {
 		return ProgramArtifact{}, ErrObservationUnknown
 	}
-	actual, err := zednative.ReadRegistryCheckLocal(ctx, observation.Containment)
+	actual, err := workspace.ReadRegistryCheckLocal(ctx, observation.Containment)
 	if err != nil || !reflect.DeepEqual(actual, observation) {
 		return ProgramArtifact{}, ErrObservationUnknown
 	}

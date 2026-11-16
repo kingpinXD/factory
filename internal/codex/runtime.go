@@ -19,7 +19,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 var ErrCapabilitiesUnverified = errors.New("Codex containment capabilities are not verified")
@@ -370,7 +370,7 @@ func (r *Runtime) launchHost(ctx context.Context, record Record, ghToken string)
 func CaptureProcess(pid int) (ProcessIdentity, error) {
 	identity := ProcessIdentity{PID: pid}
 	var err error
-	identity.Birth, err = zednative.ProcessBirth(pid)
+	identity.Birth, err = workspace.ProcessBirth(pid)
 	if err != nil {
 		return identity, err
 	}

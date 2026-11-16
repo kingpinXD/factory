@@ -21,7 +21,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/reconcile"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -204,7 +204,7 @@ else: sys.exit(97)
 	container := map[string]any{"Name": "offline-read-bootstrap", "Nonce": "fixture-nonce", "Daemon": "offline-daemon", "Endpoint": "unix:///offline-test.sock", "Docker": executor.Binary{Path: docker, SHA256: fileSHA(docker)}, "Image": image, "Worktree": filepath.Join(owner.RunDir, "workspace"), "Mounts": nil, "Labels": nil, "Environment": nil}
 	view := map[string]any{"Id": strings.Repeat("b", 64), "Image": image, "Name": "/offline-read-bootstrap", "State": map[string]any{"Running": true, "Status": "running"}, "Config": map[string]any{"Image": image, "WorkingDir": filepath.Join(owner.RunDir, "workspace"), "Labels": nil, "Entrypoint": []string{"/bin/sh"}, "Cmd": []string{"-c", "while :; do sleep 3600; done"}}, "HostConfig": map[string]any{"NetworkMode": "bridge", "IpcMode": "private", "RestartPolicy": map[string]any{"Name": "no", "MaximumRetryCount": 0}, "PortBindings": map[string]any{"32100/tcp": []any{map[string]string{"HostIP": "127.0.0.1", "HostPort": "32101"}}}}, "Mounts": nil, "NetworkSettings": map[string]any{"Ports": map[string]any{"32100/tcp": []any{map[string]string{"HostIP": "127.0.0.1", "HostPort": "32101"}}}}}
 	dispatcherWriteFixture(t, viewPath, []any{view})
-	remoteOwner := zednative.RemoteOwner{ID: owner.ID, Generation: owner.Generation, Worktree: owner.Worktree, RunDir: owner.RunDir, OutputRoot: owner.OutputRoot, Image: image, ExecBinary: selection.Binaries["codex-executor"], CodexVersion: profile.CodexVersion, ControlOnly: true, CodexContract: 2}
+	remoteOwner := workspace.RemoteOwner{ID: owner.ID, Generation: owner.Generation, Worktree: owner.Worktree, RunDir: owner.RunDir, OutputRoot: owner.OutputRoot, Image: image, ExecBinary: selection.Binaries["codex-executor"], CodexVersion: profile.CodexVersion, ControlOnly: true, CodexContract: 2}
 	containmentPath := filepath.Join(owner.RunDir, "containment.json")
 	containment := dispatcherWriteFixture(t, containmentPath, map[string]any{"SchemaVersion": 1, "Owner": remoteOwner, "Container": container, "ContainerID": strings.Repeat("b", 64), "Phase": "running", "Token": "offline-execution-token", "URL": "ws://127.0.0.1:32101", "Fenced": false})
 	clone := filepath.Join(brain, "registered-clone")

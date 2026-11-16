@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func programImportFixture(t *testing.T) (clone, worktree, source, commitSHA string) {
@@ -72,7 +72,7 @@ func TestProgramImportPreservesAssignedBranchIndexAndUntrackedWork(t *testing.T)
 		t.Fatal("untracked work changed", err)
 	}
 	common := run(t, "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	verified, err := zednative.VerifyProgramCommit(context.Background(), common, sha)
+	verified, err := workspace.VerifyProgramCommit(context.Background(), common, sha)
 	if err != nil || verified != result.ProgramGitVerification {
 		t.Fatalf("actual object verification differs: %+v %v", verified, err)
 	}
@@ -110,7 +110,7 @@ func TestProgramImportCancelledNeverReturnsAReceipt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result, err := execClient().ImportProgramCommit(ctx, clone, wt, source, sha)
-	if err == nil || result != (zednative.ProgramGitImport{}) {
+	if err == nil || result != (workspace.ProgramGitImport{}) {
 		t.Fatalf("cancelled import returned a receipt: %+v %v", result, err)
 	}
 }

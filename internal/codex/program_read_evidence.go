@@ -21,7 +21,7 @@ import (
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type ProgramArtifact struct {
@@ -471,14 +471,14 @@ func readProgramReadEvidenceUsing(ctx context.Context, brain string, ref Program
 	if result.Base.ObjectsManifest.Path != filepath.Join(manifestDir, "program-objects.json") || result.Base.ContentManifest.Path != filepath.Join(manifestDir, "program-content.raw") {
 		return result, ErrObservationUnknown
 	}
-	verified, err := zednative.VerifyProgramCommit(ctx, request.Common, result.Base.Commit)
+	verified, err := workspace.VerifyProgramCommit(ctx, request.Common, result.Base.Commit)
 	if err != nil || verified.Commit != result.Base.Commit || verified.Tree != result.Base.Tree || verified.ObjectsDirectory != result.Base.ObjectsDirectory || verified.ObjectsSHA256 != result.Base.ObjectsManifest.SHA256.String() || verified.ContentSHA256 != result.Base.ContentManifest.SHA256.String() {
 		return result, ErrObservationUnknown
 	}
 	if err := verifyProgramManifest(result.Base.ObjectsManifest, maxFrame); err != nil {
 		return result, err
 	}
-	if err := verifyProgramManifest(result.Base.ContentManifest, zednative.ProgramGitManifestLimit); err != nil {
+	if err := verifyProgramManifest(result.Base.ContentManifest, workspace.ProgramGitManifestLimit); err != nil {
 		return result, err
 	}
 	return result, nil

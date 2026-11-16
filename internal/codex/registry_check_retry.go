@@ -19,7 +19,7 @@ import (
 	"github.com/kingpinXD/factory/internal/repos"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type RegistryCheckRetryCause struct {
@@ -53,7 +53,7 @@ type RegistryCheckSourceSnapshot struct {
 	policies          map[ProgramArtifact]repos.CheckPolicy
 	causes            map[ProgramArtifact]RegistryCheckRetryCause
 	requests          map[ProgramReadRef]ProgramReadRequest
-	results           map[ProgramReadResultRef]zednative.RegistryCheckObservation
+	results           map[ProgramReadResultRef]workspace.RegistryCheckObservation
 	negatives         map[ProgramReadNoActionRef]RegistryCheckNoAction
 }
 
@@ -112,7 +112,7 @@ func ObserveRegistryCheckSourcesLocal(ctx context.Context, brain, work string) (
 		artifacts: map[ProgramArtifact][]byte{}, selections: map[effects.EventRef]RegistryChecksSelection{},
 		candidates: map[ProgramArtifact]registryCheckCandidateFacts{}, policies: map[ProgramArtifact]repos.CheckPolicy{},
 		causes: map[ProgramArtifact]RegistryCheckRetryCause{}, requests: map[ProgramReadRef]ProgramReadRequest{},
-		results: map[ProgramReadResultRef]zednative.RegistryCheckObservation{}, negatives: map[ProgramReadNoActionRef]RegistryCheckNoAction{}}
+		results: map[ProgramReadResultRef]workspace.RegistryCheckObservation{}, negatives: map[ProgramReadNoActionRef]RegistryCheckNoAction{}}
 	for _, event := range log {
 		if event.Request == "registry-checks" {
 			s.sources = append(s.sources, effects.EventRef{OwnerID: work, Sequence: event.Seq, SHA256: ProgramProcessDigest(event)})
@@ -182,7 +182,7 @@ func (s *RegistryCheckSourceSnapshot) RecheckLocal(ctx context.Context, brain st
 		if _, err := ReadClosedProgramProcessLocal(ctx, brain, ref.Process); err != nil {
 			return RegistryCheckSourceInventory{}, err
 		}
-		actual, err := zednative.ReadRegistryCheckLocal(ctx, expected.Containment)
+		actual, err := workspace.ReadRegistryCheckLocal(ctx, expected.Containment)
 		if err != nil {
 			return RegistryCheckSourceInventory{}, err
 		}
@@ -322,8 +322,8 @@ func (s *RegistryCheckSourceSnapshot) selection(ctx context.Context, brain strin
 			return selected, facts, policy, ErrObservationUnknown
 		}
 		if s != nil {
-			var input zednative.RepositoryInput
-			var final zednative.RepositoryFinal
+			var input workspace.RepositoryInput
+			var final workspace.RepositoryFinal
 			if err := s.artifact(facts.receipt.Observation.Input, &input); err != nil {
 				return selected, facts, policy, err
 			}
@@ -483,22 +483,22 @@ func (s *RegistryCheckSourceSnapshot) RetryCause(ref ProgramArtifact) (RegistryC
 	s.causes[ref] = cause
 	return cause, nil
 }
-func (s *RegistryCheckSourceSnapshot) ReadResultLocal(ctx context.Context, ref ProgramReadResultRef) (zednative.RegistryCheckObservation, error) {
+func (s *RegistryCheckSourceSnapshot) ReadResultLocal(ctx context.Context, ref ProgramReadResultRef) (workspace.RegistryCheckObservation, error) {
 	if err := s.valid(); err != nil {
-		return zednative.RegistryCheckObservation{}, err
+		return workspace.RegistryCheckObservation{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return zednative.RegistryCheckObservation{}, err
+		return workspace.RegistryCheckObservation{}, err
 	}
 	if r, ok := s.results[ref]; ok {
 		return r, nil
 	}
 	if _, err := readProgramReadEvidenceUsing(ctx, s.brain, ref, true, true, s); err != nil {
-		return zednative.RegistryCheckObservation{}, err
+		return workspace.RegistryCheckObservation{}, err
 	}
 	result, ok := s.results[ref]
 	if !ok {
-		return zednative.RegistryCheckObservation{}, ErrObservationUnknown
+		return workspace.RegistryCheckObservation{}, ErrObservationUnknown
 	}
 	return result, nil
 }

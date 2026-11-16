@@ -12,7 +12,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 const acceptanceProtocol2 = "factory-codex-acceptance-v2"
@@ -133,7 +133,7 @@ func validateContract2ReceiptLocal(ctx context.Context, brain string, selection 
 	if err := verifyProgramManifest(read.Base.ObjectsManifest, maxFrame); err != nil {
 		return err
 	}
-	if err := verifyProgramManifest(read.Base.ContentManifest, zednative.ProgramGitManifestLimit); err != nil {
+	if err := verifyProgramManifest(read.Base.ContentManifest, workspace.ProgramGitManifestLimit); err != nil {
 		return err
 	}
 	model := acceptanceReceipt{Protocol: receipt.Protocol, Binding: receipt.Binding, Directory: receipt.Directory, PriorOwners: receipt.PriorOwners, Owner: receipt.Owner, Rounds: receipt.Rounds, Cancelled: receipt.Cancelled, Compaction: receipt.Compaction, CreatedAt: receipt.CreatedAt}
@@ -206,7 +206,7 @@ func validateContract2Artifact(receipt contract2AcceptanceReceipt, name string, 
 		var fenced bool
 		var phase string
 		var schema int
-		var actual zednative.RemoteOwner
+		var actual workspace.RemoteOwner
 		if json.Unmarshal(value["SchemaVersion"], &schema) != nil || schema != 1 || json.Unmarshal(value["Fenced"], &fenced) != nil || fenced != (name != "bootstrap-initial.json") || json.Unmarshal(value["Phase"], &phase) != nil || phase != map[bool]string{true: "running", false: "fenced"}[name == "bootstrap-initial.json"] || toolcontract.DecodeStrict(value["Owner"], &actual) != nil || ProgramProcessDigest(actual) != ProgramProcessDigest(remoteOwner(owner)) {
 			return ErrObservationUnknown
 		}

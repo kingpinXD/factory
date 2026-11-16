@@ -6,7 +6,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/helper"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,7 +89,7 @@ func TestRegistryCheckSourceFixtureChild(t *testing.T) {
 	if err != nil || hash(data) != serverSHA || selection.ContainerImageID != image {
 		t.Fatal("approved unit resource pin differs", err)
 	}
-	workspace := zednative.NewRemoteWorkspace()
+	workspace := workspace.NewRemoteWorkspace()
 	workspace.PrepareGitV2 = func(context.Context, string, string) error { return nil }
 	b.Containment = remoteWorkspace{workspace: workspace}
 	a := helperAttempt{Schema: 1, Job: spec.Job, Selection: selection, Output: spec.OutputPath, FactoryBin: spec.FactoryBin}

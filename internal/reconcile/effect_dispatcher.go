@@ -19,7 +19,7 @@ import (
 	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 const controlSourceSnapshotLimit int64 = 16 << 20
@@ -636,7 +636,7 @@ func waitProgramProcess(ctx context.Context, brain, factoryBin string, initial c
 			return current, effects.ErrAuthority
 		}
 		command := exec.Command(factoryBin, "effect-dispatch", "--claim", current.ClaimID, "--nonce", nonce)
-		command.Env = zednative.WithoutGitHubCredentials(os.Environ())
+		command.Env = workspace.WithoutGitHubCredentials(os.Environ())
 		command.Env = append(command.Env, "FACTORY_BRAIN="+brain)
 		command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		if err := command.Start(); err != nil {

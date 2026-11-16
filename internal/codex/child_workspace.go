@@ -12,18 +12,18 @@ import (
 
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type settledContainment interface {
-	ObserveSettledWorkspace(context.Context, Owner) (zednative.WorkspaceSettlement, error)
-	WithSettledWorkspaceGuard(context.Context, Owner, zednative.WorkspaceSettlement, func(zednative.WorkspaceSettlementGuard) error) error
+	ObserveSettledWorkspace(context.Context, Owner) (workspace.WorkspaceSettlement, error)
+	WithSettledWorkspaceGuard(context.Context, Owner, workspace.WorkspaceSettlement, func(workspace.WorkspaceSettlementGuard) error) error
 }
 
-func (w remoteWorkspace) ObserveSettledWorkspace(ctx context.Context, owner Owner) (zednative.WorkspaceSettlement, error) {
+func (w remoteWorkspace) ObserveSettledWorkspace(ctx context.Context, owner Owner) (workspace.WorkspaceSettlement, error) {
 	return w.workspace.ObserveSettledWorkspace(ctx, remoteOwner(owner))
 }
-func (w remoteWorkspace) WithSettledWorkspaceGuard(ctx context.Context, owner Owner, observed zednative.WorkspaceSettlement, fn func(zednative.WorkspaceSettlementGuard) error) error {
+func (w remoteWorkspace) WithSettledWorkspaceGuard(ctx context.Context, owner Owner, observed workspace.WorkspaceSettlement, fn func(workspace.WorkspaceSettlementGuard) error) error {
 	return w.workspace.WithSettledWorkspaceGuard(ctx, remoteOwner(owner), observed, fn)
 }
 
@@ -67,8 +67,8 @@ func (b *Backend) WithChildWorkspaceGuard(ctx context.Context, job helper.Job, e
 	if err != nil || expected.AttemptRef != filepath.Join(b.directory(job), "codex.json") || expected.AttemptSHA256 != attemptHash || expected.JobID != job.ID || expected.Generation != job.Generation || expected.Round != job.Round {
 		return ErrObservationUnknown
 	}
-	proof := zednative.WorkspaceSettlement{OwnerSHA256: expected.OwnerSHA256, ContainmentRef: expected.ContainmentRef, ContainmentSHA256: expected.ContainmentSHA256, PromotionRef: expected.PromotionRef, PromotionSHA256: expected.PromotionSHA256, PublishedGitSHA256: expected.PublishedGitSHA256}
-	return containment.WithSettledWorkspaceGuard(ctx, b.owner(a), proof, func(guard zednative.WorkspaceSettlementGuard) error {
+	proof := workspace.WorkspaceSettlement{OwnerSHA256: expected.OwnerSHA256, ContainmentRef: expected.ContainmentRef, ContainmentSHA256: expected.ContainmentSHA256, PromotionRef: expected.PromotionRef, PromotionSHA256: expected.PromotionSHA256, PublishedGitSHA256: expected.PublishedGitSHA256}
+	return containment.WithSettledWorkspaceGuard(ctx, b.owner(a), proof, func(guard workspace.WorkspaceSettlementGuard) error {
 		return commit(childWorkspaceGuard{backend: b, job: job, expected: expected, remote: guard})
 	})
 }
@@ -77,7 +77,7 @@ type childWorkspaceGuard struct {
 	backend  *Backend
 	job      helper.Job
 	expected helper.ChildWorkspaceObservation
-	remote   zednative.WorkspaceSettlementGuard
+	remote   workspace.WorkspaceSettlementGuard
 }
 
 func (g childWorkspaceGuard) ValidateLocal(ctx context.Context) (helper.ChildWorkspaceReceipt, error) {
@@ -97,7 +97,7 @@ func (g childWorkspaceGuard) ValidateLocal(ctx context.Context) (helper.ChildWor
 	return helper.ChildWorkspaceReceipt{Observation: current, FinalLocalSHA256: hash([]byte("factory-child-workspace-2\x00" + attemptHash + proof.ContainmentSHA256 + proof.PromotionSHA256 + proof.PublishedGitSHA256))}, nil
 }
 
-func childWorkspaceObservation(job helper.Job, name, attemptHash string, proof zednative.WorkspaceSettlement) helper.ChildWorkspaceObservation {
+func childWorkspaceObservation(job helper.Job, name, attemptHash string, proof workspace.WorkspaceSettlement) helper.ChildWorkspaceObservation {
 	return helper.ChildWorkspaceObservation{JobID: job.ID, Generation: job.Generation, Round: job.Round, AttemptRef: name, AttemptSHA256: attemptHash, OwnerSHA256: proof.OwnerSHA256, ContainmentRef: proof.ContainmentRef, ContainmentSHA256: proof.ContainmentSHA256, PromotionRef: proof.PromotionRef, PromotionSHA256: proof.PromotionSHA256, PublishedGitSHA256: proof.PublishedGitSHA256}
 }
 

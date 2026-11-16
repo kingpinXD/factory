@@ -1,6 +1,6 @@
 //go:build linux
 
-package zednative
+package workspace
 
 import (
 	"fmt"

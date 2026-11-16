@@ -26,7 +26,7 @@ import (
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type ProgramReadAdmission struct {
@@ -220,8 +220,8 @@ func validateProgrammeReadLocal(ctx context.Context, brain string, a ProgramRead
 	return nil
 }
 
-func registryCheckOwnerForProcess(ctx context.Context, brain string, request codex.ProgramReadRequest, process codex.ProgramProcessRecord, verify nativeAcceptance) (zednative.RegistryCheckOwner, codex.ProgramArtifact, error) {
-	var none zednative.RegistryCheckOwner
+func registryCheckOwnerForProcess(ctx context.Context, brain string, request codex.ProgramReadRequest, process codex.ProgramProcessRecord, verify nativeAcceptance) (workspace.RegistryCheckOwner, codex.ProgramArtifact, error) {
+	var none workspace.RegistryCheckOwner
 	admission, err := readProgrammeAdmission(ctx, brain, request, verify)
 	if err != nil {
 		return none, codex.ProgramArtifact{}, err
@@ -249,11 +249,11 @@ func registryCheckOwnerForProcess(ctx context.Context, brain string, request cod
 	if selection.Executor != "codex" || process.OwnerID != candidate.Authority.OwnerID || process.LogicalRevision != candidate.Authority.Revision || !process.Deadline.Equal(request.Deadline) {
 		return none, codex.ProgramArtifact{}, effects.ErrEvidence
 	}
-	artifact := func(ref codex.ProgramArtifact) zednative.RevisionArtifact {
-		return zednative.RevisionArtifact{Path: ref.Path, SHA256: ref.SHA256.String()}
+	artifact := func(ref codex.ProgramArtifact) workspace.RevisionArtifact {
+		return workspace.RevisionArtifact{Path: ref.Path, SHA256: ref.SHA256.String()}
 	}
 	settlement := receipt.Settlement.Observation
-	owner := zednative.RegistryCheckOwner{RequestID: request.RequestID, ClaimID: process.ClaimID, EnrollmentSHA256: process.EnrollmentSHA256.String(), RunDir: dir, Candidate: artifact(selected.Candidate), Input: artifact(receipt.Observation.Input), OldModelSettlement: zednative.RevisionArtifact{Path: settlement.ContainmentRef, SHA256: settlement.ContainmentSHA256}, Registry: artifact(selected.Policy), Commit: candidate.Commit, Tree: candidate.Tree, Image: selection.ContainerImageID, Commands: policy.Commands, NetworkPolicy: policy.NetworkPolicy, Deadline: process.Deadline}
+	owner := workspace.RegistryCheckOwner{RequestID: request.RequestID, ClaimID: process.ClaimID, EnrollmentSHA256: process.EnrollmentSHA256.String(), RunDir: dir, Candidate: artifact(selected.Candidate), Input: artifact(receipt.Observation.Input), OldModelSettlement: workspace.RevisionArtifact{Path: settlement.ContainmentRef, SHA256: settlement.ContainmentSHA256}, Registry: artifact(selected.Policy), Commit: candidate.Commit, Tree: candidate.Tree, Image: selection.ContainerImageID, Commands: policy.Commands, NetworkPolicy: policy.NetworkPolicy, Deadline: process.Deadline}
 	return owner, candidate.Revision, nil
 }
 
@@ -628,7 +628,7 @@ func runProgramRead(ctx context.Context, brain, factoryBin string, ref codex.Pro
 				if deriveErr != nil {
 					return deriveErr
 				}
-				e = zednative.NewRemoteWorkspace().PrepareRegistryCheckRecord(ctx, check)
+				e = workspace.NewRemoteWorkspace().PrepareRegistryCheckRecord(ctx, check)
 			}
 			return e
 		})
@@ -747,15 +747,15 @@ func settleProgramRead(ctx context.Context, brain string, request codex.ProgramR
 	if fenceErr == nil && request.Operation == "registry_checks" {
 		owner, revision, err := registryCheckOwnerForProcess(ctx, brain, request, sealed, verify)
 		if err == nil {
-			workspace := zednative.NewRemoteWorkspace()
+			remote := workspace.NewRemoteWorkspace()
 			// A sealed never-claimed record cannot start a programme writer. Its
 			// missing domain metadata may be completed as actual not-started facts.
 			if sealed.Host == (codex.ProcessIdentity{}) {
-				err = workspace.PrepareRegistryCheckRecord(ctx, owner)
+				err = remote.PrepareRegistryCheckRecord(ctx, owner)
 			}
 			if err == nil {
-				var observed zednative.RegistryCheckObservation
-				observed, err = workspace.ObserveRegistryCheck(ctx, owner)
+				var observed workspace.RegistryCheckObservation
+				observed, err = remote.ObserveRegistryCheck(ctx, owner)
 				if err == nil {
 					err = publishRegistryCheckReadResult(ctx, brain, *sealed.Subject.ProgramRead, sealed, owner, revision, observed)
 				}
@@ -936,7 +936,7 @@ func (r *ClaimedProgrammeRead) run(ctx context.Context, verify nativeAcceptance)
 		if err != nil {
 			return err
 		}
-		observed, err := zednative.NewRemoteWorkspace().RunRegistryCheck(ctx, owner)
+		observed, err := workspace.NewRemoteWorkspace().RunRegistryCheck(ctx, owner)
 		if err != nil {
 			return err
 		}
@@ -973,7 +973,7 @@ func (r *ClaimedProgrammeRead) run(ctx context.Context, verify nativeAcceptance)
 	return gh.ProgramReadError(readErr)
 }
 
-func publishRegistryCheckReadResult(ctx context.Context, brain string, ref codex.ProgramReadRef, process codex.ProgramProcessRecord, owner zednative.RegistryCheckOwner, revision codex.ProgramArtifact, observed zednative.RegistryCheckObservation) error {
+func publishRegistryCheckReadResult(ctx context.Context, brain string, ref codex.ProgramReadRef, process codex.ProgramProcessRecord, owner workspace.RegistryCheckOwner, revision codex.ProgramArtifact, observed workspace.RegistryCheckObservation) error {
 	check, err := codex.PublishRegistryCheckEvidence(ctx, brain, ref, process, owner, revision, observed)
 	if err != nil {
 		return err
@@ -1114,7 +1114,7 @@ func fetchProgramBaseTransport(ctx context.Context, request codex.ProgramReadReq
 	if err := effectMkdir(root); err != nil {
 		return none, err
 	}
-	env := zednative.WithoutGitHubCredentials(os.Environ())
+	env := workspace.WithoutGitHubCredentials(os.Environ())
 	filtered := env[:0]
 	for _, item := range env {
 		key, _, _ := strings.Cut(item, "=")
@@ -1148,11 +1148,11 @@ func fetchProgramBaseTransport(ctx context.Context, request codex.ProgramReadReq
 	if request.Input.SHA != "" {
 		commit = request.Input.SHA
 	}
-	imported, err := zednative.ImportProgramCommit(ctx, request.Clone, request.Common, commit)
+	imported, err := workspace.ImportProgramCommit(ctx, request.Clone, request.Common, commit)
 	if err != nil {
 		return none, err
 	}
-	localEnv := zednative.WithoutGitHubCredentials(env)
+	localEnv := workspace.WithoutGitHubCredentials(env)
 	localEnv = append(localEnv, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 	worktree, err := (git.Client{Runner: programGitRunner{env: localEnv}}).WorktreeFromCommit(ctx, request.Clone, commit, "acceptance")
 	if err != nil || worktree != request.Worktree {

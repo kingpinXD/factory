@@ -15,11 +15,11 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 type childWorkspaceContainment struct {
-	proof   zednative.WorkspaceSettlement
+	proof   workspace.WorkspaceSettlement
 	changed bool
 	guarded bool
 }
@@ -30,10 +30,10 @@ func (*childWorkspaceContainment) Prepare(context.Context, Owner) (RemoteEnviron
 func (*childWorkspaceContainment) Check(context.Context, Owner) error   { return ErrObservationUnknown }
 func (*childWorkspaceContainment) Fence(context.Context, Owner) error   { return nil }
 func (*childWorkspaceContainment) Promote(context.Context, Owner) error { return nil }
-func (c *childWorkspaceContainment) ObserveSettledWorkspace(context.Context, Owner) (zednative.WorkspaceSettlement, error) {
+func (c *childWorkspaceContainment) ObserveSettledWorkspace(context.Context, Owner) (workspace.WorkspaceSettlement, error) {
 	return c.proof, nil
 }
-func (c *childWorkspaceContainment) WithSettledWorkspaceGuard(_ context.Context, _ Owner, p zednative.WorkspaceSettlement, fn func(zednative.WorkspaceSettlementGuard) error) error {
+func (c *childWorkspaceContainment) WithSettledWorkspaceGuard(_ context.Context, _ Owner, p workspace.WorkspaceSettlement, fn func(workspace.WorkspaceSettlementGuard) error) error {
 	if p != c.proof {
 		return ErrObservationUnknown
 	}
@@ -41,9 +41,9 @@ func (c *childWorkspaceContainment) WithSettledWorkspaceGuard(_ context.Context,
 	defer func() { c.guarded = false }()
 	return fn(c)
 }
-func (c *childWorkspaceContainment) ValidateLocal(context.Context) (zednative.WorkspaceSettlement, error) {
+func (c *childWorkspaceContainment) ValidateLocal(context.Context) (workspace.WorkspaceSettlement, error) {
 	if !c.guarded {
-		return zednative.WorkspaceSettlement{}, ErrObservationUnknown
+		return workspace.WorkspaceSettlement{}, ErrObservationUnknown
 	}
 	p := c.proof
 	if c.changed {
@@ -81,7 +81,7 @@ func settledChildFixture(t *testing.T) (*Backend, helper.Job, helperAttempt, *ch
 	if err := writeJSON(name, a); err != nil {
 		t.Fatal(err)
 	}
-	c := &childWorkspaceContainment{proof: zednative.WorkspaceSettlement{OwnerSHA256: strings.Repeat("a", 64), ContainmentRef: filepath.Join(b.directory(job), "remote", "containment.json"), ContainmentSHA256: strings.Repeat("b", 64), PromotionRef: filepath.Join(b.directory(job), "remote", "containment.json"), PromotionSHA256: strings.Repeat("c", 64), PublishedGitSHA256: strings.Repeat("d", 64)}}
+	c := &childWorkspaceContainment{proof: workspace.WorkspaceSettlement{OwnerSHA256: strings.Repeat("a", 64), ContainmentRef: filepath.Join(b.directory(job), "remote", "containment.json"), ContainmentSHA256: strings.Repeat("b", 64), PromotionRef: filepath.Join(b.directory(job), "remote", "containment.json"), PromotionSHA256: strings.Repeat("c", 64), PublishedGitSHA256: strings.Repeat("d", 64)}}
 	b.Containment = c
 	return b, job, a, c
 }

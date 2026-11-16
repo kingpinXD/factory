@@ -2,11 +2,11 @@ package codex
 
 import (
 	"github.com/kingpinXD/factory/internal/helper"
-	"github.com/kingpinXD/factory/internal/zednative"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func ModelEnvironment(input []string, brain, task string) []string {
-	return zednative.WithoutGitHubCredentials(HostEnvironment(input, brain, task))
+	return workspace.WithoutGitHubCredentials(HostEnvironment(input, brain, task))
 }
 
 func environmentForContract(input []string, brain, task string, contract int) []string {

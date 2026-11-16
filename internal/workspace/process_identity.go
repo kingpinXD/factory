@@ -1,6 +1,6 @@
 //go:build !linux
 
-package zednative
+package workspace
 
 // ProcessBirth returns the existing native process ownership identity. Callers
 // must also bind the process group and retain their own launch intent.

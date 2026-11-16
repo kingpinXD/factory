@@ -197,79 +197,111 @@ func TestClaimedWriterProcess(t *testing.T) {
 	os.Exit(0)
 }
 func TestClaimedWriterIsPhysicallyFencedBeforeTerminalRecovery(t *testing.T) {
-	s, d, req := setupCodex(t)
-	accepted, err := s.Submit(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, _ := s.Job(accepted.JobID)
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	started := make(chan struct{})
-	processDone := make(chan struct{})
-	var cmd *exec.Cmd
-	var input io.WriteCloser
-	var stop sync.Once
-	fence := func(context.Context, Job) error {
-		stop.Do(func() { _ = input.Close() })
-		<-processDone
-		if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
-			return errors.New("physical writer not stopped")
-		}
-		return nil
-	}
-	backend := backendFunc{run: func(ctx context.Context, spec RunSpec, sink Sink) (RunResult, error) {
-		cmd = exec.Command(binary, "-test.run=^TestClaimedWriterProcess$")
-		cmd.Env = append(os.Environ(), "FACTORY_CLAIM_WRITER=1")
-		input, err = cmd.StdinPipe()
-		if err != nil {
-			return RunResult{}, err
-		}
-		if err = cmd.Start(); err != nil {
-			return RunResult{}, err
-		}
-		if err = sink.Record(ctx, EventProcessOwned, map[string]string{"pid": strconv.Itoa(cmd.Process.Pid), "process_group": strconv.Itoa(cmd.Process.Pid), "start_identity": "owned-test-process"}); err != nil {
-			_ = input.Close()
-			_ = cmd.Wait()
-			close(processDone)
-			return RunResult{}, err
-		}
-		close(started)
-		waitErr := cmd.Wait()
-		close(processDone)
-		return RunResult{}, waitErr
-	}, fence: fence}
-	s.FenceRuntime = fence
-	d.Service = s
-	d.Backends["codex"] = backend
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- execute(ctx, d, job, nil, nil) }()
-	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	if err = s.Fence(ctx, req.OwnerID, "restart coordinator boundary"); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err = <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	if err = flush(ctx, d); err != nil {
-		t.Fatal(err)
-	}
-	result, err := s.Result(job.ID, 1)
-	if err != nil || result.State != "cancelled" || result.Recovery == nil || !result.Recovery.Stopped || !result.Recovery.PublicationSettled || result.Recovery.NoLaunch {
-		t.Fatalf("writer fence proof wrong: %+v %v", result, err)
+	for _, order := range []string{"runner-first", "cancel-first"} {
+		t.Run(order, func(t *testing.T) {
+			s, d, req := setupCodex(t)
+			accepted, err := s.Submit(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, _ := s.Job(accepted.JobID)
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan struct{})
+			returnRun := make(chan struct{})
+			var releaseRun sync.Once
+			defer releaseRun.Do(func() { close(returnRun) })
+			processDone := make(chan struct{})
+			var cmd *exec.Cmd
+			var input io.WriteCloser
+			var stop sync.Once
+			fence := func(context.Context, Job) error {
+				stop.Do(func() { _ = input.Close() })
+				<-processDone
+				if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+					return errors.New("physical writer not stopped")
+				}
+				return nil
+			}
+			backend := backendFunc{run: func(ctx context.Context, spec RunSpec, sink Sink) (RunResult, error) {
+				cmd = exec.Command(binary, "-test.run=^TestClaimedWriterProcess$")
+				cmd.Env = append(os.Environ(), "FACTORY_CLAIM_WRITER=1")
+				input, err = cmd.StdinPipe()
+				if err != nil {
+					return RunResult{}, err
+				}
+				if err = cmd.Start(); err != nil {
+					return RunResult{}, err
+				}
+				if err = sink.Record(ctx, EventProcessOwned, map[string]string{"pid": strconv.Itoa(cmd.Process.Pid), "process_group": strconv.Itoa(cmd.Process.Pid), "start_identity": "owned-test-process"}); err != nil {
+					_ = input.Close()
+					_ = cmd.Wait()
+					close(processDone)
+					return RunResult{}, err
+				}
+				close(started)
+				waitErr := cmd.Wait()
+				close(processDone)
+				if order == "cancel-first" {
+					<-returnRun
+				}
+				return RunResult{}, waitErr
+			}, fence: fence}
+			s.FenceRuntime = fence
+			d.Service = s
+			d.Backends["codex"] = backend
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			executeFinished := make(chan struct{})
+			s.testCheckpoint = func(stage string) {
+				if order == "runner-first" && stage == "fence_revoking_committed" {
+					// Let the runner observe revoked admission and physically stop the writer.
+					select {
+					case <-executeFinished:
+					case <-ctx.Done():
+						t.Fatal(ctx.Err())
+					}
+				}
+				if order == "cancel-first" && stage == "fence_stopping_complete" {
+					// The cancellation is durable before Run can return to finish.
+					releaseRun.Do(func() { close(returnRun) })
+				}
+			}
+			go func() {
+				done <- execute(ctx, d, job, nil, nil)
+				close(executeFinished)
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if err = s.Fence(ctx, req.OwnerID, "restart coordinator boundary"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err = <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if err = flush(ctx, d); err != nil {
+				t.Fatal(err)
+			}
+			result, err := s.Result(job.ID, 1)
+			wantState, wantCode := "cancelled", "restart coordinator boundary"
+			if order == "runner-first" {
+				wantState, wantCode = "interrupted", "authority_revoked"
+			}
+			if err != nil || result.State != wantState || result.ErrorCode != wantCode || result.Recovery == nil || !result.Recovery.Stopped || !result.Recovery.PublicationSettled || result.Recovery.NoLaunch {
+				t.Fatalf("writer fence proof wrong: %+v recovery=%+v %v", result, result.Recovery, err)
+			}
+		})
 	}
 }
 func TestQueuedStartAuthorityHoldsCandidateSelection(t *testing.T) {

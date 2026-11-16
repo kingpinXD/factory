@@ -382,8 +382,8 @@ func TestBabysitterStallRegressionFreshEligibilityBeforeAction(t *testing.T) {
 	}
 }
 
-func TestBabysitterStallRegressionBoundaryAndUnknownHelpersDenyRecovery(t *testing.T) {
-	for _, gate := range []string{"boundary", "unknown_helpers"} {
+func TestBabysitterStallRegressionBoundaryAndClaudeHelperIsolation(t *testing.T) {
+	for _, gate := range []string{"boundary", "foreign_helper_ledger"} {
 		for _, action := range []string{"nudge", "restart"} {
 			t.Run(gate+"/"+action, func(t *testing.T) {
 				w, posted, baseline := stalledBabysitterWorld(t, true, true)
@@ -399,11 +399,20 @@ func TestBabysitterStallRegressionBoundaryAndUnknownHelpersDenyRecovery(t *testi
 					put(t, filepath.Join(store.Factory(w.brain), "helpers", "ledger.json"), "corrupt")
 				}
 				babysitterTickAt(w, at)
-				if got := len(posted()) - baseline; got != 0 {
-					t.Errorf("posted through %s: %d", gate, got)
+				wantPosts, wantStops := 0, 0
+				if gate == "foreign_helper_ledger" {
+					if action == "nudge" {
+						wantPosts = 1
+					} else {
+						wantStops = 1
+					}
+					w.noErrors()
 				}
-				if got := len(w.called("claude stop")); got != 0 {
-					t.Errorf("stopped through %s: %d", gate, got)
+				if got := len(posted()) - baseline; got != wantPosts {
+					t.Errorf("%s %s posts = %d, want %d", gate, action, got, wantPosts)
+				}
+				if got := len(w.called("claude stop")); got != wantStops {
+					t.Errorf("%s %s stops = %d, want %d", gate, action, got, wantStops)
 				}
 			})
 		}

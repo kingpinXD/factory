@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/git"
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/store"
@@ -68,6 +69,15 @@ func TestRepoWorkerIsolatesFailedPassesAndItemCollection(t *testing.T) {
 					}
 					put(t, store.InputsPath(bad), "[broken yaml")
 				} else {
+					native, _, _ := nativeBaseWorldWithBrainEnv(t, false)
+					selected, err := executor.ReadSelection(native.brain, "e1")
+					if err != nil {
+						t.Fatal(err)
+					}
+					selected.EpicID = "e0"
+					if err := executor.WriteSelection(w.brain, selected); err != nil {
+						t.Fatal(err)
+					}
 					put(t, filepath.Join(w.brain, "factory/helpers/ledger.json"), "{}")
 				}
 			}
@@ -87,6 +97,9 @@ func TestRepoWorkerIsolatesFailedPassesAndItemCollection(t *testing.T) {
 			}
 			if !strings.Contains(w.out.String(), "held:") {
 				t.Fatal("held failure was not reported", w.out.String())
+			}
+			if failure == "cleanup fence" && !strings.Contains(w.out.String(), "unsupported/corrupt helper ledger") {
+				t.Fatal("Codex cleanup was not held by its corrupt helper ledger", w.out.String())
 			}
 			if failure == "work inputs" {
 				if err := os.WriteFile(store.InputsPath(bad), input, 0644); err != nil {

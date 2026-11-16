@@ -39,15 +39,24 @@ func (r *run) runtimeFor(provider string) session.Runtime {
 func (r *run) providerForEpic(epic string) string {
 	s, err := NativeSelection(r.d.Brain, epic)
 	if err != nil {
-		if errors.Is(err, executor.ErrUnsupportedExecutor) {
-			if e := r.ents[epic]; e != nil {
-				e.st.ExecutorHold = err.Error()
-			}
+		if e := r.ents[epic]; e != nil {
+			e.st.ExecutorHold = err.Error()
 		}
 		return "unknown"
 	}
 	return coordinatorProvider(s)
 }
+func (r *run) executorSetupError(e *entity) error {
+	selected, err := NativeSelection(r.d.Brain, e.entry.Epic)
+	if err != nil {
+		return err
+	}
+	if selected.Executor == "codex" {
+		return r.d.CodexSetupError
+	}
+	return nil
+}
+
 func selectionHash(s executor.Selection) string {
 	data, _ := json.Marshal(s)
 	sum := sha256.Sum256(data)
@@ -83,6 +92,9 @@ func (r *run) codexQuota(e *entity, fresh bool) (decision helper.QuotaDecision) 
 			e.st.ExecutorHold = decision.Reason
 		}
 	}()
+	if r.d.CodexSetupError != nil {
+		return helper.QuotaDecision{State: "hold", Reason: r.d.CodexSetupError.Error()}
+	}
 	unknown := helper.QuotaDecision{State: "unknown", Reason: "Codex quota unavailable"}
 	sel, err := executor.ReadSelection(r.d.Brain, e.entry.Epic)
 	if err != nil || r.dry || r.b == nil {
@@ -260,16 +272,25 @@ func selectionReadError(brain string) error {
 		return err
 	}
 	seen := map[string]bool{}
+	claudeSelected := false
+	var selectionErr error
 	for _, entry := range ix {
 		if entry.Epic == "" || seen[entry.Epic] {
 			continue
 		}
 		seen[entry.Epic] = true
-		if _, err := NativeSelection(brain, entry.Epic); err != nil && !errors.Is(err, executor.ErrUnsupportedExecutor) {
-			return err
+		selected, err := NativeSelection(brain, entry.Epic)
+		if err != nil && !errors.Is(err, executor.ErrUnsupportedExecutor) {
+			selectionErr = errors.Join(selectionErr, err)
+		} else if err == nil && selected.Executor == "claude" {
+			claudeSelected = true
 		}
 	}
-	return nil
+	// A corrupt selection cannot select Claude, but must not stop its neighbors.
+	if claudeSelected {
+		return nil
+	}
+	return selectionErr
 }
 
 func (r *run) recoverRuntimes() {

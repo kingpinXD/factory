@@ -376,6 +376,18 @@ func nativePending(state string) bool {
 	return true
 }
 func (r *run) nativeBusy(id string) bool {
+	owner := r.ents[id]
+	if owner == nil {
+		return true
+	}
+	switch r.providerForEpic(owner.entry.Epic) {
+	case "claude":
+		return false
+	case "codex":
+	default:
+		return true
+	}
+
 	jobs, err := (helper.Service{Brain: r.d.Brain}).Jobs()
 	if err != nil {
 		r.fail("helper state unavailable: %v", err)
@@ -581,15 +593,6 @@ func fenceCleanup(ctx context.Context, brain, id string) error {
 		}
 		return fmt.Errorf("unsupported pinned helper provider")
 	})
-	jobs, err := service.Jobs()
-	if err != nil {
-		return err
-	}
-	for _, j := range jobs {
-		if j.Scope.WorkID == id {
-			return service.Fence(ctx, id, "repo cleanup")
-		}
-	}
 	ix, err := store.ReadIndex(brain)
 	if err != nil {
 		return err
@@ -602,18 +605,27 @@ func fenceCleanup(ctx context.Context, brain, id string) error {
 	if err != nil {
 		return err
 	}
-	if selection.Executor == "codex" {
-		it, err := loadEntity(id, entry)
-		if err != nil {
-			return err
-		}
-		// No helper could acquire an unready worktree.
-		if _, ready := worktreeReady(it); !ready {
-			return nil
-		}
-		return service.Fence(ctx, id, "repo cleanup")
+	if selection.Executor != "codex" {
+		return nil
 	}
-	return nil
+	jobs, err := service.Jobs()
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		if j.Scope.WorkID == id {
+			return service.Fence(ctx, id, "repo cleanup")
+		}
+	}
+	it, err := loadEntity(id, entry)
+	if err != nil {
+		return err
+	}
+	// No helper could acquire an unready worktree.
+	if _, ready := worktreeReady(it); !ready {
+		return nil
+	}
+	return service.Fence(ctx, id, "repo cleanup")
 }
 
 type NativeDrainReport struct {

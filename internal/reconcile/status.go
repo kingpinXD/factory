@@ -2,7 +2,6 @@ package reconcile
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/events"
-	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 )
@@ -154,25 +152,29 @@ func Status(ctx context.Context, d Deps) (Report, error) {
 	for _, id := range r.order() {
 		r.report(&rep, r.ents[id])
 	}
-	jobs, err := (helper.Service{Brain: d.Brain}).Jobs()
-	if err != nil {
-		return Report{}, err
-	}
-	for _, j := range jobs {
-		rep.Native = append(rep.Native, NativeLoad{j.ID, j.Scope.EpicID, j.Route.Model, j.State, j.HoldReason, "factory helper status " + j.ID, j.Route.Provider})
-	}
 	for i := range rep.Epics {
 		s, err := NativeSelection(d.Brain, rep.Epics[i].ID)
 		if err != nil {
-			if !errors.Is(err, executor.ErrUnsupportedExecutor) {
-				return Report{}, err
-			}
+			rep.Epics[i].Executor = "unknown"
 			rep.Epics[i].ExecutorHold = err.Error()
 			continue
 		}
 		if s.Executor == "codex" {
 			rep.Epics[i].Executor = s.Executor
 			rep.Epics[i].ExecutorHold = r.ents[rep.Epics[i].ID].st.ExecutorHold
+			if d.CodexSetupError != nil {
+				rep.Epics[i].ExecutorHold = d.CodexSetupError.Error()
+			}
+		}
+	}
+	hasCodex := slices.ContainsFunc(rep.Epics, func(e EpicLoad) bool { return e.Executor == "codex" })
+	if hasCodex {
+		jobs, err := (helper.Service{Brain: d.Brain}).Jobs()
+		if err != nil {
+			return Report{}, err
+		}
+		for _, j := range jobs {
+			rep.Native = append(rep.Native, NativeLoad{j.ID, j.Scope.EpicID, j.Route.Model, j.State, j.HoldReason, "factory helper status " + j.ID, j.Route.Provider})
 		}
 	}
 	for _, ep := range o.Repairs {

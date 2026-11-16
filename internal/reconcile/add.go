@@ -30,6 +30,12 @@ func Add(ctx context.Context, d Deps, input string, ov Overrides) (string, error
 }
 
 func AddWithOptions(ctx context.Context, d Deps, input string, ov Overrides, options executor.Options) (string, error) {
+	if options.Executor == "codex" && d.ConfigureCodex != nil {
+		if err := d.ConfigureCodex(&d); err != nil {
+			return "", err
+		}
+	}
+
 	b, _, err := blueprint.Current(ctx, d.Brain, nil, d.Notify)
 	if err != nil {
 		return "", err

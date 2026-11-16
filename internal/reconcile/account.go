@@ -632,6 +632,9 @@ func (r *run) driveProbe(acct *entity, p Probe) {
 // posted to, supervised and compacted, and run its clocks. Everything may
 // while the account is ok; near its limit, only a repair epic's entities.
 func (r *run) workAllowed(e *entity) bool {
+	if r.providerForEpic(e.entry.Epic) == "unknown" {
+		return false
+	}
 	if r.providerForEpic(e.entry.Epic) == "codex" {
 		return r.codexQuota(e, false).State == "allowed"
 	}
@@ -646,6 +649,9 @@ func (r *run) workAllowed(e *entity) bool {
 // while it is resuming or near its limit. With no account status yet,
 // nothing holds work back.
 func (r *run) accountAllows(e *entity, afterPause bool) bool {
+	if r.providerForEpic(e.entry.Epic) == "unknown" {
+		return false
+	}
 	if r.providerForEpic(e.entry.Epic) == "codex" {
 		return r.codexQuota(e, true).State == "allowed"
 	}

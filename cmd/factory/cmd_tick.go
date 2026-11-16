@@ -21,6 +21,7 @@ import (
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/session"
+	"github.com/kingpinXD/factory/internal/store"
 )
 
 // Deadlines: one adapter call, the account step, the whole tick (under the
@@ -38,6 +39,8 @@ const (
 var newDeps = func(out io.Writer) (reconcile.Deps, error) {
 	return depsForBrain(blueprint.Brain(), out)
 }
+
+var newFactoryCodexRuntime = reconcile.NewFactoryCodexRuntime
 
 func depsForBrain(brain string, out io.Writer) (reconcile.Deps, error) {
 	cl, err := claude.New(brain)
@@ -74,28 +77,57 @@ func depsForBrain(brain string, out io.Writer) (reconcile.Deps, error) {
 		}
 		return nil
 	}
-	runtime, err := reconcile.NewFactoryCodexRuntime(brain, cl.FactoryBin)
+	d.ConfigureCodex = func(d *reconcile.Deps) error {
+		if d.Runtimes["codex"] != nil {
+			return nil
+		}
+		if d.CodexSetupError != nil {
+			return d.CodexSetupError
+		}
+		runtime, err := newFactoryCodexRuntime(brain, cl.FactoryBin)
+		if err != nil {
+			d.CodexSetupError = fmt.Errorf("Codex setup: %w", err)
+			return d.CodexSetupError
+		}
+		if d.Runtimes == nil {
+			d.Runtimes = map[string]session.Runtime{}
+		}
+		d.Runtimes["codex"] = runtime
+		d.QuotaForSelection = func(s executor.Selection) helper.UsageReader {
+			if s.Executor == "codex" {
+				return codex.UsageForSelection(s)
+			}
+			return nil
+		}
+		service := helperService(brain)
+		d.Helpers = &service
+		d.StartHelpers = func(ctx context.Context) error {
+			jobs, err := service.Jobs()
+			if err != nil {
+				return err
+			}
+			if len(jobs) == 0 {
+				return nil
+			}
+			return helper.StartRunner(ctx, cl.FactoryBin, brain)
+		}
+
+		return nil
+	}
+	ix, err := store.ReadIndex(brain)
 	if err != nil {
 		return reconcile.Deps{}, err
 	}
-	d.Runtimes = map[string]session.Runtime{"codex": runtime}
-	d.QuotaForSelection = func(s executor.Selection) helper.UsageReader {
-		if s.Executor == "codex" {
-			return codex.UsageForSelection(s)
+	for _, entry := range ix {
+		if entry.Epic == "" {
+			continue
 		}
-		return nil
-	}
-	service := helperService(brain)
-	d.Helpers = &service
-	d.StartHelpers = func(ctx context.Context) error {
-		jobs, err := service.Jobs()
-		if err != nil {
-			return err
+		selection, err := reconcile.NativeSelection(brain, entry.Epic)
+		// Selection errors stay attached to their epic during reconcile.
+		if err == nil && selection.Executor == "codex" {
+			_ = d.ConfigureCodex(&d)
+			break
 		}
-		if len(jobs) == 0 {
-			return nil
-		}
-		return helper.StartRunner(ctx, cl.FactoryBin, brain)
 	}
 	d.Account = reconcile.PlanAccount{Deps: d, Probe: reconcile.Probe{Runner: proc.Exec{}, Claude: cl.Bin, Home: cl.Home}}
 	return d, nil

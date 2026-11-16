@@ -30,6 +30,9 @@ import (
 
 // Deps are what the tick and `factory add` act through.
 type Deps struct {
+	// ConfigureCodex is requested by intake before publishing a Codex selection.
+	ConfigureCodex    func(*Deps) error
+	CodexSetupError   error
 	Helpers           *helper.Service
 	StartHelpers      func(context.Context) error
 	Brain             string
@@ -193,6 +196,14 @@ func tickUsingVerificationQualification(ctx context.Context, d Deps, dryRun bool
 // tickEntity reads and moves one entity. A panic stops only this entity: it
 // is logged as an error, and the tick goes on with the others.
 func (r *run) tickEntity(e *entity) {
+	if err := r.executorSetupError(e); err != nil {
+		e.st.ExecutorHold = err.Error()
+		if epic := r.ents[e.entry.Epic]; epic != nil {
+			epic.st.ExecutorHold = err.Error()
+		}
+		return
+	}
+
 	defer func() {
 		if p := recover(); p != nil {
 			text := fmt.Sprintf("panic: %v", p)

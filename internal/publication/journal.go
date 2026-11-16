@@ -212,6 +212,9 @@ func (j *journal) begin(r Request, op string, pr PullRequest, last, generation i
 		return prepared{}, ErrConflict
 	}
 	p := prepared{Version: 1, Logical: logical(r, op, pr, last), Generation: generation, Intent: Intent{Operation: op, Request: r, PR: pr}}
+	if op == "push" {
+		p.Expected = r.ExistingPR.Head
+	}
 	p.Key = keyPrefix + op + ":" + digest(p.Logical) + ":" + strconv.Itoa(generation)
 	if !validPrepared(p) {
 		return prepared{}, errors.New("invalid publication intent")
@@ -255,7 +258,15 @@ func (j *journal) complete(p prepared, outcome string, result Result) error {
 
 func validRequest(r Request) bool {
 	repo := strings.Split(r.Repo, "/")
-	return r.Item != "" && len(repo) == 2 && repo[0] != "" && repo[1] != "" && !strings.ContainsAny(r.Repo, " \t\r\n\x00") && r.Branch == "factory/"+r.Item && r.Base != "" && validCommit(r.Commit) && filepath.IsAbs(r.Clone) && filepath.IsAbs(r.Worktree) && !r.StartedAt.IsZero() && strings.TrimSpace(r.Title) != ""
+	if r.Item == "" || len(repo) != 2 || repo[0] == "" || repo[1] == "" || strings.ContainsAny(r.Repo, " \t\r\n\x00") || r.Branch != "factory/"+r.Item || r.Base == "" || !validCommit(r.Commit) || !filepath.IsAbs(r.Clone) || !filepath.IsAbs(r.Worktree) || r.StartedAt.IsZero() {
+		return false
+	}
+	if r.ExistingPR == (PullRequest{}) {
+		return strings.TrimSpace(r.Title) != ""
+	}
+	recorded := r
+	recorded.Commit = r.ExistingPR.Head
+	return validCommit(recorded.Commit) && matches(recorded, r.ExistingPR) && !r.ExistingPR.Draft
 }
 func validCommit(value string) bool {
 	if len(value) != 40 && len(value) != 64 {
@@ -273,13 +284,13 @@ func validPrepared(p prepared) bool {
 	}
 	switch p.Operation {
 	case "push":
-		return p.Logical == logical(p.Request, p.Operation, PullRequest{}, 0) && p.Expected == "" && p.PR == (PullRequest{})
+		return p.Logical == logical(p.Request, p.Operation, PullRequest{}, 0) && p.Expected == p.Request.ExistingPR.Head && p.PR == (PullRequest{})
 	case "create":
 		prefix := "create:" + p.Request.Item + ":" + p.Request.Branch + ":"
 		last, err := strconv.Atoi(strings.TrimPrefix(p.Logical, prefix))
-		return strings.HasPrefix(p.Logical, prefix) && err == nil && last >= 0 && p.Expected == "" && p.PR == (PullRequest{})
+		return strings.HasPrefix(p.Logical, prefix) && err == nil && last >= 0 && p.Expected == "" && p.PR == (PullRequest{}) && p.Request.ExistingPR == (PullRequest{})
 	case "ready":
-		return p.Logical == logical(p.Request, p.Operation, p.PR, 0) && matches(p.Request, p.PR) && p.Expected == ""
+		return p.Logical == logical(p.Request, p.Operation, p.PR, 0) && matches(p.Request, p.PR) && p.Expected == "" && p.Request.ExistingPR == (PullRequest{})
 	}
 	return false
 }

@@ -23,6 +23,11 @@ func (w Writer) Run(ctx context.Context, r Request) (Result, error) {
 				return held(r, pending.Operation, pending.Key, reason)
 			}
 		}
+		if r.ExistingPR.Number != 0 {
+			var err error
+			result, err = j.revise(ctx, r)
+			return err
+		}
 		prs, err := w.GitHub.PullRequests(ctx, r.Repo)
 		if err != nil {
 			return fmt.Errorf("PR list read: %w", err)
@@ -118,6 +123,38 @@ func (w Writer) Run(ctx context.Context, r Request) (Result, error) {
 		return nil
 	})
 	return result, err
+}
+
+func (j *journal) revise(ctx context.Context, r Request) (Result, error) {
+	pr, err := j.writer.GitHub.PullRequest(ctx, r.Repo, r.ExistingPR.Number)
+	if err != nil {
+		return Result{}, fmt.Errorf("revision PR %d read: %w", r.ExistingPR.Number, err)
+	}
+	if pr.Number <= 0 || pr.NodeID == "" || pr.HeadRepo == "" || pr.Branch == "" || !validCommit(pr.Head) || pr.CreatedAt.IsZero() {
+		return Result{}, fmt.Errorf("revision PR %d read is incomplete", r.ExistingPR.Number)
+	}
+	var p prepared
+	done := false
+	if pending := j.pending(); pending != nil {
+		p = *pending
+	} else {
+		p, done, err = j.prepare(r, "push", PullRequest{}, 0)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	if !done {
+		old := r.ExistingPR
+		if pr.Number != old.Number || pr.NodeID != old.NodeID || pr.HeadRepo != old.HeadRepo || pr.Branch != old.Branch || !pr.CreatedAt.Equal(old.CreatedAt) || pr.Closed || pr.Merged || pr.Draft || pr.Head != old.Head && pr.Head != r.Commit {
+			return Result{}, j.hold(p, "revision PR is closed, merged, a draft, or its identity or head differs; restore the recorded open PR before settling")
+		}
+		if err = j.push(ctx, p); err != nil {
+			return Result{}, err
+		}
+	}
+	pr = r.ExistingPR
+	pr.Head = r.Commit
+	return Result{Commit: r.Commit, PR: pr}, nil
 }
 
 func (j *journal) push(ctx context.Context, p prepared) error {

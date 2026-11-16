@@ -11,16 +11,17 @@ var ErrHeld = errors.New("publication write needs settlement")
 var ErrConflict = errors.New("publication request differs from its frozen request")
 
 type Request struct {
-	Item      string    `json:"item"`
-	Repo      string    `json:"repo"`
-	Branch    string    `json:"branch"`
-	Base      string    `json:"base"`
-	Commit    string    `json:"commit"`
-	Clone     string    `json:"clone"`
-	Worktree  string    `json:"worktree"`
-	StartedAt time.Time `json:"started_at"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
+	Item       string      `json:"item"`
+	Repo       string      `json:"repo"`
+	Branch     string      `json:"branch"`
+	Base       string      `json:"base"`
+	Commit     string      `json:"commit"`
+	Clone      string      `json:"clone"`
+	Worktree   string      `json:"worktree"`
+	StartedAt  time.Time   `json:"started_at"`
+	Title      string      `json:"title"`
+	Body       string      `json:"body"`
+	ExistingPR PullRequest `json:"existing_pr,omitzero"`
 }
 
 type PullRequest struct {

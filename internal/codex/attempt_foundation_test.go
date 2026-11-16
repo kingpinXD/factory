@@ -551,11 +551,12 @@ func TestAttemptPrivateProcess(t *testing.T) {
 			if err = p.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if err = os.WriteFile(filepath.Join(dir, "closed"), []byte("host survived child close"), 0600); err != nil {
+			if err = writeRecordBytes(filepath.Join(dir, "closed"), []byte("host survived child close")); err != nil {
 				t.Fatal(err)
 			}
 		}
-		select {}
+		// A timer keeps the fixture host alive after its protocol goroutines exit.
+		time.Sleep(5 * time.Minute)
 	default:
 		t.Fatal("unknown private mode")
 	}
@@ -590,7 +591,7 @@ func awaitPrivateFile(t *testing.T, name string) []byte {
 	t.Helper()
 	end := time.Now().Add(5 * time.Second)
 	for time.Now().Before(end) {
-		if data, err := os.ReadFile(name); err == nil {
+		if data, err := os.ReadFile(name); err == nil && len(data) != 0 {
 			return data
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -687,6 +688,34 @@ func TestAttemptActualHostDeathBeforeServerCaptureFencesGroup(t *testing.T) {
 		t.Fatal("unrelated group was killed", e)
 	}
 }
+func TestAwaitPrivateFileWaitsForPublishedContent(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "closed")
+	if err := os.WriteFile(name, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	complete := []byte("host survived child close")
+	t.Cleanup(func() { _ = os.WriteFile(name, complete, 0600) })
+	result := make(chan []byte, 1)
+	go func() { result <- awaitPrivateFile(t, name) }()
+	// Keep the publication incomplete long enough to detect an early reader.
+	select {
+	case data := <-result:
+		t.Fatalf("accepted incomplete publication: %q", data)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := os.WriteFile(name, complete, 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case data := <-result:
+		if string(data) != string(complete) {
+			t.Fatalf("publication = %q", data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reader did not observe completed publication")
+	}
+}
+
 func TestAttemptChildCloseLeavesHostAndStaleGroupRefuses(t *testing.T) {
 	dir := t.TempDir()
 	_, host, _ := privateAttemptProcess(t, "child-close", dir)

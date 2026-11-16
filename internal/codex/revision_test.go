@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-"os/exec"
-"syscall"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -430,117 +430,294 @@ func TestRevisionInputFailureActualBrokerRecordsKnownFailedSource(t *testing.T) 
 
 }
 
-func TestRevisionToolOwnerUsesSavedFrozenInputWithoutChangingAuthority(t *testing.T){
- for _,fault:=range []string{"none","host_cwd","foreign_root","old_generation","old_scope","corrupt_hash","foreign_input"}{t.Run(fault,func(t *testing.T){
-  b,a:=revisionBackendFixture(t)
-  original:=b.owner(a)
-  root:=filepath.Join(original.RunDir,"revision")
-  cwd:=filepath.Join(root,"workspace")
-  if err:=os.MkdirAll(cwd,0700);err!=nil{t.Fatal(err)}
-  ownerBytes,err:=json.Marshal(remoteOwner(original));if err!=nil{t.Fatal(err)}
-  // Local artifact/path test; separate integration tests cover actual capture
-  // and the contained source. This unit does not grant a revision receipt.
-  input:=zednative.RepositoryInput{Version:2,OwnerSHA256:hash(ownerBytes),SnapshotWorktree:cwd,SnapshotGit:filepath.Join(root,"source.git"),Tree:strings.Repeat("a",40),IndexTree:strings.Repeat("a",40)}
-  if fault=="foreign_input"{input.SnapshotWorktree=original.Worktree}
-  ref,err:=saveHelperRevisionArtifact(filepath.Join(root,"repository-input.json"),input);if err!=nil{t.Fatal(err)}
-  a.RevisionInput=&ref
-  if err:=b.save(a);err!=nil{t.Fatal(err)}
-  environment:=RemoteEnvironment{Cwd:cwd,Roots:[]string{cwd}}
-  switch fault{
-  case "host_cwd":environment.Cwd=original.Worktree
-  case "foreign_root":environment.Roots=[]string{original.Worktree}
-  case "old_generation":a.Job.Generation++
-  case "old_scope":a.Job.Scope.Generation="another-owner-epoch"
-  case "corrupt_hash":if err:=os.WriteFile(ref.Path,[]byte("{}"),0600);err!=nil{t.Fatal(err)}
-  }
-  mapped,err:=b.helperToolOwner(context.Background(),a,environment)
-  if fault!="none"{if err==nil{t.Fatal("unbound/host verifier workspace accepted")};return}
-  if err!=nil||mapped.Worktree!=cwd{t.Fatalf("private tool root missing: %+v %v",mapped,err)}
-  mapped.Worktree=original.Worktree
-  if !reflect.DeepEqual(mapped,original)||!reflect.DeepEqual(b.owner(a),original)||a.Job.Scope.Worktree!=original.Worktree{t.Fatal("tool path changed immutable authority or containment owner")}
- })}
+func TestRevisionToolOwnerUsesSavedFrozenInputWithoutChangingAuthority(t *testing.T) {
+	for _, fault := range []string{"none", "host_cwd", "foreign_root", "old_generation", "old_scope", "corrupt_hash", "foreign_input"} {
+		t.Run(fault, func(t *testing.T) {
+			b, a := revisionBackendFixture(t)
+			original := b.owner(a)
+			root := filepath.Join(original.RunDir, "revision")
+			cwd := filepath.Join(root, "workspace")
+			if err := os.MkdirAll(cwd, 0700); err != nil {
+				t.Fatal(err)
+			}
+			ownerBytes, err := json.Marshal(remoteOwner(original))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Local artifact/path test; separate integration tests cover actual capture
+			// and the contained source. This unit does not grant a revision receipt.
+			input := zednative.RepositoryInput{Version: 2, OwnerSHA256: hash(ownerBytes), SnapshotWorktree: cwd, SnapshotGit: filepath.Join(root, "source.git"), Tree: strings.Repeat("a", 40), IndexTree: strings.Repeat("a", 40)}
+			if fault == "foreign_input" {
+				input.SnapshotWorktree = original.Worktree
+			}
+			ref, err := saveHelperRevisionArtifact(filepath.Join(root, "repository-input.json"), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.RevisionInput = &ref
+			if err := b.save(a); err != nil {
+				t.Fatal(err)
+			}
+			environment := RemoteEnvironment{Cwd: cwd, Roots: []string{cwd}}
+			switch fault {
+			case "host_cwd":
+				environment.Cwd = original.Worktree
+			case "foreign_root":
+				environment.Roots = []string{original.Worktree}
+			case "old_generation":
+				a.Job.Generation++
+			case "old_scope":
+				a.Job.Scope.Generation = "another-owner-epoch"
+			case "corrupt_hash":
+				if err := os.WriteFile(ref.Path, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mapped, err := b.helperToolOwner(context.Background(), a, environment)
+			if fault != "none" {
+				if err == nil {
+					t.Fatal("unbound/host verifier workspace accepted")
+				}
+				return
+			}
+			if err != nil || mapped.Worktree != cwd {
+				t.Fatalf("private tool root missing: %+v %v", mapped, err)
+			}
+			mapped.Worktree = original.Worktree
+			if !reflect.DeepEqual(mapped, original) || !reflect.DeepEqual(b.owner(a), original) || a.Job.Scope.Worktree != original.Worktree {
+				t.Fatal("tool path changed immutable authority or containment owner")
+			}
+		})
+	}
 }
 
-func TestRevisionDockerStoppedReceiptPrivateMutationAndLocalBindings(t *testing.T){
-	if os.Getenv("FACTORY_CODEX_REVISION_DOCKER")!="1"{t.Skip("requires approved existing local image and exec-server; no inference")}
-	const image="sha256:39606c53a6220d40b0a3ae91becb9194b58392d80b8e89ae2e23d8933b71055e"
-	const binary="/Users/tanmay/.factory/codex-epic7-20261103/bin/codex-aarch64-unknown-linux-musl"
-	const binarySHA="071cbe8d821cf1b02b6d8ba6c8b7991b228fcb8519dcb68a37d31222bb8cabe5"
-	data,err:=os.ReadFile(binary);if err!=nil||hash(data)!=binarySHA{t.Fatal("approved exec-server pin unavailable",err)}
-	b,a:=revisionBackendFixture(t)
-	a.Job.ID+="-docker"
-	a.Selection.ContainerImageID,a.Selection.Profile.ContainerImage=image,image
-	a.Selection.Binaries["codex-executor"]=executor.Binary{Path:binary,SHA256:binarySHA}
-	a.Selection.Profile.CodexVersion="0.162.1"
-	if err:=b.save(a);err!=nil{t.Fatal(err)}
-	for name,body:=range map[string]string{"value.go":"package fixture\nfunc Value() int{return 7}\n","value_test.go":"package fixture\nimport \"testing\"\nfunc TestValue(t *testing.T){if Value()!=7{t.Fatal(\"wrong value\")}}\n"}{if err:=os.WriteFile(filepath.Join(a.Job.Scope.Worktree,name),[]byte(body),0600);err!=nil{t.Fatal(err)}}
-	gitTest(t,a.Job.Scope.Worktree,"add","value.go","value_test.go")
-	gitTest(t,a.Job.Scope.Worktree,"commit","-m","contained mutation fixture")
-	w:=zednative.NewRemoteWorkspace()
-	w.PrepareGitV2=func(context.Context,string,string)error{return nil}
-	b.Containment=remoteWorkspace{workspace:w}
-	ctx,cancel:=context.WithTimeout(context.Background(),2*time.Minute);defer cancel()
-	t.Cleanup(func(){cleanup,done:=context.WithTimeout(context.Background(),20*time.Second);defer done();if _,err:=os.Stat(filepath.Join(b.owner(a).RunDir,"containment.json"));err==nil{if err:=b.Containment.Fence(cleanup,b.owner(a));err!=nil{t.Errorf("owned test container cleanup: %v",err)}}})
-	environment,err:=b.Containment.Prepare(ctx,b.owner(a));if err!=nil{t.Fatal(err)}
-	if err:=b.captureHelperInput(ctx,&a);err!=nil{t.Fatal(err)}
-	toolOwner,err:=b.helperToolOwner(ctx,a,environment);if err!=nil{t.Fatal(err)}
-	if toolOwner.Worktree==a.Job.Scope.Worktree{t.Fatal("live verifier retained host tool path")}
-	if err:=os.WriteFile(filepath.Join(a.Job.Scope.Worktree,"value.go"),[]byte("host changed after capture\n"),0600);err!=nil{t.Fatal(err)}
-	client,err:=OpenRemoteClient(ctx,environment);if err!=nil{t.Fatal(err)}
+func TestRevisionDockerStoppedReceiptPrivateMutationAndLocalBindings(t *testing.T) {
+	if os.Getenv("FACTORY_CODEX_REVISION_DOCKER") != "1" {
+		t.Skip("requires approved existing local image and exec-server; no inference")
+	}
+	const image = "sha256:39606c53a6220d40b0a3ae91becb9194b58392d80b8e89ae2e23d8933b71055e"
+	const binary = "/Users/tanmay/.factory/codex-epic7-20261103/bin/codex-aarch64-unknown-linux-musl"
+	const binarySHA = "071cbe8d821cf1b02b6d8ba6c8b7991b228fcb8519dcb68a37d31222bb8cabe5"
+	data, err := os.ReadFile(binary)
+	if err != nil || hash(data) != binarySHA {
+		t.Fatal("approved exec-server pin unavailable", err)
+	}
+	b, a := revisionBackendFixture(t)
+	a.Job.ID += "-docker"
+	a.Selection.ContainerImageID, a.Selection.Profile.ContainerImage = image, image
+	a.Selection.Binaries["codex-executor"] = executor.Binary{Path: binary, SHA256: binarySHA}
+	a.Selection.Profile.CodexVersion = "0.162.1"
+	if err := b.save(a); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"value.go": "package fixture\nfunc Value() int{return 7}\n", "value_test.go": "package fixture\nimport \"testing\"\nfunc TestValue(t *testing.T){if Value()!=7{t.Fatal(\"wrong value\")}}\n"} {
+		if err := os.WriteFile(filepath.Join(a.Job.Scope.Worktree, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitTest(t, a.Job.Scope.Worktree, "add", "value.go", "value_test.go")
+	gitTest(t, a.Job.Scope.Worktree, "commit", "-m", "contained mutation fixture")
+	w := zednative.NewRemoteWorkspace()
+	w.PrepareGitV2 = func(context.Context, string, string) error { return nil }
+	b.Containment = remoteWorkspace{workspace: w}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	t.Cleanup(func() {
+		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
+		defer done()
+		if _, err := os.Stat(filepath.Join(b.owner(a).RunDir, "containment.json")); err == nil {
+			if err := b.Containment.Fence(cleanup, b.owner(a)); err != nil {
+				t.Errorf("owned test container cleanup: %v", err)
+			}
+		}
+	})
+	environment, err := b.Containment.Prepare(ctx, b.owner(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.captureHelperInput(ctx, &a); err != nil {
+		t.Fatal(err)
+	}
+	toolOwner, err := b.helperToolOwner(ctx, a, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toolOwner.Worktree == a.Job.Scope.Worktree {
+		t.Fatal("live verifier retained host tool path")
+	}
+	if err := os.WriteFile(filepath.Join(a.Job.Scope.Worktree, "value.go"), []byte("host changed after capture\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := OpenRemoteClient(ctx, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer client.Close()
-	run:=func(command string)int{payload,_:=json.Marshal(map[string]string{"command":command});out,err:=managedTerminal(ctx,client,toolOwner,payload);if err!=nil{t.Fatal(err)};return out.(map[string]any)["exit_code"].(int)}
-	if run("grep -q 'return 7' value.go")!=0{t.Fatal("actual private command read changed host source")}
-	payload,_:=json.Marshal(map[string]string{"path":"value.go","text":"package fixture\nfunc Value() int{return 0}\n"})
-	if _,err:=managedFile(ctx,client,toolOwner.Worktree,"write",payload);err!=nil{t.Fatal(err)}
-	if run("go test -count=1 ./...")==0{t.Fatal("actual contained mutation did not fail")}
-	payload,_=json.Marshal(map[string]string{"path":"value.go","text":"package fixture\nfunc Value() int{return 7}\n"})
-	if _,err:=managedFile(ctx,client,toolOwner.Worktree,"write",payload);err!=nil{t.Fatal(err)}
-	if run("go test -count=1 ./...")!=0{t.Fatal("actual restored contained check did not pass")}
-	if run("setsid /bin/sh -c 'while :; do printf x >> background.log; sleep 0.05; done' </dev/null >/dev/null 2>&1 &")!=0{t.Fatal("background writer did not start")}
-	writer:=filepath.Join(toolOwner.Worktree,"background.log")
-	waitForRevisionFileGrowth(t,ctx,writer)
+	run := func(command string) int {
+		payload, _ := json.Marshal(map[string]string{"command": command})
+		out, err := managedTerminal(ctx, client, toolOwner, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(map[string]any)["exit_code"].(int)
+	}
+	if run("grep -q 'return 7' value.go") != 0 {
+		t.Fatal("actual private command read changed host source")
+	}
+	payload, _ := json.Marshal(map[string]string{"path": "value.go", "text": "package fixture\nfunc Value() int{return 0}\n"})
+	if _, err := managedFile(ctx, client, toolOwner.Worktree, "write", payload); err != nil {
+		t.Fatal(err)
+	}
+	if run("go test -count=1 ./...") == 0 {
+		t.Fatal("actual contained mutation did not fail")
+	}
+	payload, _ = json.Marshal(map[string]string{"path": "value.go", "text": "package fixture\nfunc Value() int{return 7}\n"})
+	if _, err := managedFile(ctx, client, toolOwner.Worktree, "write", payload); err != nil {
+		t.Fatal(err)
+	}
+	if run("go test -count=1 ./...") != 0 {
+		t.Fatal("actual restored contained check did not pass")
+	}
+	if run("setsid /bin/sh -c 'while :; do printf x >> background.log; sleep 0.05; done' </dev/null >/dev/null 2>&1 &") != 0 {
+		t.Fatal("background writer did not start")
+	}
+	writer := filepath.Join(toolOwner.Worktree, "background.log")
+	waitForRevisionFileGrowth(t, ctx, writer)
 	// The model protocol evidence is a provider-free fixture. Container, process
 	// group, tracked source, mutation checks and every settlement guard are real.
-	process:=exec.Command("/bin/sleep","30");process.SysProcAttr=&syscall.SysProcAttr{Setsid:true}
-	if err:=process.Start();err!=nil{t.Fatal(err)}
-	t.Cleanup(func(){_ =process.Process.Kill()})
-	a.Process,err=CaptureProcess(process.Process.Pid);if err!=nil{_ =process.Process.Kill();_ =process.Wait();t.Fatal(err)}
-	ended:=make(chan error,1);go func(){ended<-process.Wait()}()
-	a.ThreadID,a.TurnID,a.TurnIntent,a.Ended,a.Reply="provider-free-thread","fixture-turn",true,true,"PASS"
-	a.Proof=&PersistedTurn{Policy:EvidencePolicy,ConversationID:a.ThreadID,TurnID:a.TurnID,ConfiguredModel:a.Job.Route.Model,ConfiguredEffort:a.Job.Route.Effort,Reply:a.Reply,ReplySHA256:hash([]byte(a.Reply)),VerifiedAt:time.Now().UTC()}
-	if err:=b.save(a);err!=nil{t.Fatal(err)}
-	if _,err:=b.ObserveChildWorkspace(ctx,a.Job);err==nil{t.Fatal("live process/container supplied stopped receipt")}
-	if err:=b.Fence(ctx,a.Job);err!=nil{t.Fatal(err)}
+	process := exec.Command("/bin/sleep", "30")
+	process.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := process.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = process.Process.Kill() })
+	a.Process, err = CaptureProcess(process.Process.Pid)
+	if err != nil {
+		_ = process.Process.Kill()
+		_ = process.Wait()
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { ended <- process.Wait() }()
+	a.ThreadID, a.TurnID, a.TurnIntent, a.Ended, a.Reply = "provider-free-thread", "fixture-turn", true, true, "PASS"
+	a.Proof = &PersistedTurn{Policy: EvidencePolicy, ConversationID: a.ThreadID, TurnID: a.TurnID, ConfiguredModel: a.Job.Route.Model, ConfiguredEffort: a.Job.Route.Effort, Reply: a.Reply, ReplySHA256: hash([]byte(a.Reply)), VerifiedAt: time.Now().UTC()}
+	if err := b.save(a); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.ObserveChildWorkspace(ctx, a.Job); err == nil {
+		t.Fatal("live process/container supplied stopped receipt")
+	}
+	if err := b.Fence(ctx, a.Job); err != nil {
+		t.Fatal(err)
+	}
 	<-ended
-	stoppedSize:=revisionFileSize(writer)
+	stoppedSize := revisionFileSize(writer)
 	// A bounded negative observation proves the redirected writer stopped too.
-	time.Sleep(200*time.Millisecond)
-	if stoppedSize==0||revisionFileSize(writer)!=stoppedSize{t.Fatal("detached contained writer survived whole-namespace fence")}
-	workspace,err:=b.ObserveChildWorkspace(ctx,a.Job);if err!=nil{t.Fatal(err)}
-	input,final,err:=zednative.ReadRepositoryRevisionRefsLocal(ctx,remoteOwner(b.owner(a)),revisionSettlement(workspace));if err!=nil{t.Fatal(err)}
-	inputRef,err:=programmeRevisionRef(input);if err!=nil{t.Fatal(err)}
-	finalRef,err:=programmeRevisionRef(final);if err!=nil{t.Fatal(err)}
-	observed:=HelperRevisionObservation{Job:a.Job,Workspace:workspace,Input:inputRef,Final:finalRef}
-	unlock,err:=store.Lock(b.Brain,"tick");if err!=nil{t.Fatal(err)}
-	ref,err:=b.CommitHelperRevisionLocked(ctx,observed);unlock();if err!=nil{t.Fatal(err)}
-	initial,finished,err:=ReadHelperRepositoryRevisionLocal(ctx,b.Brain,ref);if err!=nil{t.Fatal(err)}
-	if initial.Commit!=finished.Commit||initial.Tree!=finished.Tree||finished.Tree!=finished.IndexTree{t.Fatal("actual frozen source revision was not retained")}
-	host,err:=os.ReadFile(filepath.Join(a.Job.Scope.Worktree,"value.go"));if err!=nil||string(host)!="host changed after capture\n"{t.Fatal("verifier promoted old source into changed host")}
-	original,err:=os.ReadFile(ref.Path);if err!=nil{t.Fatal(err)}
-	for _,fault:=range []string{"input","final","job","scope","settlement","hash"}{t.Run(fault,func(t *testing.T){
-		var receipt HelperRevisionReceipt;if err:=json.Unmarshal(original,&receipt);err!=nil{t.Fatal(err)}
-		switch fault{case "input":receipt.Observation.Input.SHA256=effects.Digest{};case "final":receipt.Observation.Final.SHA256=effects.Digest{};case "job":receipt.Observation.Job.Generation++;case "scope":receipt.Observation.Job.Scope.Generation="foreign";case "settlement":receipt.Settlement.FinalLocalSHA256="foreign"}
-		body,err:=json.Marshal(receipt);if err!=nil{t.Fatal(err)}
-		if err:=os.WriteFile(ref.Path,body,0600);err!=nil{t.Fatal(err)}
-		changed:=ProgramArtifact{Path:ref.Path,SHA256:sha256.Sum256(body)};if fault=="hash"{changed.SHA256=effects.Digest{}}
-		if _,_,err:=ReadHelperRepositoryRevisionLocal(ctx,b.Brain,changed);err==nil{t.Fatal("foreign revision receipt supplied source facts")}
-		if err:=os.WriteFile(ref.Path,original,0600);err!=nil{t.Fatal(err)}
-	})}
+	time.Sleep(200 * time.Millisecond)
+	if stoppedSize == 0 || revisionFileSize(writer) != stoppedSize {
+		t.Fatal("detached contained writer survived whole-namespace fence")
+	}
+	workspace, err := b.ObserveChildWorkspace(ctx, a.Job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, final, err := zednative.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(a)), revisionSettlement(workspace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputRef, err := programmeRevisionRef(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalRef, err := programmeRevisionRef(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := HelperRevisionObservation{Job: a.Job, Workspace: workspace, Input: inputRef, Final: finalRef}
+	unlock, err := store.Lock(b.Brain, "tick")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := b.CommitHelperRevisionLocked(ctx, observed)
+	unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, finished, err := ReadHelperRepositoryRevisionLocal(ctx, b.Brain, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Commit != finished.Commit || initial.Tree != finished.Tree || finished.Tree != finished.IndexTree {
+		t.Fatal("actual frozen source revision was not retained")
+	}
+	host, err := os.ReadFile(filepath.Join(a.Job.Scope.Worktree, "value.go"))
+	if err != nil || string(host) != "host changed after capture\n" {
+		t.Fatal("verifier promoted old source into changed host")
+	}
+	original, err := os.ReadFile(ref.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"input", "final", "job", "scope", "settlement", "hash"} {
+		t.Run(fault, func(t *testing.T) {
+			var receipt HelperRevisionReceipt
+			if err := json.Unmarshal(original, &receipt); err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "input":
+				receipt.Observation.Input.SHA256 = effects.Digest{}
+			case "final":
+				receipt.Observation.Final.SHA256 = effects.Digest{}
+			case "job":
+				receipt.Observation.Job.Generation++
+			case "scope":
+				receipt.Observation.Job.Scope.Generation = "foreign"
+			case "settlement":
+				receipt.Settlement.FinalLocalSHA256 = "foreign"
+			}
+			body, err := json.Marshal(receipt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(ref.Path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			changed := ProgramArtifact{Path: ref.Path, SHA256: sha256.Sum256(body)}
+			if fault == "hash" {
+				changed.SHA256 = effects.Digest{}
+			}
+			if _, _, err := ReadHelperRepositoryRevisionLocal(ctx, b.Brain, changed); err == nil {
+				t.Fatal("foreign revision receipt supplied source facts")
+			}
+			if err := os.WriteFile(ref.Path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 	t.Log("provider-free real namespace/process/source/receipt drill passed; this is not normal contract2 acceptance")
 }
 
-func revisionFileSize(name string)int64{info,err:=os.Stat(name);if err!=nil{return 0};return info.Size()}
-func waitForRevisionFileGrowth(t *testing.T,ctx context.Context,name string){
-	t.Helper();ticker:=time.NewTicker(10*time.Millisecond);defer ticker.Stop();before:=revisionFileSize(name)
-	for{if revisionFileSize(name)>before{return};select{case<-ctx.Done():t.Fatal(ctx.Err());case<-ticker.C:}}
+func revisionFileSize(name string) int64 {
+	info, err := os.Stat(name)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+func waitForRevisionFileGrowth(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	before := revisionFileSize(name)
+	for {
+		if revisionFileSize(name) > before {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }

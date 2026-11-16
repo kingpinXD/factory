@@ -64,10 +64,6 @@ func controlReadSnapshotPath(brain string, original controlrecord.OriginalReques
 	}{original, purpose}).String()+".json")
 }
 
-func BuildControlReadLocked(ctx context.Context, brain string, req ControlReadRequest) (ProgramReadAdmission, error) {
-	return buildControlReadLocked(ctx, brain, req, codex.Contract2AcceptanceAuthority)
-}
-
 func buildControlReadLocked(ctx context.Context, brain string, req ControlReadRequest, verify nativeAcceptance) (ProgramReadAdmission, error) {
 	var out ProgramReadAdmission
 	if err := ctx.Err(); err != nil {
@@ -278,10 +274,6 @@ func controlReadRepository(brain string, spec session.Spec, scope *helper.Scope,
 	}
 	input.Repo, input.Base = registered.FullName, base
 	return input, nil
-}
-
-func ValidateControlReadLocal(ctx context.Context, brain string, admission ProgramReadAdmission) error {
-	return validateControlReadLocal(ctx, brain, admission, codex.Contract2AcceptanceAuthority)
 }
 
 func validateControlReadLocal(ctx context.Context, brain string, a ProgramReadAdmission, verify nativeAcceptance) error {

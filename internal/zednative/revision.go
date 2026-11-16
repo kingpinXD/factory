@@ -606,29 +606,43 @@ func (w *RemoteWorkspace) ObserveRepositoryRevision(ctx context.Context, o Remot
 }
 
 type RepositoryRevisionGuard interface {
-	RevisionRefsLocal(context.Context)(RevisionArtifact,RevisionArtifact,error)
+	RevisionRefsLocal(context.Context) (RevisionArtifact, RevisionArtifact, error)
 }
 
-func (g workspaceSettlementGuard)RevisionRefsLocal(ctx context.Context)(RevisionArtifact,RevisionArtifact,error){
-	return ReadRepositoryRevisionRefsLocal(ctx,g.owner,g.expected)
+func (g workspaceSettlementGuard) RevisionRefsLocal(ctx context.Context) (RevisionArtifact, RevisionArtifact, error) {
+	return ReadRepositoryRevisionRefsLocal(ctx, g.owner, g.expected)
 }
 
 // Reuse the existing settlement reader. This method performs bounded local
 // validation only and does not acquire the remote lock a second time.
-func ReadRepositoryRevisionRefsLocal(ctx context.Context,o RemoteOwner,expected WorkspaceSettlement)(RevisionArtifact,RevisionArtifact,error){
+func ReadRepositoryRevisionRefsLocal(ctx context.Context, o RemoteOwner, expected WorkspaceSettlement) (RevisionArtifact, RevisionArtifact, error) {
 	var a remoteAttempt
-	if err:=ctx.Err();err!=nil{return RevisionArtifact{},RevisionArtifact{},err}
-	if err:=readPrivate(filepath.Join(o.RunDir,"containment.json"),&a);err!=nil{return RevisionArtifact{},RevisionArtifact{},err}
-	current,err:=localWorkspaceSettlement(ctx,o,&a)
-	if err!=nil||current!=expected{return RevisionArtifact{},RevisionArtifact{},safeError("repository settlement differs")}
-	root:=filepath.Join(o.RunDir,"revision")
-	if o.RevisionRole==""||a.RevisionFailure.Path!=""||a.Input.Path!=filepath.Join(root,"repository-input.json")||a.Final.Path!=filepath.Join(root,"repository-final.json"){return RevisionArtifact{},RevisionArtifact{},errUnknown}
+	if err := ctx.Err(); err != nil {
+		return RevisionArtifact{}, RevisionArtifact{}, err
+	}
+	if err := readPrivate(filepath.Join(o.RunDir, "containment.json"), &a); err != nil {
+		return RevisionArtifact{}, RevisionArtifact{}, err
+	}
+	current, err := localWorkspaceSettlement(ctx, o, &a)
+	if err != nil || current != expected {
+		return RevisionArtifact{}, RevisionArtifact{}, safeError("repository settlement differs")
+	}
+	root := filepath.Join(o.RunDir, "revision")
+	if o.RevisionRole == "" || a.RevisionFailure.Path != "" || a.Input.Path != filepath.Join(root, "repository-input.json") || a.Final.Path != filepath.Join(root, "repository-final.json") {
+		return RevisionArtifact{}, RevisionArtifact{}, errUnknown
+	}
 	var input RepositoryInput
 	var final RepositoryFinal
-	if err:=readRevision(a.Input,&input);err!=nil{return RevisionArtifact{},RevisionArtifact{},err}
-	if err:=readRevision(a.Final,&final);err!=nil{return RevisionArtifact{},RevisionArtifact{},err}
-	if input.Version!=2||final.Version!=2||input.OwnerSHA256!=revisionOwnerHash(o)||final.Input!=a.Input{return RevisionArtifact{},RevisionArtifact{},errUnknown}
-	return a.Input,a.Final,nil
+	if err := readRevision(a.Input, &input); err != nil {
+		return RevisionArtifact{}, RevisionArtifact{}, err
+	}
+	if err := readRevision(a.Final, &final); err != nil {
+		return RevisionArtifact{}, RevisionArtifact{}, err
+	}
+	if input.Version != 2 || final.Version != 2 || input.OwnerSHA256 != revisionOwnerHash(o) || final.Input != a.Input {
+		return RevisionArtifact{}, RevisionArtifact{}, errUnknown
+	}
+	return a.Input, a.Final, nil
 }
 
 func settleWriterRevision(ctx context.Context, a *remoteAttempt) error {

@@ -331,102 +331,224 @@ func helperRevisionFailurePath(b *Backend, job helper.Job, attemptSHA effects.Di
 	return helperRevisionPath(b, job, "revision-input-failure-"+attemptSHA.String()+".json")
 }
 
-func revisionSettlement(o helper.ChildWorkspaceObservation)zednative.WorkspaceSettlement{
-	return zednative.WorkspaceSettlement{OwnerSHA256:o.OwnerSHA256,ContainmentRef:o.ContainmentRef,ContainmentSHA256:o.ContainmentSHA256,PromotionRef:o.PromotionRef,PromotionSHA256:o.PromotionSHA256,PublishedGitSHA256:o.PublishedGitSHA256}
+func revisionSettlement(o helper.ChildWorkspaceObservation) zednative.WorkspaceSettlement {
+	return zednative.WorkspaceSettlement{OwnerSHA256: o.OwnerSHA256, ContainmentRef: o.ContainmentRef, ContainmentSHA256: o.ContainmentSHA256, PromotionRef: o.PromotionRef, PromotionSHA256: o.PromotionSHA256, PublishedGitSHA256: o.PublishedGitSHA256}
 }
 
-func (b *Backend)ObserveHelperRevision(ctx context.Context,jobID string,round int)(HelperRevisionObservation,error){
+func (b *Backend) ObserveHelperRevision(ctx context.Context, jobID string, round int) (HelperRevisionObservation, error) {
 	var out HelperRevisionObservation
-	if jobID==""||filepath.Base(jobID)!=jobID||jobID=="."||jobID==".."||round<1{return out,ErrObservationUnknown}
+	if jobID == "" || filepath.Base(jobID) != jobID || jobID == "." || jobID == ".." || round < 1 {
+		return out, ErrObservationUnknown
+	}
 	var archived helperAttempt
-	if err:=readJSON(filepath.Join(b.directory(helper.Job{ID:jobID,Round:round}),"codex.json"),&archived);err!=nil{return out,err}
-	j:=archived.Job
-	if j.ID!=jobID||j.Round!=round||j.Scope.CodexContract!=2||b.owner(archived).RevisionRole==""{return out,ErrObservationUnknown}
-	service:=helper.Service{Brain:b.Brain}
-	current,err:=service.Job(jobID);if err!=nil{return out,err}
-	result,err:=service.Result(jobID,round);if err!=nil{return out,err}
-	if current.ID!=j.ID||current.Scope!=j.Scope||current.Request!=j.Request||current.Route!=j.Route||current.Round<round||current.Round==round&&current.Generation!=j.Generation||result.JobID!=j.ID||result.Round!=round||result.State!="completed"||result.Recovery==nil||!result.Recovery.Stopped||!result.Recovery.DescendantsStopped||!result.Recovery.PublicationSettled||result.Recovery.StoredScope!=j.Scope{return out,ErrObservationUnknown}
-	workspace,err:=b.ObserveChildWorkspace(ctx,j);if err!=nil{return out,err}
-	w,err:=b.revisionWorkspace();if err!=nil{return out,err}
-	if _,_,err:=w.workspace.ObserveRepositoryRevision(ctx,remoteOwner(b.owner(archived)));err!=nil{return out,err}
-	inputRef,finalRef,err:=zednative.ReadRepositoryRevisionRefsLocal(ctx,remoteOwner(b.owner(archived)),revisionSettlement(workspace));if err!=nil{return out,err}
-	input,err:=programmeRevisionRef(inputRef);if err!=nil{return out,err}
-	final,err:=programmeRevisionRef(finalRef);if err!=nil{return out,err}
-	if archived.RevisionInput==nil||*archived.RevisionInput!=input||archived.RevisionInputFailure!=nil{return out,ErrObservationUnknown}
-	return HelperRevisionObservation{Job:j,Workspace:workspace,Input:input,Final:final},nil
+	if err := readJSON(filepath.Join(b.directory(helper.Job{ID: jobID, Round: round}), "codex.json"), &archived); err != nil {
+		return out, err
+	}
+	j := archived.Job
+	if j.ID != jobID || j.Round != round || j.Scope.CodexContract != 2 || b.owner(archived).RevisionRole == "" {
+		return out, ErrObservationUnknown
+	}
+	service := helper.Service{Brain: b.Brain}
+	current, err := service.Job(jobID)
+	if err != nil {
+		return out, err
+	}
+	result, err := service.Result(jobID, round)
+	if err != nil {
+		return out, err
+	}
+	if current.ID != j.ID || current.Scope != j.Scope || current.Request != j.Request || current.Route != j.Route || current.Round < round || current.Round == round && current.Generation != j.Generation || result.JobID != j.ID || result.Round != round || result.State != "completed" || result.Recovery == nil || !result.Recovery.Stopped || !result.Recovery.DescendantsStopped || !result.Recovery.PublicationSettled || result.Recovery.StoredScope != j.Scope {
+		return out, ErrObservationUnknown
+	}
+	workspace, err := b.ObserveChildWorkspace(ctx, j)
+	if err != nil {
+		return out, err
+	}
+	w, err := b.revisionWorkspace()
+	if err != nil {
+		return out, err
+	}
+	if _, _, err := w.workspace.ObserveRepositoryRevision(ctx, remoteOwner(b.owner(archived))); err != nil {
+		return out, err
+	}
+	inputRef, finalRef, err := zednative.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(archived)), revisionSettlement(workspace))
+	if err != nil {
+		return out, err
+	}
+	input, err := programmeRevisionRef(inputRef)
+	if err != nil {
+		return out, err
+	}
+	final, err := programmeRevisionRef(finalRef)
+	if err != nil {
+		return out, err
+	}
+	if archived.RevisionInput == nil || *archived.RevisionInput != input || archived.RevisionInputFailure != nil {
+		return out, ErrObservationUnknown
+	}
+	return HelperRevisionObservation{Job: j, Workspace: workspace, Input: input, Final: final}, nil
 }
 
-func (b *Backend)CommitHelperRevisionLocked(ctx context.Context,observed HelperRevisionObservation)(ProgramArtifact,error){
+func (b *Backend) CommitHelperRevisionLocked(ctx context.Context, observed HelperRevisionObservation) (ProgramArtifact, error) {
 	var result ProgramArtifact
-	if _,err:=b.revisionWorkspace();err!=nil{return result,err}
-	err:=b.WithChildWorkspaceGuard(ctx,observed.Job,observed.Workspace,func(guard helper.ChildWorkspaceGuard)error{
-		archived,_,err:=b.readSettledChild(ctx,observed.Job)
-		if err!=nil||!reflect.DeepEqual(archived.Job,observed.Job)||archived.RevisionInput==nil||*archived.RevisionInput!=observed.Input||archived.RevisionInputFailure!=nil{return ErrObservationUnknown}
-		settlement,err:=guard.ValidateLocal(ctx);if err!=nil{return err}
-		actual,ok:=guard.(childWorkspaceGuard);if !ok{return ErrCapabilitiesUnverified}
-		remote,ok:=actual.remote.(zednative.RepositoryRevisionGuard);if !ok{return ErrCapabilitiesUnverified}
-		inputRef,finalRef,err:=remote.RevisionRefsLocal(ctx);if err!=nil{return err}
-		if inputRef!=nativeRevisionRef(observed.Input)||finalRef!=nativeRevisionRef(observed.Final){return ErrObservationUnknown}
-		input,err:=readProgramArtifact(observed.Input);if err!=nil{return err}
-		final,err:=readProgramArtifact(observed.Final);if err!=nil{return err}
+	if _, err := b.revisionWorkspace(); err != nil {
+		return result, err
+	}
+	err := b.WithChildWorkspaceGuard(ctx, observed.Job, observed.Workspace, func(guard helper.ChildWorkspaceGuard) error {
+		archived, _, err := b.readSettledChild(ctx, observed.Job)
+		if err != nil || !reflect.DeepEqual(archived.Job, observed.Job) || archived.RevisionInput == nil || *archived.RevisionInput != observed.Input || archived.RevisionInputFailure != nil {
+			return ErrObservationUnknown
+		}
+		settlement, err := guard.ValidateLocal(ctx)
+		if err != nil {
+			return err
+		}
+		actual, ok := guard.(childWorkspaceGuard)
+		if !ok {
+			return ErrCapabilitiesUnverified
+		}
+		remote, ok := actual.remote.(zednative.RepositoryRevisionGuard)
+		if !ok {
+			return ErrCapabilitiesUnverified
+		}
+		inputRef, finalRef, err := remote.RevisionRefsLocal(ctx)
+		if err != nil {
+			return err
+		}
+		if inputRef != nativeRevisionRef(observed.Input) || finalRef != nativeRevisionRef(observed.Final) {
+			return ErrObservationUnknown
+		}
+		input, err := readProgramArtifact(observed.Input)
+		if err != nil {
+			return err
+		}
+		final, err := readProgramArtifact(observed.Final)
+		if err != nil {
+			return err
+		}
 		var inputFacts zednative.RepositoryInput
 		var finalFacts zednative.RepositoryFinal
-		if strictDecodeRevision(input,&inputFacts)!=nil||strictDecodeRevision(final,&finalFacts)!=nil||finalFacts.Input!=inputRef{return ErrObservationUnknown}
-		result,err=saveHelperRevisionArtifact(helperRevisionPath(b,observed.Job,"revision.json"),HelperRevisionReceipt{Observation:observed,Settlement:settlement})
+		if strictDecodeRevision(input, &inputFacts) != nil || strictDecodeRevision(final, &finalFacts) != nil || finalFacts.Input != inputRef {
+			return ErrObservationUnknown
+		}
+		result, err = saveHelperRevisionArtifact(helperRevisionPath(b, observed.Job, "revision.json"), HelperRevisionReceipt{Observation: observed, Settlement: settlement})
 		return err
 	})
-	return result,err
+	return result, err
 }
 
-func ReadHelperRevisionLocal(ctx context.Context,brain string,ref ProgramArtifact)(HelperRevisionReceipt,error){
+func ReadHelperRevisionLocal(ctx context.Context, brain string, ref ProgramArtifact) (HelperRevisionReceipt, error) {
 	var out HelperRevisionReceipt
-	if err:=ctx.Err();err!=nil{return out,err}
-	data,err:=readProgramArtifact(ref);if err!=nil{return out,err}
-	if err:=strictDecodeRevision(data,&out);err!=nil{return out,err}
-	j:=out.Observation.Job
-	if j.ID==""||filepath.Base(j.ID)!=j.ID||j.ID=="."||j.ID==".."||j.Round<1||j.Generation<1||j.Scope.CodexContract!=2||j.Route.Provider!="codex"{return out,ErrObservationUnknown}
-	b:=&Backend{Brain:brain}
-	if ref.Path!=helperRevisionPath(b,j,"revision.json"){return out,ErrObservationUnknown}
-	a,attemptSHA,err:=b.readSettledChild(ctx,j);if err!=nil{return out,err}
-	if b.owner(a).RevisionRole==""||a.RevisionInput==nil||*a.RevisionInput!=out.Observation.Input||a.RevisionInputFailure!=nil{return out,ErrObservationUnknown}
-	o:=out.Observation.Workspace
-	if !reflect.DeepEqual(a.Job,j)||o!=out.Settlement.Observation||o.AttemptRef!=filepath.Join(b.directory(j),"codex.json")||o.AttemptSHA256!=attemptSHA||o.JobID!=j.ID||o.Generation!=j.Generation||o.Round!=j.Round||out.Settlement.FinalLocalSHA256!=hash([]byte("factory-child-workspace-2\x00"+attemptSHA+o.ContainmentSHA256+o.PromotionSHA256+o.PublishedGitSHA256)){return out,ErrObservationUnknown}
-	input,final,err:=zednative.ReadRepositoryRevisionRefsLocal(ctx,remoteOwner(b.owner(a)),revisionSettlement(o));if err!=nil{return out,err}
-	if input!=nativeRevisionRef(out.Observation.Input)||final!=nativeRevisionRef(out.Observation.Final){return out,ErrObservationUnknown}
-	if _,err:=readProgramArtifact(out.Observation.Input);err!=nil{return out,err}
-	if _,err:=readProgramArtifact(out.Observation.Final);err!=nil{return out,err}
-	return out,nil
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	data, err := readProgramArtifact(ref)
+	if err != nil {
+		return out, err
+	}
+	if err := strictDecodeRevision(data, &out); err != nil {
+		return out, err
+	}
+	j := out.Observation.Job
+	if j.ID == "" || filepath.Base(j.ID) != j.ID || j.ID == "." || j.ID == ".." || j.Round < 1 || j.Generation < 1 || j.Scope.CodexContract != 2 || j.Route.Provider != "codex" {
+		return out, ErrObservationUnknown
+	}
+	b := &Backend{Brain: brain}
+	if ref.Path != helperRevisionPath(b, j, "revision.json") {
+		return out, ErrObservationUnknown
+	}
+	a, attemptSHA, err := b.readSettledChild(ctx, j)
+	if err != nil {
+		return out, err
+	}
+	if b.owner(a).RevisionRole == "" || a.RevisionInput == nil || *a.RevisionInput != out.Observation.Input || a.RevisionInputFailure != nil {
+		return out, ErrObservationUnknown
+	}
+	o := out.Observation.Workspace
+	if !reflect.DeepEqual(a.Job, j) || o != out.Settlement.Observation || o.AttemptRef != filepath.Join(b.directory(j), "codex.json") || o.AttemptSHA256 != attemptSHA || o.JobID != j.ID || o.Generation != j.Generation || o.Round != j.Round || out.Settlement.FinalLocalSHA256 != hash([]byte("factory-child-workspace-2\x00"+attemptSHA+o.ContainmentSHA256+o.PromotionSHA256+o.PublishedGitSHA256)) {
+		return out, ErrObservationUnknown
+	}
+	input, final, err := zednative.ReadRepositoryRevisionRefsLocal(ctx, remoteOwner(b.owner(a)), revisionSettlement(o))
+	if err != nil {
+		return out, err
+	}
+	if input != nativeRevisionRef(out.Observation.Input) || final != nativeRevisionRef(out.Observation.Final) {
+		return out, ErrObservationUnknown
+	}
+	if _, err := readProgramArtifact(out.Observation.Input); err != nil {
+		return out, err
+	}
+	if _, err := readProgramArtifact(out.Observation.Final); err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
-func ReadHelperRepositoryRevisionLocal(ctx context.Context,brain string,ref ProgramArtifact)(zednative.RepositoryInput,zednative.RepositoryFinal,error){
+func ReadHelperRepositoryRevisionLocal(ctx context.Context, brain string, ref ProgramArtifact) (zednative.RepositoryInput, zednative.RepositoryFinal, error) {
 	var input zednative.RepositoryInput
 	var final zednative.RepositoryFinal
-	receipt,err:=ReadHelperRevisionLocal(ctx,brain,ref);if err!=nil{return input,final,err}
-	data,err:=readProgramArtifact(receipt.Observation.Input);if err!=nil{return input,final,err}
-	if err:=strictDecodeRevision(data,&input);err!=nil{return input,final,err}
-	data,err=readProgramArtifact(receipt.Observation.Final);if err!=nil{return input,final,err}
-	if err:=strictDecodeRevision(data,&final);err!=nil{return input,final,err}
-	return input,final,nil
+	receipt, err := ReadHelperRevisionLocal(ctx, brain, ref)
+	if err != nil {
+		return input, final, err
+	}
+	data, err := readProgramArtifact(receipt.Observation.Input)
+	if err != nil {
+		return input, final, err
+	}
+	if err := strictDecodeRevision(data, &input); err != nil {
+		return input, final, err
+	}
+	data, err = readProgramArtifact(receipt.Observation.Final)
+	if err != nil {
+		return input, final, err
+	}
+	if err := strictDecodeRevision(data, &final); err != nil {
+		return input, final, err
+	}
+	return input, final, nil
 }
 
 // This copy is for managed tool paths only. The original owner remains the
 // authorization, containment and journal identity throughout its lifecycle.
-func (b *Backend)helperToolOwner(ctx context.Context,a helperAttempt,environment RemoteEnvironment)(Owner,error){
-	owner:=b.owner(a)
-	if owner.CodexContract!=2||owner.RevisionRole!="verifier"{return owner,nil}
-	if err:=ctx.Err();err!=nil{return Owner{},err}
-	if a.Job.ID==""||filepath.Base(a.Job.ID)!=a.Job.ID||a.Job.ID=="."||a.Job.ID==".."||a.Job.Generation<1||a.Job.Round<1||a.RevisionInput==nil||a.RevisionInputFailure!=nil{return Owner{},ErrObservationUnknown}
-	stored,err:=b.read(a.Job)
-	if err!=nil||!reflect.DeepEqual(stored.Job,a.Job)||stored.RevisionInput==nil||*stored.RevisionInput!=*a.RevisionInput||stored.RevisionInputFailure!=nil{return Owner{},ErrObservationUnknown}
-	root:=filepath.Join(owner.RunDir,"revision")
-	cwd:=filepath.Join(root,"workspace")
-	if a.RevisionInput.Path!=filepath.Join(root,"repository-input.json")||environment.Cwd!=cwd||!reflect.DeepEqual(environment.Roots,[]string{cwd}){return Owner{},ErrObservationUnknown}
-	data,err:=readProgramArtifact(*a.RevisionInput);if err!=nil{return Owner{},err}
+func (b *Backend) helperToolOwner(ctx context.Context, a helperAttempt, environment RemoteEnvironment) (Owner, error) {
+	owner := b.owner(a)
+	if owner.CodexContract != 2 || owner.RevisionRole != "verifier" {
+		return owner, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return Owner{}, err
+	}
+	if a.Job.ID == "" || filepath.Base(a.Job.ID) != a.Job.ID || a.Job.ID == "." || a.Job.ID == ".." || a.Job.Generation < 1 || a.Job.Round < 1 || a.RevisionInput == nil || a.RevisionInputFailure != nil {
+		return Owner{}, ErrObservationUnknown
+	}
+	stored, err := b.read(a.Job)
+	if err != nil || !reflect.DeepEqual(stored.Job, a.Job) || stored.RevisionInput == nil || *stored.RevisionInput != *a.RevisionInput || stored.RevisionInputFailure != nil {
+		return Owner{}, ErrObservationUnknown
+	}
+	root := filepath.Join(owner.RunDir, "revision")
+	cwd := filepath.Join(root, "workspace")
+	if a.RevisionInput.Path != filepath.Join(root, "repository-input.json") || environment.Cwd != cwd || !reflect.DeepEqual(environment.Roots, []string{cwd}) {
+		return Owner{}, ErrObservationUnknown
+	}
+	data, err := readProgramArtifact(*a.RevisionInput)
+	if err != nil {
+		return Owner{}, err
+	}
 	var input zednative.RepositoryInput
-	if err:=strictDecodeRevision(data,&input);err!=nil{return Owner{},err}
-	ownerData,err:=json.Marshal(remoteOwner(owner));if err!=nil{return Owner{},err}
-	if input.Version!=2||input.OwnerSHA256!=hash(ownerData)||input.SnapshotWorktree!=cwd||input.SnapshotGit!=filepath.Join(root,"source.git")||input.IndexTree!=input.Tree{return Owner{},ErrObservationUnknown}
-	actual,err:=filepath.EvalSymlinks(cwd);if err!=nil||actual!=cwd{return Owner{},ErrObservationUnknown}
-	owner.Worktree=cwd
-	return owner,nil
+	if err := strictDecodeRevision(data, &input); err != nil {
+		return Owner{}, err
+	}
+	ownerData, err := json.Marshal(remoteOwner(owner))
+	if err != nil {
+		return Owner{}, err
+	}
+	if input.Version != 2 || input.OwnerSHA256 != hash(ownerData) || input.SnapshotWorktree != cwd || input.SnapshotGit != filepath.Join(root, "source.git") || input.IndexTree != input.Tree {
+		return Owner{}, ErrObservationUnknown
+	}
+	actual, err := filepath.EvalSymlinks(cwd)
+	if err != nil || actual != cwd {
+		return Owner{}, ErrObservationUnknown
+	}
+	owner.Worktree = cwd
+	return owner, nil
 }

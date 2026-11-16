@@ -40,11 +40,3 @@ func (r coordinatorReadRunner) Run(ctx context.Context, cmd proc.Cmd) ([]byte, e
 }
 
 type githubReadUnavailable = gh.ProgramReadUnavailable
-
-func githubReadError(err error) error { return gh.ProgramReadError(err) }
-func githubReadResult(value any, err error) (any, error) {
-	if err != nil {
-		return nil, githubReadError(err)
-	}
-	return value, nil
-}

@@ -632,9 +632,6 @@ func validateControlEventClosure(ctx context.Context, brain string, source contr
 	return nil
 }
 
-func CloseControlEventAbsentLocked(ctx context.Context, brain string, sourceRef, enrollmentRef controlrecord.ImmutableRef, attempt *effects.AttemptSeal, work *effects.WorkIngressSeal) (controlrecord.ImmutableRef, error) {
-	return closeControlEventAbsentLocked(ctx, brain, sourceRef, enrollmentRef, attempt, work, codex.Contract2AcceptanceAuthority)
-}
 func closeControlEventAbsentLocked(ctx context.Context, brain string, sourceRef, enrollmentRef controlrecord.ImmutableRef, attempt *effects.AttemptSeal, work *effects.WorkIngressSeal, verify nativeAcceptance) (controlrecord.ImmutableRef, error) {
 	source, err := readControlEventSourceLocal(ctx, brain, sourceRef, verify)
 	if err != nil {

@@ -81,10 +81,6 @@ func verificationCheckFactsFromChains(ctx context.Context, brain string, ref cod
 	return registryCheckDisposition(input, check), nil
 }
 
-func CompleteVerifiedRevisionLocked(ctx context.Context, brain string, ref codex.ProgramArtifact, checks codex.ProgramReadResultRef) (codex.ProgramArtifact, error) {
-	return completeVerifiedRevisionLockedUsing(ctx, brain, ref, checks, codex.Contract2AcceptanceAuthority)
-}
-
 func completeVerifiedRevisionLockedUsing(ctx context.Context, brain string, ref codex.ProgramArtifact, checks codex.ProgramReadResultRef, verify nativeAcceptance) (codex.ProgramArtifact, error) {
 	candidate, outcome, err := verificationCheckFactsUsing(ctx, brain, ref, checks, verify)
 	if err != nil {

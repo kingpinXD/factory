@@ -300,9 +300,7 @@ func TestRegistryChecksActualBrokerSourceClaimAndClosedResult(t *testing.T) {
 			if err != nil {
 				t.Fatal("actual programme selection", err)
 			}
-			if _, err := ReadVerifierCandidateLocal(ctx, w.brain, candidate); !errors.Is(err, codex.ErrAcceptancePending) {
-				t.Fatalf("unit qualification leaked into public candidate authority: %v", err)
-			}
+
 			queued := 0
 			for _, event := range w.log(req.OwnerID) {
 				if event.Request == programReadQueueRequest {

@@ -133,10 +133,6 @@ func validateRegistryCheckReadRecipeCurrentLocked(ctx context.Context, brain str
 	return nil
 }
 
-func registryChecksReadAdmissionLocal(ctx context.Context, brain string, selected effects.EventRef) (ProgramReadAdmission, error) {
-	return registryChecksReadAdmissionLocalUsing(ctx, brain, selected, codex.Contract2AcceptanceAuthority)
-}
-
 func registryChecksReadAdmissionLocalUsing(ctx context.Context, brain string, selected effects.EventRef, verify nativeAcceptance) (ProgramReadAdmission, error) {
 	selection, candidate, policy, err := readRegistryChecksSelectionLocalUsing(ctx, brain, selected, verify)
 	if err != nil {

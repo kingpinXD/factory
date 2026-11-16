@@ -167,10 +167,6 @@ func verifierSource(ctx context.Context, brain string, output effects.Artifact, 
 	return round, it, owner, entry, nativeEventRef(it.id, end), nil
 }
 
-func observeVerifierCandidate(ctx context.Context, brain string, verifier effects.Artifact) (VerifierCandidateObservation, error) {
-	return observeVerifierCandidateUsing(ctx, brain, verifier, codex.Contract2AcceptanceAuthority)
-}
-
 func observeVerifierCandidateUsing(ctx context.Context, brain string, verifier effects.Artifact, verify nativeAcceptance) (VerifierCandidateObservation, error) {
 	var out VerifierCandidateObservation
 	round, _, owner, entry, end, err := verifierSource(ctx, brain, verifier, true, verify)
@@ -196,10 +192,6 @@ func verifierRevisionMatches(job helper.Job, round helper.PublishedRoundEvidence
 	return job.ID == round.Round.JobID && job.Round == round.Round.Round && job.Generation == round.Round.Generation && job.Scope.Authorization() == round.Scope && job.Request == round.Request
 }
 
-func commitVerifierCandidateLocked(ctx context.Context, brain string, observed VerifierCandidateObservation) (codex.ProgramArtifact, error) {
-	return commitVerifierCandidateLockedUsing(ctx, brain, observed, codex.Contract2AcceptanceAuthority)
-}
-
 func commitVerifierCandidateLockedUsing(ctx context.Context, brain string, observed VerifierCandidateObservation, verify nativeAcceptance) (codex.ProgramArtifact, error) {
 	round, _, owner, entry, end, err := verifierSource(ctx, brain, observed.Verifier, true, verify)
 	if err != nil {
@@ -222,23 +214,6 @@ func commitVerifierCandidateLockedUsing(ctx context.Context, brain string, obser
 	next := VerifierCandidate{Version: 2, Authority: owner, Work: round.Scope, Entry: entry, End: end, Verifier: observed.Verifier, Round: round.Round, Revision: revision, Commit: input.Commit, Tree: input.Tree}
 	path := filepath.Join(verificationDirectory(brain, next.Work.WorkID, entry.Sequence, end.Sequence), "candidate-"+effectDigest(next).String()+".json")
 	return verificationArtifact(path, next)
-}
-
-func ObserveVerifierCandidate(ctx context.Context, brain string, verifier effects.Artifact) (codex.ProgramArtifact, error) {
-	observed, err := observeVerifierCandidate(ctx, brain, verifier)
-	if err != nil {
-		return codex.ProgramArtifact{}, err
-	}
-	unlock, err := waitLock(ctx, brain, "tick")
-	if err != nil {
-		return codex.ProgramArtifact{}, err
-	}
-	defer unlock()
-	return commitVerifierCandidateLocked(ctx, brain, observed)
-}
-
-func ReadVerifierCandidateLocal(ctx context.Context, brain string, ref codex.ProgramArtifact) (VerifierCandidate, error) {
-	return readVerifierCandidateLocalUsing(ctx, brain, ref, codex.Contract2AcceptanceAuthority)
 }
 
 func readVerifierCandidateLocalUsing(ctx context.Context, brain string, ref codex.ProgramArtifact, verify nativeAcceptance) (VerifierCandidate, error) {
@@ -287,10 +262,6 @@ func readVerifierCandidateLocalUsing(ctx context.Context, brain string, ref code
 		return out, effects.ErrEvidence
 	}
 	return out, nil
-}
-
-func SelectRegistryChecksLocked(ctx context.Context, brain string, ref codex.ProgramArtifact) (effects.EventRef, error) {
-	return selectRegistryChecksLockedUsing(ctx, brain, ref, codex.Contract2AcceptanceAuthority)
 }
 
 func selectRegistryChecksLockedUsing(ctx context.Context, brain string, ref codex.ProgramArtifact, verify nativeAcceptance) (effects.EventRef, error) {
@@ -422,9 +393,6 @@ func publishRegistryCheckSelectionLocked(ctx context.Context, brain string, cand
 
 // This retained reader never grants current admission or opens the helper
 // ledger. A successor may read a completed check after its proposer has ended.
-func ReadRegistryChecksSelectionLocal(ctx context.Context, brain string, ref effects.EventRef) (RegistryChecksSelection, VerifierCandidate, repos.CheckPolicy, error) {
-	return readRegistryChecksSelectionLocalUsing(ctx, brain, ref, codex.Contract2AcceptanceAuthority)
-}
 
 func readRegistryChecksSelectionLocalUsing(ctx context.Context, brain string, ref effects.EventRef, verify nativeAcceptance) (RegistryChecksSelection, VerifierCandidate, repos.CheckPolicy, error) {
 	var selection RegistryChecksSelection
@@ -505,9 +473,6 @@ func validateNewRegistryCheckPolicy(brain, repo string, selected repos.CheckPoli
 }
 
 // The caller owns tick, and must not hold a helper or E1 transaction.
-func ValidateRegistryChecksAdmissionLocal(ctx context.Context, brain string, ref effects.EventRef) error {
-	return validateRegistryChecksAdmissionLocalUsing(ctx, brain, ref, codex.Contract2AcceptanceAuthority)
-}
 
 func validateRegistryChecksAdmissionLocalUsing(ctx context.Context, brain string, ref effects.EventRef, verify nativeAcceptance) error {
 	_, candidate, _, err := readRegistryChecksSelectionLocalUsing(ctx, brain, ref, verify)
@@ -534,9 +499,6 @@ func validateRegistryChecksAdmissionLocalUsing(ctx context.Context, brain string
 
 // Only first publication of a new immutable read invokes this check. A replay
 // or already admitted claim retains its captured policy and execution deadline.
-func ValidateNewRegistryChecksReadLocal(ctx context.Context, brain string, ref effects.EventRef) error {
-	return validateNewRegistryChecksReadLocalUsing(ctx, brain, ref, codex.Contract2AcceptanceAuthority)
-}
 
 func validateNewRegistryChecksReadLocalUsing(ctx context.Context, brain string, ref effects.EventRef, verify nativeAcceptance) error {
 	if err := validateRegistryChecksAdmissionLocalUsing(ctx, brain, ref, verify); err != nil {

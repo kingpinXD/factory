@@ -46,10 +46,6 @@ type ProgramReadProgramSource struct {
 	Purpose string
 }
 
-func PrepareRegistryChecksLocked(ctx context.Context, brain string, selected effects.EventRef) (codex.ProgramReadRef, error) {
-	return prepareRegistryChecksLocked(ctx, brain, selected, codex.Contract2AcceptanceAuthority)
-}
-
 func prepareRegistryChecksLocked(ctx context.Context, brain string, selected effects.EventRef, verify nativeAcceptance) (codex.ProgramReadRef, error) {
 	selection, candidate, _, err := readRegistryChecksSelectionLocalUsing(ctx, brain, selected, verify)
 	if err != nil {

@@ -186,6 +186,20 @@ func runBounded(t *testing.T, d RunnerDeps) {
 		t.Fatal(err)
 	}
 }
+func runUntil(t *testing.T, d RunnerDeps, ready func() bool) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, d) }()
+	defer func() {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Errorf("runner stopped unexpectedly: %v", err)
+		}
+	}()
+	eventually(t, ready)
+}
+
 func TestQuotaPolicyMatrix(t *testing.T) {
 	now := time.Now()
 	policy := QuotaPolicy{80, 88, 15 * time.Minute}
@@ -322,11 +336,10 @@ func TestExitZeroWithoutTurnEvidenceNeverCompletes(t *testing.T) {
 	d.Backends["codex"] = backendFunc{run: func(context.Context, RunSpec, Sink) (RunResult, error) {
 		return RunResult{Outcome: "completed", ObservedModel: executor.CodexModel}, nil
 	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	if err = Run(ctx, d); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
-	}
+	runUntil(t, d, func() bool {
+		r, err := s.Result(a.JobID, 1)
+		return err == nil && r.State == "unknown" && r.ErrorCode == "persisted_turn_unconfirmed"
+	})
 	r, err := s.Result(a.JobID, 1)
 	if err != nil || r.State != "unknown" {
 		t.Fatalf("%+v %v", r, err)
@@ -509,11 +522,12 @@ func TestQuotaInterruptionRequiresExplicitRecoveryWithoutReplay(t *testing.T) {
 		t.Fatalf("%+v writes=%d err=%v", r, writes.Load(), err)
 	}
 	paused.Store(false)
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel2()
-	if err = Run(ctx2, d); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
-	}
+	var recoveryChecks atomic.Int32
+	d.Now = func() time.Time { recoveryChecks.Add(1); return time.Now() }
+	runUntil(t, d, func() bool {
+		r, err := s.Result(a.JobID, 1)
+		return recoveryChecks.Load() >= 2 && err == nil && r.State == "recovery_required"
+	})
 	if writes.Load() != 1 {
 		t.Fatal("reset replayed consequential command")
 	}
@@ -873,11 +887,10 @@ func TestChildCannotStartWithoutYieldHandshake(t *testing.T) {
 		}
 		return result, e
 	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	if err = Run(ctx, d); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
-	}
+	runUntil(t, d, func() bool {
+		job, err := s.Job(root.JobID)
+		return err == nil && job.State == "blocked" && job.HoldReason == "children_require_yield"
+	})
 	if starts.Load() != 1 {
 		t.Fatal("child crossed missing yield handshake")
 	}
@@ -1004,11 +1017,10 @@ func TestUnknownBackendOutcomeRemainsUnknown(t *testing.T) {
 		r.Outcome = "unknown"
 		return r, e
 	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	if err = Run(ctx, d); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
-	}
+	runUntil(t, d, func() bool {
+		r, err := s.Result(a.JobID, 1)
+		return err == nil && r.State == "unknown" && r.ErrorCode == "backend_outcome_unconfirmed"
+	})
 	r, err := s.Result(a.JobID, 1)
 	if err != nil || r.State != "unknown" || r.Outcome != "unknown" {
 		t.Fatalf("%+v %v", r, err)

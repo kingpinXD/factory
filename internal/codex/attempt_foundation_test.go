@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -480,6 +481,18 @@ func TestAttemptPrivateProcess(t *testing.T) {
 		return
 	}
 	dir := os.Getenv("FACTORY_A1_PRIVATE_DIR")
+	lifeline := os.NewFile(3, "private-attempt-parent")
+	stop := func() {
+		if group, err := syscall.Getpgid(0); err == nil && group == os.Getpid() {
+			_ = syscall.Kill(-group, syscall.SIGKILL)
+		}
+		os.Exit(2)
+	}
+	time.AfterFunc(15*time.Minute, stop)
+	go func() {
+		_, _ = io.Copy(io.Discard, lifeline)
+		stop()
+	}()
 	switch mode {
 	case "delayed-host":
 		for {
@@ -561,6 +574,38 @@ func TestAttemptPrivateProcess(t *testing.T) {
 		t.Fatal("unknown private mode")
 	}
 }
+func TestAttemptPrivateProcessLifelineStopsDetachedHost(t *testing.T) {
+	dir := t.TempDir()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestAttemptPrivateProcess$")
+	cmd.Env = append(os.Environ(), "FACTORY_A1_PRIVATE_MODE=delayed-host", "FACTORY_A1_PRIVATE_DIR="+dir)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.ExtraFiles = []*os.File{reader}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+	})
+	reader.Close()
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached fixture survived its parent lifeline closing")
+	}
+}
+
 func privateAttemptProcess(t *testing.T, mode, dir string) (*exec.Cmd, ProcessIdentity, <-chan error) {
 	t.Helper()
 	if err := os.Chmod(dir, 0700); err != nil {
@@ -575,16 +620,37 @@ func privateAttemptProcess(t *testing.T, mode, dir string) (*exec.Cmd, ProcessId
 	cmd.Env = append(os.Environ(), "FACTORY_A1_PRIVATE_MODE="+mode, "FACTORY_A1_PRIVATE_DIR="+dir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdout, cmd.Stderr = output, output
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reader.Close(); writer.Close() })
+	cmd.ExtraFiles = []*os.File{reader}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	exited := make(chan struct{})
+	go func() {
+		done <- cmd.Wait()
+		close(exited)
+	}()
+	t.Cleanup(func() {
+		writer.Close()
+		// Setsid makes this child's PID the group that belongs to this test.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		select {
+		case <-exited:
+		case <-time.After(2 * time.Second):
+			t.Error("private attempt fixture did not exit")
+		}
+	})
+	reader.Close()
 	identity, err := CaptureProcess(cmd.Process.Pid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { cmd.Process.Kill(); syscall.Kill(-identity.Group, syscall.SIGKILL) })
 	return cmd, identity, done
 }
 func awaitPrivateFile(t *testing.T, name string) []byte {

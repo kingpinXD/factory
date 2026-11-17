@@ -1,13 +1,11 @@
 # Codex executor
 
-The factory retains three independent execution choices. The default uses Claude.
-
-The additive `codex` choice uses Codex app-server for every model role.
+Factory supports Claude (the default) and Codex. The `codex` choice uses Codex
+app-server for every model role.
 
 Codex admission remains held until the pinned configuration passes the live
 acceptance command. Offline tests and a successful protocol round do not satisfy
-that requirement. The model-backed cancellation, conversation continuation,
-compaction and complete sample epic have not yet passed for this implementation.
+that requirement. A complete sample epic is a separate check.
 
 ## Configuration and intake
 
@@ -36,8 +34,12 @@ The profile schema is strict. It requires these fields:
 
 Each route pins `provider: codex`, a supported tier and an explicit reasoning
 effort. Models resolve through the shared brain's Codex model column. Intake saves
-both executable hashes and the immutable container image ID. Z-specific worker and
-credential settings are rejected in a Codex profile.
+both executable hashes and the immutable container image ID. Unsupported worker
+and credential settings are rejected in a Codex profile.
+
+The image must contain git, gh and the Go toolchain the repository needs.
+The Docker endpoint may use any local Unix socket context, including Docker
+Desktop, Colima or OrbStack; remote Docker endpoints are rejected.
 
 Obtain the catalog with the pinned executable's `debug models --bundled` command.
 Change only the pinned model's `tool_mode` to `direct` and record the file hash.
@@ -53,6 +55,8 @@ uses the same pinned selection, remote execution transport and observation
 contract as ordinary workers. It refuses inference when included quota is unknown
 or held. A partial or failed run does not publish an acceptance receipt. There is
 no environment variable or flag that marks unexecuted checks successful.
+Version 2 also requires a registered private repository and a passing
+`factory codex-verify --contract 2 --repo <owner/repo> --base <branch>`.
 
 ## Process and tool ownership
 
@@ -68,7 +72,7 @@ only queued messages whose model submission provably never began.
 Host subscription authentication remains with the host app-server. Its selected
 execution environment connects to a Codex exec-server inside the attested Docker
 container. Provider authentication files are not copied into the container.
-The container receives only explicitly allowed repository credentials and tools.
+Version 2 containers receive repository tools without reusable GitHub credentials.
 
 Every remote filesystem or process request crosses an authenticated loopback
 WebSocket proxy. The proxy acquires current factory authority before forwarding a
@@ -90,9 +94,8 @@ It does not expose a host shell.
 ## Saved results, recovery and quotas
 
 Codex model evidence describes pinned configuration. It does not attest the model
-that actually executed a turn. The factory keeps configured model, provider and
-effort separate from the Z executor's observed-model field. Rerouting or conflicting
-configuration holds the attempt.
+that actually executed a turn. Factory records the configured model, provider and
+effort. Rerouting or conflicting configuration holds the attempt.
 
 A helper result requires an exact terminal turn and matching reply from a fresh
 observation-only server. The factory records a hash of that reply. Publication
@@ -101,9 +104,15 @@ private-Git verification and promotion. A completion notification alone supplies
 none of those writer-stop guarantees.
 
 The manager owns recovery. Status and browser inspection do not stop processes,
-start servers or submit prompts. A stopped coordinator resumes the same saved
-conversation in a new owned attempt. Missing turn identity, a pending ambiguous
-delivery, stale process identity or uncertain fencing remains held.
+start servers or submit prompts. It confirms the previous host and server have
+stopped before closing the attempt and admitting one successor. It reads the saved
+provider thread to record whether an uncertain message arrived. A message that
+arrived is not repeated when resuming that thread; a fresh thread receives it.
+A message that did not arrive can be delivered to the successor. An unknown
+outcome puts the owner in `needs_you`, naming the session and delivery; the user's
+retry or answer permits a new delivery. Legacy records without the input text
+have an unknown outcome. One held or conflicting session record does not stop
+other Codex sessions from working.
 
 Codex quota reads use the subscription account's own API. Unknown account binding,
 permission, spend control or window values remain unknown. Included usage must be
@@ -174,13 +183,12 @@ Codex repository helpers configure their fresh private Git view before container
 creation. They use only the host repository's configured author name and email,
 real origin tracking commits and a normal fetch refspec. Missing or invalid author
 configuration or an unavailable origin fails before launch. This does not copy
-hooks or the full host configuration. Control-only sessions and the optional Z executor keep their paths.
+hooks or the full host configuration. Control-only sessions keep their separate
+scratch workspace.
 
-For a canonical HTTPS GitHub origin, a private credential helper checks the exact
-protocol, host and repository path before reading the existing runtime GitHub
-token. It answers only credential reads. It never stores the token in Git
-configuration, command arguments or the attempt journal. Foreign repositories and
-descendant paths receive no credential. Existing attempts are observed or fenced;
+Version 2 keeps GitHub credentials with Factory. Helpers have no GitHub credential
+helper or inherited GitHub authentication settings. Factory performs scoped
+repository reads and publication. Existing attempts are observed or fenced;
 preparation never changes their private Git setup after launch.
 
 Codex knowledge reads also allow the exact writing guide `memory/tone_guide.md`.
@@ -219,10 +227,6 @@ The browser continues to display executor and hold information. Unsupported
 non-Claude mutations remain disabled; use supported CLI controls. No installed
 factory services are changed by building or testing this source.
 
-Keep the optional Z source and its incomplete native acceptance gates separate.
-Codex does not require Zed to be installed. Neither offline Codex checks nor its
-eventual acceptance receipt certify the Z executor.
-
 No review requests or review messages from this effort go to Slack. A disposable
 sample epic must run through the factory; manually implementing its sample code
 does not count as acceptance.
@@ -231,14 +235,43 @@ does not count as acceptance.
 
 The stored contract version selects one shared tool catalogue, decoder and runtime
 instruction supplement. Request payloads cannot select a different catalogue.
-Existing prompt snapshots remain immutable. Claude and the separate Z executor
-keep their existing behavior.
+Existing prompt snapshots remain immutable. Claude keeps its existing publication
+path.
 
 Version 2 gives GitHub credentials and writes to Factory. Repository helpers make
-local changes and commits. Coordinators submit declared proposal files through
-`effect_prepare` and inspect the recorded operation through `effect_result`.
-An operation also requires its actual selected source. A missing producer keeps
-that operation unavailable; it does not enable the old direct-write path.
+local changes and commits. After verification passes, Factory records the exact
+verified commit, imports it into the main clone, and moves the item's local branch
+and worktree to it. The PR opener supplies only the title and body.
+
+The tick queues publication for the repository worker. The worker pushes that
+verified commit to `factory/<item>`, creates a draft PR with the supplied title
+and body, and marks it ready. Each push, PR creation and ready operation has a
+durable journal entry: intent, action, then completion. Recovery reads the remote
+state before deciding whether the write landed. A push uses an explicit lease:
+the branch must be absent on the first push or match the recorded PR head for a
+revision. An already-landed push is recorded without pushing again.
+
+For a babysitter fix in `in_review`, Factory checks the helper's local revision
+receipt, imports the commit, and queues a push to the existing PR. The recorded
+PR head changes only after that push is confirmed. A pending revision prevents
+merge. Factory merges the recorded head only after the normal review, CI and
+dependency checks pass.
+
+Failed reads leave the request pending for another worker pass. A successful read
+that cannot safely settle a write puts the item in `needs_you` with the write key
+and reason. Timeouts and retries do not permit further publication writes while
+that hold remains. After checking the branch or PR, record the outcome:
+
+```sh
+factory settle-publication <item> --write <key> --outcome landed --head <sha> # push
+factory settle-publication <item> --write <key> --outcome landed --pr <N>     # PR write
+factory settle-publication <item> --write <key> --outcome not-landed
+factory retry <item>
+```
+
+For a conflicting branch, restore the expected head before settling `not-landed`;
+delete the branch if the intent expected it to be absent. Settle `landed` only
+with the observed commit or PR. Settlement closes the intent; retry resumes work.
 
 Each coordinator call retains its original canonical request and actual attempt,
 thread, turn and call identity. Current caller authority is checked before an
@@ -259,6 +292,5 @@ same token. A pending coordinator restart can wait for an admitted output to
 finish. It cannot grant new work or write authority to a changed owner.
 
 Private source snapshots allow bounded canonical JSON expansion. Public requests
-and ordinary effect records retain their existing limits. These controls are
-source mechanisms. Full version 2 launch qualification still requires the actual
-source producers, dependent workflow and live acceptance checks.
+retain their existing limits. Version 2 launch qualification requires the live
+acceptance checks for the pinned profile and registered private repository.

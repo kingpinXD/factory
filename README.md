@@ -1,6 +1,6 @@
 # factory
 
-An always-running pipeline that takes an issue, epic or plan to merged PRs, using Claude Code sessions.
+An always-running pipeline that takes an issue, epic or plan to merged PRs, using Claude Code or Codex sessions.
 
 The plan and its decisions live in the author's agent harness, not in this repo.
 
@@ -17,7 +17,7 @@ the line under it shows its arguments.
 
 ```sh
 # Adds an epic from an issue, an epic, a plan file or a line of text.
-factory add <issue-url | epic-url | plan-file | "text"> [--set step=tier]... [--effort step=level]...
+factory add <issue-url | epic-url | plan-file | "text"> [--executor claude|codex] [--set step=tier]... [--effort step=level]...
 
 # Runs one tick: one pass of the pipeline. After factory launchd install, a launchd job runs it every minute.
 factory tick [--dry-run]
@@ -92,6 +92,35 @@ factory version
 # Opens a local browser control room without starting a manager.
 factory ui [--listen 127.0.0.1:0] [--brain /absolute/path] [--read-only]
 ```
+
+## Executors
+
+Claude is the default. To use Codex for an epic, run
+`factory add <input> --executor codex`.
+
+Codex needs Docker, a pinned profile at `<brain>/factory/executors/codex.yaml`,
+a registered private repository, and a passing `factory codex-verify` for that
+profile. Version 2 requires `--contract 2 --repo <owner/repo> --base <branch>`.
+See [Codex setup and recovery](docs/codex-executor.md) for the profile and checks.
+
+Codex helpers make local commits. Factory pushes the verified commit, opens and
+readies the PR, publishes later fixes, and merges when the repository's checks
+allow it.
+
+An uncertain publication write can put the item in `needs_you`. Inspect the
+remote branch or PR before recording what happened:
+
+```sh
+factory settle-publication <item> --write <key> --outcome landed --head <sha> # push
+factory settle-publication <item> --write <key> --outcome landed --pr <N>     # PR write
+factory settle-publication <item> --write <key> --outcome not-landed
+factory retry <item>
+```
+
+Use the write key from the hold reason. Before choosing `not-landed` for a
+conflicting remote head, restore the expected head, or delete the branch if it
+was expected to be absent. Factory makes no further publication writes until
+the hold is settled.
 
 ## `factory status --json`
 
@@ -172,7 +201,7 @@ Every command also accepts `--brain <absolute-brain>`.
 - `helper cancel <job-id> --request <json-file|->` accepts `{"reason":"..."}`.
   Cancellation abandons the job; it is not a recoverable interrupt.
 - `helper status [job-id]` prints redacted model/state/hold/attach information.
-- `helper drain --brain <absolute-brain>` closes indexed native epics, fences
+- `helper drain --brain <absolute-brain>` closes indexed Codex epics, fences
   their helper writers and finishes durable result delivery. It abandons queued
   and interrupted work; use recoverable interrupt instead when work must resume.
 Successful submit/continue returns schema-version-1 Accepted JSON. Reads of
@@ -182,7 +211,7 @@ because a runner restart or notification failed: admission is already durable.
 
 ### Managed host control
 
-Native tools invoke only `FACTORY_BIN helper control --job <job-id> --generation
+Managed helpers use `FACTORY_BIN helper control --job <job-id> --generation
 <n> --brain <absolute-brain> --request -`. The envelope is `{"op":"...",
 "payload":{...}}`. It has no caller-selected executable, owner or lease.
 
@@ -198,7 +227,7 @@ Native tools invoke only `FACTORY_BIN helper control --job <job-id> --generation
 
 Submit derives child authority from the stored parent. Continue/result cannot
 address foreign jobs. Inbox is read-only. Managed start/end, inbox ack, login,
-arbitrary host commands and cancellation are not native tool operations.
+arbitrary host commands and cancellation are not managed helper operations.
 
 `lease_check` returns exactly `schema_version`, `op`, `job_id`, `generation`,
 `allowed`. Missing/stale authority or a revoking scope returns `allowed:false`.
@@ -207,15 +236,14 @@ file paths are blank. Each artifact is bounded to 384 KiB, and the full encoded
 result must fit 1 MiB. Oversized results require an explicit future chunked
 transport; they are not silently truncated or treated as completed delivery.
 
-`brain_read.max_bytes` is a positive integer through 65536, matching the Rust
-managed-tool contract. Omission defaults to 65536. Null, floating-point values,
-unknown keys and larger bounds fail. Files exceeding the selected byte limit
-fail rather than returning silently truncated knowledge. The Go endpoint test
-reuses the actual Rust native-tool input fixture with `max_bytes:128`.
+`brain_read.max_bytes` is a positive integer through 65536.
+Omission defaults to 65536. Null, floating-point values, unknown keys and larger
+bounds fail. Files exceeding the selected byte limit
+fail rather than returning silently truncated knowledge.
 
 The detached broker observes and publishes without consulting Claude listings or
 Claude usage holds. Completion first persists a keyed owner inbox entry. Only
-normal tick policy wakes the Claude owner. Scope revocation closes admission
+normal tick policy wakes the owner. Scope revocation closes admission
 before fencing writers and before persisting a replacement lease/ownership event.
 Legacy CLI start/end cannot publish a managed output reservation, even if a child
 omits all managed environment variables.
@@ -239,18 +267,10 @@ ArtifactResolver. That directory is pinned with the job for later rounds. It
 never supplies a current set lease: work-owned helpers retain empty `set_id`
 and lease zero. Old orchestrator requests remain unauthorized.
 
-Native coordinator restarts and requested checkpoints also have synced session
-records for intent, fresh authority and wake delivery. They close the broker
-barrier and confirm native descendant death before stopping the coordinator or
-committing the compacting transition. Set-owned coordinators receive a persisted
-new lease before reopening. Work-owned coordinators retain lease zero and derive
-their fresh generation from the completed program record. Checkpoint prompts
-include the renewed lease. A crash retains pending admission; recovery retries the
-fence and resumes the recorded handoff without granting the lease twice or
-replaying a confirmed wake. Uncertain writer death or unknown coordinator state
-keeps the boundary closed. Claude account holds do not create these boundaries;
-independent native work continues under its own provider policy. A planner's
-checkpoint does not revoke work owned by its orchestrators or babysitters.
+Codex coordinator recovery records process closure and uncertain delivery
+outcomes before admitting a successor. An unreadable delivery outcome needs the
+user's decision before it can be sent again. Account holds do not replace these
+ownership checks. See [Codex recovery](docs/codex-executor.md) for details.
 
 Epic-only helper grants are not enabled. The approved contract requires an
 explicit component-specific grant, but neither the plan nor the blueprint names
@@ -259,32 +279,26 @@ submissions therefore still require a work item. This is a scope restriction,
 not an implicit grant to run against the brain directory.
 
 Before rollback, stop new intake and factory scheduling, and stop the top-level
-Claude sessions using this brain. Then run `helper drain` with the **current**
+coordinator sessions using this brain. Then run `helper drain` with the **current**
 factory binary and explicit brain. It holds tick while closing every indexed
-native epic, fencing descendants and running a broker pass to finish result
+Codex epic, fencing descendants and running a broker pass to finish result
 publication/delivery. It starts no new inference. Failure to prove writer death
-or account for any native job fails the drain. Retrying is safe. Admission stays
+or account for any helper job fails the drain. Retrying is safe. Admission stays
 closed for the drained epics; use a new epic for new work.
 
-A successful drain reports `drained:true` for **native helpers only** and
-`downgrade_ready:false`. It does not stop Claude, change launchd, select an older
-binary, archive epics, or certify that an old binary understands native state.
-Keep drained native epics in an archived brain; use a fresh, separately configured
+A successful drain reports `drained:true` for **managed helpers only** and
+`downgrade_ready:false`. It does not stop coordinators, change launchd, select an
+older binary, archive epics, or certify that an old binary understands Codex state.
+Keep drained Codex epics in an archived brain; use a fresh, separately configured
 legacy brain for an older factory. Do not point an older executable at active
-native work or delete helper/executor records to make it appear drained. Never
+Codex work or delete helper/executor records to make it appear drained. Never
 overwrite a running binary during rollback.
 
 ### Remaining live acceptance gates
 
-Dedicated native OAuth grant isolation, a suitable validated worker image, and
-real native managed-tool execution remain acceptance gates. A live nested-helper
-workflow must also survive broker restart at pool size one, reload the same
-conversation, and publish exactly one final result without an IDE coordinator.
-The isolated Docker writer-death and Git-promotion drills do not establish those
-end-to-end guarantees. A disposable live factory task remains a separate gate.
-Offline Go tests and native-tool fixtures do not establish live readiness.
-Preflight can check configured local capabilities and scoped usage, but neither
-login nor inference is automatic.
+Codex admission requires a live `factory codex-verify` receipt for the pinned
+profile and contract. Offline tests do not establish live readiness. A complete
+sample epic is a separate check.
 
 ### Claude-only compatibility acceptance
 
@@ -292,7 +306,7 @@ Merging requires execution-path compatibility with a freshly frozen `origin/main
 revision, not just matching final code or passing tests. Record main and candidate
 SHAs. Candidate flagless intake and explicit `--executor claude` must both match
 main's flagless path using the same frozen brain/model settings and equivalent
-isolated repositories/issues. Native credentials, profiles, binaries and Docker
+isolated repositories/issues. Codex credentials, profiles, binaries and Docker
 must not be required or invoked.
 
 Deterministic differential tests replay identical agent/GitHub responses, clock
@@ -312,7 +326,7 @@ their behavior, and checkpoint, ownership, CI/review/dependency merge gates and
 cleanup still work. Do not copy a live epic into a writable test environment.
 
 After merge, build the exact merged revision and repeat the flagless and explicit
-Claude smoke checks without native dependencies. This does not authorize replacing
+Claude smoke checks without Codex dependencies. This does not authorize replacing
 the installed factory or services. Record actual results; these compatibility
 checks remain pending until executed. Both trial modes obey their account limits.
 
@@ -337,7 +351,8 @@ worker progress. Completed, cancelled and pending cleanup counts stay separate.
 other processes or install a scheduler. `--read-only` disables job submission and
 factory controls. Neither startup nor polling probes authentication, queries
 GitHub or starts Claude. Submission loads runtime dependencies only when requested.
-The supported executor is Claude; experimental executor selections refuse writes.
+The browser submits Claude jobs. Select Codex through
+`factory add <input> --executor codex`.
 
 New jobs accept written text, GitHub issues/epics, or bounded UTF-8 plan uploads.
 Text is always text, even when it resembles a host file path. Submitting may start

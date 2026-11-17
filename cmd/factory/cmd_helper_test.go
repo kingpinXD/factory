@@ -419,7 +419,7 @@ func TestHelperDrainRefusesUnconfirmedWriterDeath(t *testing.T) {
 		return result, ctx.Err()
 	}, fence: func(context.Context, helper.Job) error { return errors.New("writer death unproven") }}}
 	d.Service.FenceRuntime = func(context.Context, helper.Job) error { return errors.New("writer death unproven") }
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- helper.Run(ctx, d) }()

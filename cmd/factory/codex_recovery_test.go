@@ -231,8 +231,7 @@ func TestCodexNestedReplyOnlySubmissionCanCorrectWithoutAdmission(t *testing.T) 
 		checked = true
 		return result, nil
 	}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	if err = helper.Run(ctx, d); err != nil {
 		jobs, _ := s.Jobs()
 		t.Fatalf("runner: %v jobs=%+v", err, jobs)

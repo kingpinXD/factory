@@ -196,8 +196,7 @@ func TestCodexHelperMissingKnowledgeCLIUsesBoundAuthority(t *testing.T) {
 		checked = true
 		return result, nil
 	}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	if err = helper.Run(ctx, deps); err != nil {
 		t.Fatal(err)
 	}

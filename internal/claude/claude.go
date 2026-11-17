@@ -165,7 +165,7 @@ type Spec struct {
 	Effort string
 	// PromptFile is the joined component prompt.
 	PromptFile string
-	// Agents is the factory personas as inline JSON.
+	// Agents is the factory personas as JSON, also written as project agents.
 	Agents string
 	// Task is the session's FACTORY_TASK.
 	Task string
@@ -203,6 +203,9 @@ func (c Client) Start(ctx context.Context, s Spec) error {
 	}
 	settings, err := c.writeSettings(dir, s)
 	if err != nil {
+		return err
+	}
+	if err := writeProjectAgents(dir, s.Agents); err != nil {
 		return err
 	}
 	args := []string{"--bg",

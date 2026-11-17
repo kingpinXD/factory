@@ -1,0 +1,487 @@
+{
+  "schema_version": 1,
+  "baseline": "e90b9bd00aa2b345eb00466ec8d77a73e4b64ec4",
+  "packages": {
+    "reconcile": [
+      {
+        "scenario": "usage_policy",
+        "step": "long_wait",
+        "path": [
+          "evidence",
+          "relations",
+          "dm:factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account"
+        ],
+        "main": {
+          "present": true,
+          "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account"
+        },
+        "candidate": {
+          "present": false
+        }
+      },
+      {
+        "scenario": "usage_policy",
+        "step": "long_wait",
+        "path": [
+          "evidence",
+          "relations",
+          "dm:factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account (near limit)"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account (near limit)"
+        }
+      },
+      {
+        "scenario": "usage_policy",
+        "step": "needs_you_reason",
+        "path": [
+          "evidence",
+          "relations",
+          "dm:factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account"
+        ],
+        "main": {
+          "present": true,
+          "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account"
+        },
+        "candidate": {
+          "present": false
+        }
+      },
+      {
+        "scenario": "usage_policy",
+        "step": "needs_you_reason",
+        "path": [
+          "evidence",
+          "relations",
+          "dm:factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account (near limit)"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 26h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in starting for 25h0m0s, waiting on the account (near limit)"
+        }
+      },
+      {
+        "scenario": "usage_policy",
+        "step": "needs_you_reason",
+        "path": [
+          "evidence",
+          "relations",
+          "dm:factory: long waits:\n - e1-w1 (o/r#12) in exploring for 51h0m0s, waiting on the account\n - e1-w2 (o/r#12) in needs_you for 25h0m0s, waiting on you"
+        ],
+        "main": {
+          "present": true,
+          "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 51h0m0s, waiting on the account\n - e1-w2 (o/r#12) in needs_you for 25h0m0s, waiting on you"
+        },
+        "candidate": {
+          "present": false
+        }
+      },
+      {
+        "scenario": "usage_policy",
+        "step": "needs_you_reason",
+        "path": [
+          "evidence",
+          "relations",
+          "dm:factory: long waits:\n - e1-w1 (o/r#12) in exploring for 51h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in needs_you for 25h0m0s, waiting on you: the same error 3 times (dead-lettered): fixture requires an operator decision"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 51h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in needs_you for 25h0m0s, waiting on you: the same error 3 times (dead-lettered): fixture requires an operator decision"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "unknown_listing",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1",
+          "held_since"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:04:00Z"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "unknown_listing",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1-orchestrator",
+          "held_since"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:04:00Z"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "unknown_listing",
+        "path": [
+          "evidence",
+          "states",
+          "e1-w1",
+          "held_since"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:04:00Z"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "resume",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1",
+          "held"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": 60000000000
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "resume",
+        "path": [
+          "evidence",
+          "states",
+          "e1-w1",
+          "held"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": 60000000000
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "events",
+          "e1-w1"
+        ],
+        "main": {
+          "present": true,
+          "value": [
+            {
+              "at": "2026-10-09T12:00:00Z",
+              "kind": "transition",
+              "seq": 1,
+              "to": "queued",
+              "trigger": "tick",
+              "trigger_ref": "fixture"
+            },
+            {
+              "at": "2026-10-09T12:00:00Z",
+              "from": "queued",
+              "key": "e1-w1:queued:starting:tick:1:0",
+              "kind": "transition",
+              "sender": "factory",
+              "seq": 2,
+              "to": "starting",
+              "trigger": "tick",
+              "trigger_ref": "tick:1"
+            },
+            {
+              "at": "<PROGRAM_AT:e1-w1:3>",
+              "key": "assign:e1-w1",
+              "kind": "done",
+              "sender": "factory",
+              "seq": 3,
+              "text": "assigned"
+            },
+            {
+              "at": "2026-10-09T12:00:00Z",
+              "key": "repo:worktree:2",
+              "kind": "request",
+              "recipient": "repo-worker",
+              "request": "worktree",
+              "sender": "factory",
+              "seq": 4
+            },
+            {
+              "at": "<WORKER_AT:e1-w1:5>",
+              "key": "repo:4",
+              "kind": "worktree_ready",
+              "sender": "factory",
+              "seq": 5,
+              "text": "<HOME>/src/r-worktrees/factory-e1-w1",
+              "trigger_ref": "4"
+            },
+            {
+              "at": "2026-10-09T12:07:00Z",
+              "key": "restart:dead:e1-s1-orchestrator:4",
+              "kind": "restart",
+              "sender": "factory",
+              "seq": 6,
+              "text": "factory:e1-s1:orchestrator was dead"
+            },
+            {
+              "at": "2026-10-09T13:12:00Z",
+              "attempt": 1,
+              "from": "starting",
+              "key": "e1-w1:starting:starting:timeout:12:1",
+              "kind": "transition",
+              "sender": "factory",
+              "seq": 7,
+              "to": "starting",
+              "trigger": "tick",
+              "trigger_ref": "timeout:12"
+            },
+            {
+              "at": "2026-10-09T13:12:00Z",
+              "key": "restart:timeout:7",
+              "kind": "restart",
+              "sender": "factory",
+              "seq": 8,
+              "text": "starting timed out"
+            }
+          ]
+        },
+        "candidate": {
+          "present": true,
+          "value": [
+            {
+              "at": "2026-10-09T12:00:00Z",
+              "kind": "transition",
+              "seq": 1,
+              "to": "queued",
+              "trigger": "tick",
+              "trigger_ref": "fixture"
+            },
+            {
+              "at": "2026-10-09T12:00:00Z",
+              "from": "queued",
+              "key": "e1-w1:queued:starting:tick:1:0",
+              "kind": "transition",
+              "sender": "factory",
+              "seq": 2,
+              "to": "starting",
+              "trigger": "tick",
+              "trigger_ref": "tick:1"
+            },
+            {
+              "at": "<PROGRAM_AT:e1-w1:3>",
+              "key": "assign:e1-w1",
+              "kind": "done",
+              "sender": "factory",
+              "seq": 3,
+              "text": "assigned"
+            },
+            {
+              "at": "2026-10-09T12:00:00Z",
+              "key": "repo:worktree:2",
+              "kind": "request",
+              "recipient": "repo-worker",
+              "request": "worktree",
+              "sender": "factory",
+              "seq": 4
+            },
+            {
+              "at": "<WORKER_AT:e1-w1:5>",
+              "key": "repo:4",
+              "kind": "worktree_ready",
+              "sender": "factory",
+              "seq": 5,
+              "text": "<HOME>/src/r-worktrees/factory-e1-w1",
+              "trigger_ref": "4"
+            },
+            {
+              "at": "2026-10-09T12:07:00Z",
+              "key": "restart:dead:e1-s1-orchestrator:4",
+              "kind": "restart",
+              "sender": "factory",
+              "seq": 6,
+              "text": "factory:e1-s1:orchestrator was dead"
+            }
+          ]
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "relations",
+          "event_tick:e1-w1#7"
+        ],
+        "main": {
+          "present": true,
+          "value": "12"
+        },
+        "candidate": {
+          "present": false
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "relations",
+          "event_tick:e1-w1#8"
+        ],
+        "main": {
+          "present": true,
+          "value": "12"
+        },
+        "candidate": {
+          "present": false
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1",
+          "held"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": 60000000000
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1",
+          "held_since"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:10:00Z"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1-orchestrator",
+          "held_since"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:10:00Z"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-w1",
+          "attempt"
+        ],
+        "main": {
+          "present": true,
+          "value": 1
+        },
+        "candidate": {
+          "present": false
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-w1",
+          "held"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": 60000000000
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-w1",
+          "held_since"
+        ],
+        "main": {
+          "present": false
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:10:00Z"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "long_outage",
+        "path": [
+          "evidence",
+          "states",
+          "e1-w1",
+          "since"
+        ],
+        "main": {
+          "present": true,
+          "value": "2026-10-09T13:12:00Z"
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:00:00Z"
+        }
+      }
+    ],
+    "cli": []
+  }
+}

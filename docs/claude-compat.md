@@ -5,7 +5,7 @@ tracked versions in a staged revision. This supersedes the prior byte-equality-
 only harness policy, so ongoing regression checks can use an older committed
 harness baseline. Original committed bytes/hash/mode remain recorded and
 verified before overlay; replacements are explicit provenance, never trace
-normalization. All 61 Python tests passed with `-B`.
+normalization. The offline Python suite runs with `-B`.
 
 The parent's independent comparison at
 `/tmp/factory-claude-parent-run-ars3oppw/comparison` predates this driver policy
@@ -14,6 +14,19 @@ The parent/CI owner should run the full workflow against the actual committed
 `HEAD`. No working-repository commits, pushes, Go-owner edits or CI workflow
 edits were performed for this fix. Live auth/models/Claude/Docker/GitHub and
 native dispatch acceptance remain outside this deterministic driver task.
+
+## Reviewed differences
+
+`scripts/claude-compat-expected-differences.json` pins the 21 reviewed changes
+against main `e90b9bd`: six digest entries and fifteen scoped-clock entries.
+Each entry names the scenario, step and exact field path, with complete main
+and candidate values; `present: false` distinguishes a missing key from null.
+A changed array length records both complete arrays, including removed events.
+Both main-to-candidate comparisons must match this set exactly. Missing, extra
+or changed differences fail. CLI differences remain forbidden, and the two
+candidate lanes must still be identical. The list does not alter normalization.
+The driver records its contents and hash in provenance and refuses a different
+baseline. Review the list when the baseline or intended behavior changes.
 
 ## Modes
 

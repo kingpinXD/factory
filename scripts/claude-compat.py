@@ -29,7 +29,9 @@ CANDIDATE = ("internal/reconcile/claude_compat_candidate_test.go",
 REPLACEABLE_HARNESS = frozenset(SHARED + CANDIDATE)
 # Extend only after the exact fixture inventory is agreed with the capture owner.
 FIXTURES = ()
-OWN_FILES = {"scripts/claude-compat.py", "scripts/test_claude_compat.py", "docs/claude-compat.md"}
+EXPECTED_DIFFERENCES = "scripts/claude-compat-expected-differences.json"
+OWN_FILES = {"scripts/claude-compat.py", "scripts/test_claude_compat.py", "docs/claude-compat.md",
+             EXPECTED_DIFFERENCES}
 LANES = ("main-default", "candidate-default", "candidate-explicit")
 PACKAGES = {"reconcile": "internal/reconcile", "cli": "cmd/factory"}
 INVENTORY = {
@@ -737,6 +739,77 @@ def first_difference(a, b, where="$"):
     return None
 
 
+def trace_differences(main, candidate):
+    """Keep exact values, including removed array elements and absent dictionary keys."""
+    differences = []
+    absent = object()
+
+    def walk(left, right, path, scenario, step):
+        if type(left) is dict and type(right) is dict:
+            for key in sorted(left.keys() | right.keys()):
+                walk(left.get(key, absent), right.get(key, absent), path + [key], scenario, step)
+            return
+        if type(left) is list and type(right) is list and len(left) == len(right):
+            for index, (a, b) in enumerate(zip(left, right)):
+                walk(a, b, path + [index], scenario, step)
+            return
+        if left is not absent and right is not absent and first_difference(left, right) is None:
+            return
+        def value(item):
+            return {"present": False} if item is absent else {"present": True, "value": item}
+        differences.append({"scenario": scenario, "step": step, "path": path,
+                            "main": value(left), "candidate": value(right)})
+
+    for left_scenario, right_scenario in zip(main["scenarios"], candidate["scenarios"]):
+        for left_step, right_step in zip(left_scenario["steps"], right_scenario["steps"]):
+            walk(left_step["evidence"], right_step["evidence"], ["evidence"],
+                 left_scenario["name"], left_step["name"])
+    return differences
+
+
+def compare_trace(main, candidate, expected):
+    package = main["package"]
+    validate_trace(main, package)
+    validate_trace(candidate, package)
+    order = lambda entry: json.dumps([entry["scenario"], entry["step"], entry["path"]])
+    actual = sorted(trace_differences(main, candidate), key=order)
+    difference = first_difference(sorted(expected, key=order), actual)
+    require(not difference, f"expected differences do not match: {difference}")
+
+
+def load_expected_differences(repo, baseline):
+    expected = load_json(repo / EXPECTED_DIFFERENCES)
+    exact(expected, {"schema_version", "baseline", "packages"}, "expected differences")
+    require(type(expected["schema_version"]) is int and expected["schema_version"] == 1,
+            "expected differences schema_version must be integer 1")
+    require(expected["baseline"] == baseline, "expected differences do not name the frozen baseline")
+    exact(expected["packages"], PACKAGES, "expected difference packages")
+    require(expected["packages"]["cli"] == [], "CLI differences are forbidden")
+    for package, entries in expected["packages"].items():
+        require(type(entries) is list, "expected differences must be an array")
+        coordinates = set()
+        for entry in entries:
+            exact(entry, {"scenario", "step", "path", "main", "candidate"}, "expected difference")
+            require(type(entry["scenario"]) is str and entry["scenario"] in INVENTORY[package] and
+                    type(entry["step"]) is str and entry["step"] in INVENTORY[package][entry["scenario"]],
+                    "expected difference names an unknown scenario/step")
+            path = entry["path"]
+            require(type(path) is list and bool(path) and path[0] == "evidence" and
+                    all(type(part) is str or (type(part) is int and part >= 0) for part in path),
+                    "expected difference has an invalid field path")
+            coordinate = json.dumps([entry["scenario"], entry["step"], path])
+            require(coordinate not in coordinates, "duplicate expected difference")
+            coordinates.add(coordinate)
+            for side in ("main", "candidate"):
+                value = entry[side]
+                require(type(value) is dict and type(value.get("present")) is bool,
+                        "expected difference must distinguish present from absent")
+                exact(value, {"present", "value"} if value["present"] else {"present"}, "expected difference value")
+            require(first_difference(entry["main"], entry["candidate"]) is not None,
+                    "expected difference has equal values")
+    return expected
+
+
 def compare_cli_inputs(main, candidate, explicit, main_roots, candidate_roots):
     require(set(main) == set(candidate) == {"intake/defaults", "intake/overrides"}, "CLI input keys differ")
     for key in main:
@@ -1097,6 +1170,8 @@ def main(argv=None):
     main_tip = resolve(repo, "origin/main")
     require(git(repo, "merge-base", baseline, main_tip).decode().strip() == baseline,
             "baseline is not a committed ancestor of frozen origin/main")
+    expected = load_expected_differences(repo, baseline) if args.run else None
+    expected_hash = file_hash(repo / EXPECTED_DIFFERENCES) if args.run else None
     source = {}
     for label, sha in (("main", baseline), ("candidate", candidate)):
         source[label] = committed_tree(repo, sha)
@@ -1110,6 +1185,7 @@ def main(argv=None):
         "clock_policy": "fixed fixture clock; only source-enumerated provenance-verified worker/program event.at is tokenized; raw retained",
         "merge_base": git(repo, "merge-base", baseline, candidate).decode().strip(),
         "driver_sha256": file_hash(Path(__file__)),
+        "expected_differences": {"sha256": expected_hash, "content": expected},
         "overlay": {k: digest(v) for k, v in overlay.items()},
         "shared_overlay": list(SHARED + FIXTURES), "candidate_only_overlay": list(CANDIDATE),
         "sources": {label: records for label, (_, records) in source.items()},
@@ -1229,13 +1305,22 @@ def main(argv=None):
                         main_raw, cand_raw = raws["main-default", package], raws[lane, package]
                         compare_cli_inputs(main_raw["cli_inputs"], cand_raw["cli_inputs"], lane == "candidate-explicit",
                                            main_raw["roots"], cand_raw["roots"])
-                    diff = first_difference(left, right)
-                    require(not diff, f"{lane}/{package}: {diff}")
+                    try:
+                        compare_trace(left, right, expected["packages"][package])
+                    except Invalid as error:
+                        raise Invalid(f"{lane}/{package}: {error}") from error
+            for package in PACKAGES:
+                diff = first_difference(traces["candidate-default", package], traces["candidate-explicit", package])
+                require(not diff, f"candidate lanes/{package}: {diff}")
+            require(file_hash(repo / EXPECTED_DIFFERENCES) == expected_hash,
+                    "expected differences changed during operation")
             manifest["compatibility_pass"] = True
     manifest["runtime_status"] = "retained"
     check_dirty(repo)
     require(read_overlay(repo, [source["main"][1], source["candidate"][1]]) == overlay,
             "overlay changed before final result (including runtime retention checks)")
+    require(not args.run or file_hash(repo / EXPECTED_DIFFERENCES) == expected_hash,
+            "expected differences changed before final result")
     require(file_hash(Path(__file__)) == manifest["driver_sha256"], "driver changed during operation")
     manifest["status"] = "captures-compared" if args.run else "compiled-only-NOT-EXECUTED"
     manifest["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()

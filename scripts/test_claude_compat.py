@@ -73,6 +73,109 @@ def raw_fixture(package="cli"):
     return {"trace": value, "roots": roots, "identities": {}, "cli_inputs": inputs}
 
 
+class ExpectedDifferenceTests(unittest.TestCase):
+    def setUp(self):
+        self.main = trace("reconcile")
+        self.candidate = copy.deepcopy(self.main)
+        self.candidate["scenarios"][4]["steps"][2]["evidence"]["states"]["item-1"]["held_since"] = "2026-10-09T12:04:00Z"
+        self.expected = [{
+            "scenario": "restart", "step": "unknown_listing",
+            "path": ["evidence", "states", "item-1", "held_since"],
+            "main": {"present": False},
+            "candidate": {"present": True, "value": "2026-10-09T12:04:00Z"},
+        }]
+
+    def test_checked_in_list_has_reviewed_scope(self):
+        repo = Path(__file__).resolve().parent.parent
+        data = json.loads((repo / driver.EXPECTED_DIFFERENCES).read_text())
+        expected = driver.load_expected_differences(repo, data["baseline"])
+        self.assertEqual(expected["baseline"], "e90b9bd00aa2b345eb00466ec8d77a73e4b64ec4")
+        self.assertEqual(expected["packages"]["cli"], [])
+        entries = expected["packages"]["reconcile"]
+        self.assertEqual(len(entries), 21)
+        scope = {}
+        for entry in entries:
+            coordinate = (entry["scenario"], entry["step"])
+            scope[coordinate] = scope.get(coordinate, 0) + 1
+        self.assertEqual(scope, {("usage_policy", "long_wait"): 2,
+                                ("usage_policy", "needs_you_reason"): 4,
+                                ("restart", "unknown_listing"): 3,
+                                ("restart", "resume"): 2,
+                                ("restart", "long_outage"): 10})
+        with self.assertRaisesRegex(driver.Invalid, "frozen baseline"):
+            driver.load_expected_differences(repo, "a" * 40)
+
+    def test_invalid_reviewed_lists_are_rejected(self):
+        repo = Path(__file__).resolve().parent.parent
+        original = json.loads((repo / driver.EXPECTED_DIFFERENCES).read_text())
+        mutations = [
+            (lambda data: data["packages"]["cli"].append(copy.deepcopy(data["packages"]["reconcile"][0])),
+             "CLI differences are forbidden"),
+            (lambda data: data["packages"]["reconcile"].append(copy.deepcopy(data["packages"]["reconcile"][0])),
+             "duplicate expected difference"),
+            (lambda data: data["packages"]["reconcile"][0].update(main={"present": False, "value": None}),
+             "expected exactly"),
+            (lambda data: data["packages"]["reconcile"][0].update(main={"present": 1, "value": None}),
+             "distinguish present from absent"),
+        ]
+        for mutate, message in mutations:
+            with self.subTest(message=message):
+                changed = copy.deepcopy(original)
+                mutate(changed)
+                with patch.object(driver, "load_json", return_value=changed):
+                    with self.assertRaisesRegex(driver.Invalid, message):
+                        driver.load_expected_differences(repo, original["baseline"])
+
+    def test_exact_expected_differences_pass(self):
+        driver.compare_trace(self.main, self.candidate, self.expected)
+
+    def test_extra_difference_fails(self):
+        self.candidate["scenarios"][4]["steps"][2]["evidence"]["states"]["item-1"]["head"] = "changed"
+        with self.assertRaisesRegex(driver.Invalid, "expected differences do not match"):
+            driver.compare_trace(self.main, self.candidate, self.expected)
+
+    def test_missing_expected_difference_fails(self):
+        with self.assertRaisesRegex(driver.Invalid, "expected differences do not match"):
+            driver.compare_trace(self.main, self.main, self.expected)
+
+    def test_changed_expected_value_fails(self):
+        self.candidate["scenarios"][4]["steps"][2]["evidence"]["states"]["item-1"]["held_since"] = "2026-10-09T12:05:00Z"
+        with self.assertRaisesRegex(driver.Invalid, "expected differences do not match"):
+            driver.compare_trace(self.main, self.candidate, self.expected)
+
+    def test_absent_is_not_null(self):
+        self.main["scenarios"][4]["steps"][2]["evidence"]["states"]["item-1"]["held_since"] = None
+        with self.assertRaisesRegex(driver.Invalid, "expected differences do not match"):
+            driver.compare_trace(self.main, self.candidate, self.expected)
+
+    def test_changed_array_length_pins_removed_contents(self):
+        self.candidate = copy.deepcopy(self.main)
+        self.candidate["scenarios"][4]["steps"][2]["evidence"]["events"]["item-1"].pop()
+        expected = [{
+            "scenario": "restart", "step": "unknown_listing",
+            "path": ["evidence", "events", "item-1"],
+            "main": {"present": True, "value": [
+                {"kind": "worktree-ready", "lease": 7}, {"kind": "coordinator-launch", "lease": 7}]},
+            "candidate": {"present": True, "value": [{"kind": "worktree-ready", "lease": 7}]},
+        }]
+        driver.compare_trace(self.main, self.candidate, expected)
+        self.main["scenarios"][4]["steps"][2]["evidence"]["events"]["item-1"][1]["lease"] = 8
+        with self.assertRaisesRegex(driver.Invalid, "expected differences do not match"):
+            driver.compare_trace(self.main, self.candidate, expected)
+
+    def test_json_value_types_are_exact(self):
+        self.candidate = copy.deepcopy(self.main)
+        self.candidate["scenarios"][4]["steps"][2]["evidence"]["states"]["item-1"]["lease"] = True
+        expected = [{
+            "scenario": "restart", "step": "unknown_listing",
+            "path": ["evidence", "states", "item-1", "lease"],
+            "main": {"present": True, "value": 7},
+            "candidate": {"present": True, "value": 1},
+        }]
+        with self.assertRaisesRegex(driver.Invalid, "expected differences do not match"):
+            driver.compare_trace(self.main, self.candidate, expected)
+
+
 class SchemaTests(unittest.TestCase):
     def test_inventory_matches_independent_full_literal(self):
         self.assertEqual(driver.INVENTORY, EXPECTED_INVENTORY)

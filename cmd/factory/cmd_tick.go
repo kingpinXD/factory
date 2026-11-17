@@ -176,7 +176,7 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Var(pairs(ov.Tier), "set", "step=tier: the tier a step runs on for this input")
 	fs.Var(pairs(ov.Effort), "effort", "step=level: the effort a step runs at for this input")
-	executorName := fs.String("executor", "claude", "claude, z, or codex")
+	executorName := fs.String("executor", "claude", "claude or codex")
 	profile := fs.String("executor-profile", "", "selected executor profile")
 	var input string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -191,6 +191,10 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 	} else if fs.NArg() != 0 || input == "" {
 		fmt.Fprintln(stderr, usage)
 		return 2
+	}
+	if *executorName != "" && *executorName != "claude" && *executorName != "codex" {
+		fmt.Fprintf(stderr, "factory add: %v\n", executor.ErrUnsupportedExecutor)
+		return 1
 	}
 	d, err := newDeps(stdout)
 	if err != nil {

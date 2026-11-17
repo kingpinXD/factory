@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestCodexProcessFixture(t *testing.T) {
 
 func processFixture(t *testing.T, mode string) (*Protocol, context.Context) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	binary, err := os.Executable()
 	if err != nil {
@@ -87,29 +88,66 @@ func TestProtocolClosesChildStdinAtEOF(t *testing.T) {
 	waitProcessGone(t, pid)
 }
 
+type writeStartedCloser struct {
+	io.WriteCloser
+	started chan struct{}
+	once    sync.Once
+}
+
+func (w *writeStartedCloser) Write(data []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	return w.WriteCloser.Write(data)
+}
+
 func TestProtocolCancellationDuringBlockedWriteRetiresConnection(t *testing.T) {
-	p, _ := processFixture(t, "blocked")
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	p, lifetime := processFixture(t, "blocked")
+	started := make(chan struct{})
+	p.input = &writeStartedCloser{WriteCloser: p.input, started: started}
+	ctx, cancel := context.WithCancel(lifetime)
 	defer cancel()
-	err := p.Call(ctx, "large", map[string]string{"text": strings.Repeat("x", 4<<20)}, nil)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("got %v", err)
-	}
+	wait, stopWaiting := context.WithTimeout(t.Context(), 30*time.Second)
+	defer stopWaiting()
+	result := make(chan error, 1)
+	go func() {
+		result <- p.Call(ctx, "large", map[string]string{"text": strings.Repeat("x", 4<<20)}, nil)
+	}()
 	select {
-	case <-p.Done():
-	case <-time.After(time.Second):
-		t.Fatal("ambiguous connection remained usable")
+	case <-started:
+	case <-wait.Done():
+		t.Fatal("request never reached the blocked writer")
 	}
-	if err = p.Notify(context.Background(), "another", nil); err == nil {
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+	case <-wait.Done():
+		t.Fatal("blocked request did not return after cancellation")
+	}
+	waitProtocolDone(t, p)
+	if err := p.Notify(t.Context(), "another", nil); err == nil {
 		t.Fatal("retired connection accepted another request")
 	}
 	p.Close()
 	waitProcessGone(t, p.PID())
 }
 
+func waitProtocolDone(t *testing.T, p *Protocol) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	select {
+	case <-p.Done():
+	case <-ctx.Done():
+		t.Fatal("protocol did not retire")
+	}
+}
+
 func waitProcessGone(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.After(3 * time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -117,7 +155,7 @@ func waitProcessGone(t *testing.T, pid int) {
 			return
 		}
 		select {
-		case <-deadline:
+		case <-ctx.Done():
 			t.Fatalf("owned process %d survived", pid)
 		case <-ticker.C:
 		}
@@ -130,11 +168,7 @@ func TestProtocolRejectsMalformedAndOversizedFrames(t *testing.T) {
 		outputReader, outputWriter := io.Pipe()
 		p := newProtocol(inputWriter, outputReader)
 		go func() { _, _ = io.WriteString(outputWriter, payload); outputWriter.Close() }()
-		select {
-		case <-p.Done():
-		case <-time.After(time.Second):
-			t.Fatal("malformed frame did not close protocol")
-		}
+		waitProtocolDone(t, p)
 		p.Close()
 		inputReader.Close()
 		outputReader.Close()

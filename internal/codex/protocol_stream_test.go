@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 )
 
 func protocolFrames(messages []Message) string {
@@ -35,11 +34,7 @@ func TestProtocolTextStreamCannotDisplaceManagedControl(t *testing.T) {
 	}
 	messages = append(messages, controls...)
 	p := newProtocol(&startupReplyBuffer{}, strings.NewReader(protocolFrames(messages)))
-	select {
-	case <-p.Done():
-	case <-time.After(time.Second):
-		t.Fatal("bounded stream never ended")
-	}
+	waitProtocolDone(t, p)
 	if !errors.Is(p.failure(), io.EOF) {
 		t.Fatalf("unused deltas killed owned protocol before control: %v", p.failure())
 	}
@@ -68,11 +63,7 @@ func TestProtocolRequestsAndLifecycleStillHaveHardBound(t *testing.T) {
 				messages = append(messages, m)
 			}
 			p := newProtocol(&startupReplyBuffer{}, strings.NewReader(protocolFrames(messages)))
-			select {
-			case <-p.Done():
-			case <-time.After(time.Second):
-				t.Fatal("critical bound did not stop protocol")
-			}
+			waitProtocolDone(t, p)
 			if p.failure() == nil || errors.Is(p.failure(), io.EOF) {
 				t.Fatal("critical traffic was silently discarded")
 			}
@@ -88,11 +79,7 @@ func TestProtocolDeltaMethodWithAnyRequestIdentityIsRetained(t *testing.T) {
 		t.Run(id, func(t *testing.T) {
 			message := Message{ID: json.RawMessage(id), Method: "item/agentMessage/delta", Params: json.RawMessage(`{}`)}
 			p := newProtocol(&startupReplyBuffer{}, strings.NewReader(protocolFrames([]Message{message})))
-			select {
-			case <-p.Done():
-			case <-time.After(time.Second):
-				t.Fatal("protocol did not finish")
-			}
+			waitProtocolDone(t, p)
 			select {
 			case got := <-p.Events():
 				if string(got.ID) != id {

@@ -242,9 +242,24 @@ func TestProgrammeAcceptanceBaseUsesRealAuthenticatedGitAndOneFetch(t *testing.T
 	bare := filepath.Join(proof, "repository.git")
 	now := time.Now().UTC()
 	request := codex.ProgramReadRequest{Schema: 2, RequestID: strings.Repeat("a", 64), Kind: "acceptance_read", Operation: "repo_base", Input: toolcontract.GitHubReadInput{Repo: "o/r", Base: "main"}, Clone: bare, Worktree: bare + "-worktrees/factory-acceptance", Common: bare, AdmittedAt: now, Deadline: now.Add(time.Minute)}
-	// This fixed test helper returns only the synthetic environment token. The
-	// production helper independently requires exact HTTPS github.com/repo.
-	helper := `!f() { [ "$1" = get ] || return 0; printf 'username=x-access-token\npassword=%s\n' "$GH_TOKEN"; }; f`
+	credential, err := codex.ProgramGitCredentialHelper(request.Input.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+	credentialScript := filepath.Join(root, "credential-helper")
+	if err := os.WriteFile(credentialScript, []byte(strings.TrimPrefix(credential, "!")+` "$@"`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	credentialInput := filepath.Join(root, "credential-input")
+	// Only translate the fixture's exact transport scope. All other input,
+	// including Git's capability and authentication fields, reaches the real parser.
+	helper := `!f() {
+ [ "$1" = get ] || return 0
+ tee -a ` + quote(credentialInput) + ` |
+ sed -e 's|^protocol=http$|protocol=https|' -e ` + quote("s|^host="+strings.ReplaceAll(strings.TrimPrefix(server.URL, "http://"), ".", `\.`)+"$|host=github.com|") + ` -e 's|^path=r\.git$|path=o/r.git|' |
+ /bin/sh ` + quote(credentialScript) + ` "$@"
+}; f`
 	actualGit, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +269,6 @@ func TestProgrammeAcceptanceBaseUsesRealAuthenticatedGitAndOneFetch(t *testing.T
 		t.Fatal(err)
 	}
 	countFile := filepath.Join(root, "fetch-count")
-	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 	script := fmt.Sprintf("#!/bin/sh\nfor arg do\n if [ \"$arg\" = fetch ]; then printf 'fetch\\n' >> %s; fi\ndone\nexec %s \"$@\"\n", quote(countFile), quote(actualGit))
 	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -268,6 +282,23 @@ func TestProgrammeAcceptanceBaseUsesRealAuthenticatedGitAndOneFetch(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	result, err := fetchProgramBaseTransport(ctx, request, "fixture author", "fixture@example.test", server.URL+"/r.git", helper)
+	input, inputErr := os.ReadFile(credentialInput)
+	version := run("--version")
+	t.Logf("%s credential get input:\n%s", version, input)
+	if inputErr != nil || !strings.Contains(string(input), "protocol=http\n") || !strings.Contains(string(input), "path=r.git\n") {
+		t.Fatalf("host Git did not request fixture credentials: %v", inputErr)
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "git version %d.%d", &major, &minor); err != nil {
+		t.Fatal(err)
+	}
+	if major > 2 || major == 2 && minor >= 46 {
+		for _, line := range []string{"capability[]=authtype\n", `wwwauth[]=Basic realm="fixture"` + "\n"} {
+			if !strings.Contains(string(input), line) {
+				t.Fatalf("modern Git credential input omitted %q", line)
+			}
+		}
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

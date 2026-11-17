@@ -126,6 +126,7 @@ func githubCredentialHelper(path string) string {
    host=github.com) [ -z "$host" ] || return 0; host=1 ;;
    path=` + path + `) [ -z "$repository" ] || return 0; repository=1 ;;
    username=*) [ -z "$username" ] || return 0; username=1 ;;
+   'capability[]='*|'wwwauth[]='*|'state[]='*) ;;
    '') break ;;
    *) return 0 ;;
   esac

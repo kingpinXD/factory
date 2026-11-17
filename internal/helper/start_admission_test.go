@@ -148,7 +148,8 @@ func TestRecoveryAfterValidClaimKeepsJournalAndFenceBarrier(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- execute(ctx, d, job, nil, nil) }()
+			monitor := testExecutionQuota(t, ctx, d, job, QuotaPolicy{80, 88, 15 * time.Minute})
+			go func() { done <- execute(ctx, d, job, monitor, nil) }()
 			select {
 			case <-claimed:
 			case <-ctx.Done():
@@ -270,8 +271,9 @@ func TestClaimedWriterIsPhysicallyFencedBeforeTerminalRecovery(t *testing.T) {
 					releaseRun.Do(func() { close(returnRun) })
 				}
 			}
+			monitor := testExecutionQuota(t, ctx, d, job, QuotaPolicy{80, 88, 15 * time.Minute})
 			go func() {
-				done <- execute(ctx, d, job, nil, nil)
+				done <- execute(ctx, d, job, monitor, nil)
 				close(executeFinished)
 			}()
 			select {

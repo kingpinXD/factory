@@ -143,7 +143,7 @@ func setup(t *testing.T) (Service, RunnerDeps, Request) {
 	}
 	authority := &fakeAuthority{scope: Scope{EpicID: "epic1", OwnerID: "owner1", WorkID: "work1", Generation: "g1", Worktree: work, OutputRoot: output}}
 	service := Service{Brain: brain, Authority: authority}
-	deps := RunnerDeps{Service: service, FactoryBin: binary, Backends: map[string]Backend{}, Quotas: map[string]UsageReader{"codex": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: func(context.Context, Job, RoundResult) error { return nil }}
+	deps := RunnerDeps{Service: service, Now: time.Now, FactoryBin: binary, Backends: map[string]Backend{}, Quotas: map[string]UsageReader{"codex": usageFunc(func(context.Context) (QuotaSnapshot, error) { return quota(time.Now(), 10), nil })}, Notify: func(context.Context, Job, RoundResult) error { return nil }}
 	req := Request{SchemaVersion: 1, RequestKey: "request1", OwnerID: "owner1", WorkID: "work1", Component: "reviewer", Prompt: "review"}
 	return service, deps, req
 }

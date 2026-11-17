@@ -317,6 +317,31 @@ func (w *RemoteWorkspace) Check(ctx context.Context, o RemoteOwner) error {
 	return withRemote(ctx, o, func(a *remoteAttempt) error { return w.check(ctx, a) })
 }
 
+// ObserveWriterAbsence does not stop or remove containers. A missing create
+// intent is positive no-launch evidence; otherwise the recorded daemon must
+// confirm that the exact owned container no longer exists.
+func (w *RemoteWorkspace) ObserveWriterAbsence(ctx context.Context, o RemoteOwner) error {
+	return withRemote(ctx, o, func(a *remoteAttempt) error {
+		if a.SchemaVersion != 1 {
+			return errUnknown
+		}
+		if a.Container.Daemon == "" {
+			if a.Phase != "prepared" && !(a.Phase == "fenced" && a.Fenced) {
+				return errUnknown
+			}
+			return nil
+		}
+		view, err := findContainer(ctx, w.engine, a.Container)
+		if err != nil {
+			return err
+		}
+		if view != nil {
+			return safeError("remote container still exists")
+		}
+		return nil
+	})
+}
+
 func (w *RemoteWorkspace) Fence(ctx context.Context, o RemoteOwner) error {
 	return withRemote(ctx, o, func(a *remoteAttempt) error {
 		if a.SchemaVersion != 1 {

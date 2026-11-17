@@ -139,6 +139,11 @@ func runAcceptanceModelProof(ctx context.Context, brain string, selection execut
 	}
 	defer proxy.Close()
 	environment = proxy.Environment()
+	if probe != nil {
+		if err := probe.recordProvider(p); err != nil {
+			return err
+		}
+	}
 	if err := p.Call(ctx, "environment/add", map[string]any{"environmentId": environment.ID, "execServerUrl": environment.URL, "authBearerToken": environment.Token, "connectTimeoutMs": 5000}, nil); err != nil {
 		return err
 	}
@@ -257,6 +262,11 @@ func runAcceptanceModelProof(ctx context.Context, brain string, selection execut
 			}
 			defer p.Close()
 			servers = append(servers, p)
+			if probe != nil {
+				if err := probe.recordProvider(p); err != nil {
+					return err
+				}
+			}
 			if probe != nil {
 				if err := probe.observeModelEnvironment(ctx, p, remote, environment, owner); err != nil {
 					return err

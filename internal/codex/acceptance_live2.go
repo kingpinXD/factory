@@ -37,6 +37,7 @@ type Contract2Probe struct {
 	completed   bool
 	closed      bool
 	credentials []contract2CredentialEvidence
+	providers   []*Protocol
 }
 
 type contract2CredentialEvidence struct {
@@ -108,7 +109,7 @@ func PrepareContract2Probe(ctx context.Context, brain, factoryBin string, select
 		release()
 		return fail(err)
 	}
-	if err := rejectUnretiredContract2Proofs(brain); err != nil {
+	if err := retireContract2Proofs(ctx, brain); err != nil {
 		release()
 		return fail(err)
 	}
@@ -118,18 +119,20 @@ func PrepareContract2Probe(ctx context.Context, brain, factoryBin string, select
 		return fail(err)
 	}
 	owner := Owner{ID: "acceptance-bootstrap-" + filepath.Base(dir), Generation: binding, Worktree: dir, RunDir: filepath.Join(dir, "bootstrap"), OutputRoot: dir, Selection: selection, ControlOnly: true, CodexContract: CodexContractVersion}
-	if err := writeJSON(filepath.Join(dir, "contract2-enrollment.json"), owner); err != nil {
-		release()
-		return fail(err)
-	}
-	containment := remoteWorkspaceDefault()
-	if _, err := containment.Prepare(ctx, owner); err != nil {
+	producer, err := CaptureProcess(os.Getpid())
+	if err != nil {
 		release()
 		return fail(err)
 	}
 	probe := &Contract2Probe{brain: brain, directory: dir, selection: selection, bootstrap: owner, server: server, ctx: ctx, cancel: cancel, release: release, creatorPID: os.Getpid(), target: AcceptanceReadTarget{Repository: target, Clone: registered.Path, Bare: filepath.Join(dir, "repository.git"), Worktree: filepath.Join(dir, "repository.git-worktrees", "factory-acceptance"), WorkID: "acceptance", AuthorName: author, AuthorMail: email}}
-	producer, err := CaptureProcess(os.Getpid())
-	if err != nil {
+	if err := writeJSON(filepath.Join(dir, "probe-owner.json"), contract2ProbeOwner{Owner: owner, Producer: producer}); err != nil {
+		return probe, err
+	}
+	if err := writeJSON(filepath.Join(dir, "contract2-enrollment.json"), owner); err != nil {
+		return probe, err
+	}
+	containment := remoteWorkspaceDefault()
+	if _, err := containment.Prepare(ctx, owner); err != nil {
 		return probe, err
 	}
 	content, err := readAcceptanceArtifact(filepath.Join(owner.RunDir, "containment.json"))
@@ -160,46 +163,10 @@ func PrepareContract2Probe(ctx context.Context, brain, factoryBin string, select
 	if err != nil {
 		return probe, err
 	}
+	if err := probe.recordProvider(server); err != nil {
+		return probe, err
+	}
 	return probe, nil
-}
-
-// Interrupted qualifications need a separate safe-retirement decision. A new
-// executable or selection must not silently replace their unresolved writers.
-func rejectUnretiredContract2Proofs(brain string) error {
-	root := filepath.Join(store.Factory(brain), "codex", "acceptance")
-	bindings, err := os.ReadDir(root)
-	if err != nil {
-		return err
-	}
-	if len(bindings) > 256 {
-		return ErrObservationUnknown
-	}
-	for _, binding := range bindings {
-		if !binding.IsDir() {
-			return ErrObservationUnknown
-		}
-		proofs, err := os.ReadDir(filepath.Join(root, binding.Name()))
-		if err != nil {
-			return err
-		}
-		if len(proofs) > 256 {
-			return ErrObservationUnknown
-		}
-		for _, proof := range proofs {
-			if !proof.IsDir() {
-				continue
-			}
-			for _, leaf := range []string{"contract2-enrollment.json", "read-grant.json"} {
-				name := filepath.Join(root, binding.Name(), proof.Name(), leaf)
-				if _, err := os.Lstat(name); err == nil {
-					return fmt.Errorf("%w: prior contract2 proof requires verified retirement: %s", ErrAcceptancePending, filepath.Dir(name))
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func (p *Contract2Probe) ReadGrant() AcceptanceReadGrantRef {
@@ -288,51 +255,58 @@ func (p *Contract2Probe) Close(ctx context.Context) error {
 	defer p.cancel()
 	defer p.server.Close()
 	defer p.release()
-	if p.grant.SHA256 == (effects.Digest{}) {
-		return remoteWorkspaceDefault().Fence(ctx, p.bootstrap)
+	_, grantErr := os.Lstat(filepath.Join(p.directory, "read-grant.json"))
+	if errors.Is(grantErr, os.ErrNotExist) {
+		if _, err := os.Lstat(filepath.Join(p.bootstrap.RunDir, "containment.json")); err == nil {
+			if err := remoteWorkspaceDefault().Fence(ctx, p.bootstrap); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := p.server.Close(); err != nil {
+			return err
+		}
+		return retireContract2Enrollment(ctx, p.brain, p.directory, p)
 	}
 	if err := sealAcceptanceReadGrant(ctx, p.brain, p.grant, "cancelled"); err != nil {
 		return err
 	}
-	subject := ProgramProcessSubject{Kind: "acceptance_read", AcceptanceRead: &p.grant}
-	id, err := ProgramProcessSubjectID(subject)
+	if err := contract2ReadProcessSettled(ctx, p.brain, p.grant, func(string) error { return nil }); err != nil {
+		return err
+	}
+	if err := remoteWorkspaceDefault().Fence(ctx, p.bootstrap); err != nil {
+		return err
+	}
+	for _, server := range append([]*Protocol{p.server}, p.providers...) {
+		if err := server.Close(); err != nil {
+			return err
+		}
+	}
+	return retireContract2Proof(ctx, p.brain, p.directory, p)
+}
+
+func (p *Contract2Probe) recordProvider(server *Protocol) error {
+	identity, err := CaptureProcess(server.PID())
 	if err != nil {
 		return err
 	}
-	var selected ProgramProcessSelection
-	name := filepath.Join(store.Factory(p.brain), "effects", "dispatch", id, "selected.json")
-	if _, err := os.Lstat(name); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return err
-		}
-		data, err := readAcceptanceArtifact(name)
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal(data, &selected); err != nil {
-			return err
-		}
-		path, err := ProgramProcessPath(p.brain, id, selected.ClaimID)
-		if err != nil {
-			return err
-		}
-		data, err = readAcceptanceArtifact(path)
-		if err != nil {
-			return err
-		}
-		var process ProgramProcessRecord
-		if err := json.Unmarshal(data, &process); err != nil {
-			return err
-		}
-		if selected != ProgramProcessSelectionFor(process) || process.Subject.Kind != "acceptance_read" || process.Subject.AcceptanceRead == nil || *process.Subject.AcceptanceRead != p.grant {
-			return ErrObservationUnknown
-		}
-		ref := ProgramProcessRef{SubjectID: id, ClaimID: process.ClaimID, Revision: process.Revision, SHA256: sha256.Sum256(data)}
-		if _, err := ReadClosedProgramProcess(ctx, p.brain, ref); err != nil {
-			return fmt.Errorf("%w: acceptance read has not physically settled", ErrObservationUnknown)
+	name := filepath.Join(p.directory, "provider-processes.json")
+	var providers []contract2Provider
+	if err := readJSON(name, &providers); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, provider := range providers {
+		if provider.Identity == identity {
+			return nil
 		}
 	}
-	return remoteWorkspaceDefault().Fence(ctx, p.bootstrap)
+	providers = append(providers, contract2Provider{Identity: identity})
+	if err := writeJSON(name, providers); err != nil {
+		return err
+	}
+	p.providers = append(p.providers, server)
+	return nil
 }
 
 func (p *Contract2Probe) observeModelEnvironment(ctx context.Context, server *Protocol, remote *RemoteClient, environment RemoteEnvironment, owner Owner) error {

@@ -58,6 +58,16 @@ no environment variable or flag that marks unexecuted checks successful.
 Version 2 also requires a registered private repository and a passing
 `factory codex-verify --contract 2 --repo <owner/repo> --base <branch>`.
 
+A failed contract-2 run keeps its proof files for audit. Clean shutdown seals the
+read grant, checks that its read process and contained writers have stopped, and
+records retirement. The next verification also checks interrupted proofs under
+their generation locks. It retires them only when their own evidence proves the
+owner and writers are gone. A held lock, unsealed grant, surviving writer or
+unknown observation keeps verification blocked and names the missing proof.
+Existing lock files alone do not mean a process still holds their locks. Older
+proofs without owner evidence or with unrecorded model processes remain blocked;
+do not delete their files to bypass the check.
+
 ## Process and tool ownership
 
 A detached factory host owns each coordinator app-server, event stream, command

@@ -155,7 +155,7 @@ func TestContract2ProofEnrollmentBlocksReplacementWithoutGrant(t *testing.T) {
 	if err := writeJSON(filepath.Join(proof, "contract2-enrollment.json"), map[string]string{"actual-proof": "started"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := rejectUnretiredContract2Proofs(brain); !errors.Is(err, ErrAcceptancePending) {
+	if err := retireContract2Proofs(t.Context(), brain); !errors.Is(err, ErrAcceptancePending) {
 		t.Fatalf("interrupted qualification was replaced: %v", err)
 	}
 }

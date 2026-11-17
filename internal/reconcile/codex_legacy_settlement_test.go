@@ -165,47 +165,7 @@ func TestCodexLegacyHeldSessionSettlesOnceWithObservedDeliveryOutcome(t *testing
 				}
 			}
 			runtime.AttemptCapabilities = b2AttemptCaps{}
-			t.Cleanup(func() {
-				for _, name := range []string{heldName, healthyName} {
-					view, err := runtime.InspectCoordinatorAttemptByName(ctx, name)
-					if os.IsNotExist(err) {
-						continue
-					}
-					if err != nil {
-						t.Error(err)
-						continue
-					}
-					saved := settlementAttemptRecord(t, w.brain, view.Ref)
-					if saved.Server.PID <= 1 {
-						continue
-					}
-					alive, err := saved.Server.Alive()
-					if err != nil {
-						t.Error("cleanup exact server", err)
-						continue
-					}
-					if alive {
-						if err = syscall.Kill(saved.Server.PID, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-							t.Error(err)
-						}
-					}
-				}
-				for _, name := range []string{heldName, healthyName} {
-					view, err := runtime.InspectCoordinatorAttemptByName(ctx, name)
-					if err != nil {
-						continue
-					}
-					saved := settlementAttemptRecord(t, w.brain, view.Ref)
-					if saved.Host.PID <= 1 {
-						continue
-					}
-					deadline := time.Now().Add(10 * time.Second)
-					for codex.VerifyOwnedProcessGroupGone(saved.Host) != nil && time.Now().Before(deadline) {
-						time.Sleep(5 * time.Millisecond)
-					}
-				}
-				managerCleanupOwnedChildren(t, w.brain, runtime, heldName)
-			})
+			t.Cleanup(func() { managerCleanupOwnedChildren(t, w.brain, runtime, heldName) })
 			if err = manager.save(); err != nil {
 				t.Fatal(err)
 			}

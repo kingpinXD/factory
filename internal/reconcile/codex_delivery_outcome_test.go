@@ -20,32 +20,9 @@ import (
 	"github.com/kingpinXD/factory/internal/store"
 )
 
-func cleanupSettlementSessions(t *testing.T, brain string, runtime *codex.Runtime, names ...string) {
+func cleanupSettlementSessions(t *testing.T, brain string, runtime *codex.Runtime, _ ...string) {
 	t.Helper()
-	// Signal all fixture servers before the shared helper checks every host marker.
-	for _, name := range names {
-		view, err := runtime.InspectCoordinatorAttemptByName(context.Background(), name)
-		if err != nil {
-			continue
-		}
-		record := settlementAttemptRecord(t, brain, view.Ref)
-		if record.Server.PID <= 1 {
-			continue
-		}
-		alive, err := record.Server.Alive()
-		if err != nil {
-			t.Error(err)
-			continue
-		}
-		if alive {
-			if err := syscall.Kill(record.Server.PID, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-				t.Error(err)
-			}
-		}
-	}
-	for _, name := range names {
-		managerCleanupOwnedChildren(t, brain, runtime, name)
-	}
+	managerCleanupOwnedChildren(t, brain, runtime, "")
 }
 
 func TestCodexCurrentThreadReceiptControlsPendingDelivery(t *testing.T) {

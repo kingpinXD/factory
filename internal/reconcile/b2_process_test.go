@@ -120,6 +120,11 @@ func TestB2OfflineProcess(t *testing.T) {
 	}
 	role := args[at+1]
 	args = args[at+2:]
+	watchRole := role
+	if role == "factory" && len(args) > 0 && args[0] == "codex-host" {
+		watchRole += ":host"
+	}
+	watchFixtureParent(os.Args, watchRole)
 	flag := func(name string) string {
 		for i, a := range args {
 			if a == name && i+1 < len(args) {
@@ -264,6 +269,7 @@ func b2ReadyCoordinator(t *testing.T, w *world) (*codex.Runtime, codex.AttemptRe
 	if err != nil {
 		t.Fatal(err)
 	}
+	processes := newFixtureProcesses(t, w.brain)
 	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\\''") + "'" }
 	for _, role := range []string{"factory", "provider"} {
 		fixtureEnv := ""
@@ -272,7 +278,7 @@ func b2ReadyCoordinator(t *testing.T, w *world) (*codex.Runtime, codex.AttemptRe
 		}
 		// Only fixture children skip the race detector exit delay; the parent keeps its settings.
 		fixtureEnv += "export GORACE=" + quote(os.Getenv("GORACE")+" atexit_sleep_ms=0") + "\n"
-		script := "#!/bin/sh\n" + fixtureEnv + "exec " + quote(binary) + " -test.run '^TestB2OfflineProcess$' -- --b2-role " + role + " \"$@\"\n"
+		script := "#!/bin/sh\n" + fixtureEnv + "exec " + quote(binary) + " -test.run '^TestB2OfflineProcess$' --" + processes.flags() + " --b2-role " + role + " \"$@\"\n"
 		p := filepath.Join(w.brain, "b2-"+role)
 		if err := os.WriteFile(p, []byte(script), 0700); err != nil {
 			t.Fatal(err)
@@ -305,15 +311,6 @@ func b2ReadyCoordinator(t *testing.T, w *world) (*codex.Runtime, codex.AttemptRe
 	if _, _, err := codex.CoordinatorAttemptStartAuthority(w.brain, ref.SessionID); err == nil {
 		t.Fatal("prepared coordinator reported ready")
 	}
-	state := filepath.Join(store.Factory(w.brain), "codex/sessions", ref.SessionID, "attempts", ref.AttemptID, "state.json")
-	t.Cleanup(func() {
-		var record codex.Record
-		if store.ReadJSON(state, &record) == nil && record.Host.PID > 1 && record.Host.Group == record.Host.PID {
-			if alive, err := record.Host.Alive(); err == nil && alive {
-				syscall.Kill(-record.Host.Group, syscall.SIGKILL)
-			}
-		}
-	})
 	if err := r.LaunchAttempt(context.Background(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -522,15 +519,6 @@ func TestB2ActualReviewRoundsKeepConversationAndRequireOrchestratorEnd(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			successorState := filepath.Join(store.Factory(w.brain), "codex/sessions", successor.SessionID, "attempts", successor.AttemptID, "state.json")
-			t.Cleanup(func() {
-				var v codex.Record
-				if store.ReadJSON(successorState, &v) == nil && v.Host.PID > 1 && v.Host.Group == v.Host.PID {
-					if alive, err := v.Host.Alive(); err == nil && alive {
-						syscall.Kill(-v.Host.Group, syscall.SIGKILL)
-					}
-				}
-			})
 			if err := runtime.LaunchAttempt(ctx, successor); err != nil {
 				t.Fatal(err)
 			}

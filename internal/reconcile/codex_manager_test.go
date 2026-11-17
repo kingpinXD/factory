@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -56,6 +55,11 @@ func TestS6ManagerOfflineFactory(t *testing.T) {
 		}
 		return ""
 	}
+	watchRole := "factory"
+	if len(args) > 0 && args[0] == "codex-host" {
+		watchRole += ":host"
+	}
+	watchFixtureParent(os.Args, watchRole)
 	brain := flag("--brain")
 	traceCheck := func(stage string) {
 		if len(args) == 0 || args[0] != "codex-control" {
@@ -130,8 +134,9 @@ func ordinaryManagerFixture(t *testing.T) (*world, *run, *codex.Runtime, *entity
 	if err != nil {
 		t.Fatal(err)
 	}
+	processes := newFixtureProcesses(t, w.brain)
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
-	for role, command := range map[string]string{"factory": "-test.run '^TestS6ManagerOfflineFactory$' -- --s6-manager-host", "provider": "-test.run '^TestB2OfflineProcess$' -- --b2-role provider"} {
+	for role, command := range map[string]string{"factory": "-test.run '^TestS6ManagerOfflineFactory$' --" + processes.flags() + " --s6-manager-host", "provider": "-test.run '^TestB2OfflineProcess$' --" + processes.flags() + " --b2-role provider"} {
 		fixtureEnv := ""
 		if role == "provider" && os.Getenv("FACTORY_E6_ADVANCE_TURNS") == "1" {
 			fixtureEnv = "export FACTORY_E6_ADVANCE_TURNS=1\n"
@@ -437,84 +442,11 @@ func TestManagerSameSelectedAttemptTwoQueuedChildrenHaveOneActualClaim(t *testin
 	}
 }
 
-func managerCleanupOwnedChildren(t *testing.T, brain string, rt *codex.Runtime, name string) {
+// Cleanup covers the entire test brain, including superseded and unclaimed children.
+func managerCleanupOwnedChildren(t *testing.T, brain string, _ *codex.Runtime, _ string) {
 	t.Helper()
-	current, err := rt.InspectCoordinatorAttemptByName(context.Background(), name)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			t.Error("cleanup current attempt", err)
-		}
-		return
-	}
-	for ref := current.Ref; ref != (codex.AttemptRef{}); {
-		view, err := rt.InspectHistoricalCoordinatorAttempt(context.Background(), ref)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		var saved codex.Record
-		if err = store.ReadJSON(filepath.Join(store.Factory(brain), "codex/sessions", ref.SessionID, "attempts", ref.AttemptID, "state.json"), &saved); err != nil {
-			t.Error(err)
-			return
-		}
-		if saved.Host.PID > 1 && saved.Host.Group == saved.Host.PID && saved.Host.Birth != "" {
-			if saved.Server.PID > 1 {
-				alive, err := saved.Server.Alive()
-				if err != nil {
-					t.Error("cleanup exact server identity", err)
-				} else if alive {
-					if err = syscall.Kill(saved.Server.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-						t.Error(err)
-					}
-				}
-			}
-			deadline := time.Now().Add(10 * time.Second)
-			for time.Now().Before(deadline) {
-				if err = codex.VerifyOwnedProcessGroupGone(saved.Host); err == nil {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			if err = codex.VerifyOwnedProcessGroupGone(saved.Host); err != nil {
-				t.Error("actual offline host did not reap its server", err)
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				stopErr := codex.StopOwnedProcessGroup(ctx, saved.Host)
-				cancel()
-				if stopErr != nil {
-					t.Error(stopErr)
-				}
-			}
-			if err = codex.VerifyOwnedProcessGroupGone(saved.Host); err != nil {
-				t.Error("fixture group remains before directory removal", err)
-			}
-		}
-		ref = view.Predecessor
-	}
-	entries, err := os.ReadDir(brain)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), "s6-host-entered-") {
-			continue
-		}
-		var identity codex.ProcessIdentity
-		raw, err := os.ReadFile(filepath.Join(brain, entry.Name()))
-		if err != nil || json.Unmarshal(raw, &identity) != nil {
-			t.Error("actual queued child identity missing", err)
-			continue
-		}
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			if err = codex.VerifyOwnedProcessGroupGone(identity); err == nil {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		if err = codex.VerifyOwnedProcessGroupGone(identity); err != nil {
-			t.Error("queued child not reaped", err)
-		}
+	if processes, ok := detachedFixtures.Load(brain); ok {
+		processes.(*fixtureProcesses).stop(t)
 	}
 }
 

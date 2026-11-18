@@ -207,6 +207,9 @@ func (r *run) pauseCodexSessions() {
 		q := r.codexQuota(e, false)
 		if runtime, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
 			view, err := r.coordinatorAttemptView(e, runtime)
+			if errors.Is(err, os.ErrNotExist) && r.lookupSession(e.entry.Epic, e.session.Name).Presence == session.Absent {
+				continue
+			}
 			if err != nil {
 				r.fail("%s: %v", e.id, err)
 				continue

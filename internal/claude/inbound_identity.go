@@ -38,7 +38,7 @@ func (c Client) configuredPrevious(ctx context.Context, id, conversation string,
 			if conversation != "" && row.SessionID != conversation {
 				return Session{}, fmt.Errorf("resume %s: conversation identity changed", id)
 			}
-			if row.Name == "" && row.SessionID != "" {
+			if (row.Name == "" || strings.HasPrefix(row.Name, "/")) && row.SessionID != "" {
 				dir, err := c.RunDir(spec.Name)
 				if err != nil {
 					return Session{}, err

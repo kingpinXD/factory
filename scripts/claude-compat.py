@@ -784,7 +784,8 @@ def load_expected_differences(repo, baseline):
             "expected differences schema_version must be integer 1")
     require(expected["baseline"] == baseline, "expected differences do not name the frozen baseline")
     exact(expected["packages"], PACKAGES, "expected difference packages")
-    require(expected["packages"]["cli"] == [], "CLI differences are forbidden")
+    require(type(expected["packages"]["cli"]) is list and len(expected["packages"]["cli"]) in {0, 2},
+            "CLI differences are limited to run-local inbound settings")
     for package, entries in expected["packages"].items():
         require(type(entries) is list, "expected differences must be an array")
         coordinates = set()
@@ -807,7 +808,23 @@ def load_expected_differences(repo, baseline):
                 exact(value, {"present", "value"} if value["present"] else {"present"}, "expected difference value")
             require(first_difference(entry["main"], entry["candidate"]) is not None,
                     "expected difference has equal values")
+            if package == "cli":
+                require_cli_inbound_difference(entry)
     return expected
+
+
+def require_cli_inbound_difference(entry):
+    message = "CLI differences are limited to run-local inbound settings"
+    path = entry["path"]
+    require(len(path) == 5 and path[:2] == ["evidence", "calls"] and
+            type(path[2]) is int and path[3] == "artifacts" and type(path[4]) is str and
+            path[4].startswith("<HOME>/.factory/runs/factory-") and path[4].endswith("/settings.json"), message)
+    require(all(entry[side]["present"] and type(entry[side]["value"]) is str
+                for side in ("main", "candidate")), message)
+    main = parse_json(entry["main"]["value"], message)
+    candidate = parse_json(entry["candidate"]["value"], message)
+    require(type(main) is dict and type(candidate) is dict and "crossSessionInbound" not in main, message)
+    require(candidate.pop("crossSessionInbound", None) == "accept" and first_difference(candidate, main) is None, message)
 
 
 def compare_cli_inputs(main, candidate, explicit, main_roots, candidate_roots):

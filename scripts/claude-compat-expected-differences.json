@@ -4,6 +4,139 @@
   "packages": {
     "reconcile": [
       {
+        "scenario": "epic_lifecycle",
+        "step": "intake",
+        "path": [
+          "evidence",
+          "calls",
+          1,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610091-planner/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "epic_lifecycle",
+        "step": "prepared",
+        "path": [
+          "evidence",
+          "calls",
+          11,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610091-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "epic_lifecycle",
+        "step": "review_merge",
+        "path": [
+          "evidence",
+          "calls",
+          53,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610091-s2-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091-s2\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091-s2\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "configuration",
+        "step": "defaults",
+        "path": [
+          "evidence",
+          "calls",
+          1,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610091-planner/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "configuration",
+        "step": "overrides",
+        "path": [
+          "evidence",
+          "calls",
+          1,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610092-planner/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610092\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610092\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "configuration",
+        "step": "overrides",
+        "path": [
+          "evidence",
+          "calls",
+          13,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610092-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610092-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610092-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "usage_policy",
+        "step": "hold",
+        "path": [
+          "evidence",
+          "calls",
+          10,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
         "scenario": "usage_policy",
         "step": "long_wait",
         "path": [
@@ -97,6 +230,63 @@
         "candidate": {
           "present": true,
           "value": "factory: long waits:\n - e1-w1 (o/r#12) in exploring for 51h0m0s, waiting on the account (near limit)\n - e1-w2 (o/r#12) in needs_you for 25h0m0s, waiting on you: the same error 3 times (dead-lettered): fixture requires an operator decision"
+        }
+      },
+      {
+        "scenario": "review_and_ci",
+        "step": "checks_failed",
+        "path": [
+          "evidence",
+          "calls",
+          10,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "review_and_ci",
+        "step": "checks_failed",
+        "path": [
+          "evidence",
+          "calls",
+          42,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-w1-babysitter/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-w1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-w1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "restart",
+        "step": "start",
+        "path": [
+          "evidence",
+          "calls",
+          10,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
         }
       },
       {
@@ -482,6 +672,120 @@
         }
       },
       {
+        "scenario": "checkpoint",
+        "step": "open_step",
+        "path": [
+          "evidence",
+          "calls",
+          10,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "legacy_state",
+        "step": "before_restart",
+        "path": [
+          "evidence",
+          "calls",
+          11,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "worker_failures",
+        "step": "prepare_retry",
+        "path": [
+          "evidence",
+          "calls",
+          34,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "calls",
+          21,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s1-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s1\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "calls",
+          22,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-s2-orchestrator/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s2\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-s2\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "calls",
+          70,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e1-w2-babysitter/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-w2\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e1-w2\",\n    \"GH_TOKEN\": \"ghs_test\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
         "scenario": "repository_routing",
         "step": "same_numbers",
         "path": [
@@ -666,6 +970,45 @@
         }
       }
     ],
-    "cli": []
+    "cli": [
+      {
+        "scenario": "intake",
+        "step": "defaults",
+        "path": [
+          "evidence",
+          "calls",
+          1,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610091-planner/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610091\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      },
+      {
+        "scenario": "intake",
+        "step": "overrides",
+        "path": [
+          "evidence",
+          "calls",
+          1,
+          "artifacts",
+          "<HOME>/.factory/runs/factory-e2610092-planner/settings.json"
+        ],
+        "main": {
+          "present": true,
+          "value": "{\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610092\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        },
+        "candidate": {
+          "present": true,
+          "value": "{\n  \"crossSessionInbound\": \"accept\",\n  \"disableAllHooks\": true,\n  \"env\": {\n    \"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"60\",\n    \"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"200000\",\n    \"CLAUDE_CODE_DISABLE_ADVISOR_TOOL\": \"1\",\n    \"FACTORY_BIN\": \"/bin/factory\",\n    \"FACTORY_BRAIN\": \"<BRAIN>\",\n    \"FACTORY_TASK\": \"e2610092\",\n    \"GIT_CEILING_DIRECTORIES\": \"<BRAIN>\",\n    \"PATH\": \"<HOME>/.local/bin:/nonexistent\"\n  }\n}\n"
+        }
+      }
+    ]
   }
 }

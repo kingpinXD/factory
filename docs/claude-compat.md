@@ -17,9 +17,13 @@ native dispatch acceptance remain outside this deterministic driver task.
 
 ## Reviewed differences
 
-`scripts/claude-compat-expected-differences.json` pins 31 intended changes
-against main `e90b9bd`: six digest entries, fifteen scoped-clock entries and ten
-publication-liveness entries. In `repository_routing` (`same_numbers` and
+`scripts/claude-compat-expected-differences.json` pins 49 intended changes
+against main `e90b9bd`: six digest entries, fifteen scoped-clock entries, ten
+publication-liveness entries and eighteen run-settings entries. The latter add
+`crossSessionInbound: "accept"` to Factory's explicit session settings so peer
+messages reach its bypass-mode sessions. Sixteen occur in reconcile captures;
+two occur in CLI intake. All other captured settings and launch arguments stay the same.
+In `repository_routing` (`same_numbers` and
 `different_targets`), the first set remains running until its PR is recorded.
 Its later idle transition changes the transition time, key, trigger reference,
 event-to-tick relation and status time. PR routing and writes stay the same.
@@ -27,8 +31,9 @@ Each entry names the scenario, step and exact field path, with complete main
 and candidate values; `present: false` distinguishes a missing key from null.
 A changed array length records both complete arrays, including removed events.
 Both main-to-candidate comparisons must match this set exactly. Missing, extra
-or changed differences fail. CLI differences remain forbidden, and the two
-candidate lanes must still be identical. The list does not alter normalization.
+or changed differences fail. CLI exceptions permit only the two run-settings
+changes above; arguments, other files and other settings remain forbidden.
+The two candidate lanes must still be identical. The list does not alter normalization.
 The driver records its contents and hash in provenance and refuses a different
 baseline. Review the list when the baseline or intended behavior changes.
 

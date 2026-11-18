@@ -90,29 +90,83 @@ class ExpectedDifferenceTests(unittest.TestCase):
         data = json.loads((repo / driver.EXPECTED_DIFFERENCES).read_text())
         expected = driver.load_expected_differences(repo, data["baseline"])
         self.assertEqual(expected["baseline"], "e90b9bd00aa2b345eb00466ec8d77a73e4b64ec4")
-        self.assertEqual(expected["packages"]["cli"], [])
+        self.assertEqual(len(expected["packages"]["cli"]), 2)
+        self.assertEqual({(entry["scenario"], entry["step"]) for entry in expected["packages"]["cli"]},
+                         {("intake", "defaults"), ("intake", "overrides")})
         entries = expected["packages"]["reconcile"]
-        self.assertEqual(len(entries), 31)
+        self.assertEqual(len(entries), 47)
         scope = {}
         for entry in entries:
             coordinate = (entry["scenario"], entry["step"])
             scope[coordinate] = scope.get(coordinate, 0) + 1
-        self.assertEqual(scope, {("usage_policy", "long_wait"): 2,
+        self.assertEqual(scope, {("epic_lifecycle", "intake"): 1,
+                                ("epic_lifecycle", "prepared"): 1,
+                                ("epic_lifecycle", "review_merge"): 1,
+                                ("configuration", "defaults"): 1,
+                                ("configuration", "overrides"): 2,
+                                ("usage_policy", "hold"): 1,
+                                ("usage_policy", "long_wait"): 2,
                                 ("usage_policy", "needs_you_reason"): 4,
+                                ("review_and_ci", "checks_failed"): 2,
+                                ("restart", "start"): 1,
                                 ("restart", "unknown_listing"): 3,
                                 ("restart", "resume"): 2,
                                 ("restart", "long_outage"): 10,
-                                ("repository_routing", "same_numbers"): 5,
+                                ("checkpoint", "open_step"): 1,
+                                ("legacy_state", "before_restart"): 1,
+                                ("worker_failures", "prepare_retry"): 1,
+                                ("repository_routing", "same_numbers"): 8,
                                 ("repository_routing", "different_targets"): 5})
         with self.assertRaisesRegex(driver.Invalid, "frozen baseline"):
             driver.load_expected_differences(repo, "a" * 40)
+
+    def test_inbound_policy_differences_only_add_run_setting(self):
+        repo = Path(__file__).resolve().parent.parent
+        data = json.loads((repo / driver.EXPECTED_DIFFERENCES).read_text())
+        entries = [entry for package in data["packages"].values() for entry in package
+                   if "artifacts" in entry["path"] and entry["path"][-1].endswith("/settings.json")]
+        self.assertEqual(len(entries), 18)
+        for entry in entries:
+            with self.subTest(scenario=entry["scenario"], step=entry["step"], path=entry["path"]):
+                self.assertIn("/.factory/runs/factory-", entry["path"][-1])
+                main = json.loads(entry["main"]["value"])
+                candidate = json.loads(entry["candidate"]["value"])
+                self.assertNotIn("crossSessionInbound", main)
+                self.assertEqual(candidate.pop("crossSessionInbound"), "accept")
+                self.assertEqual(candidate, main)
+
+    def test_cli_inbound_exception_rejects_other_changes(self):
+        repo = Path(__file__).resolve().parent.parent
+        data = json.loads((repo / driver.EXPECTED_DIFFERENCES).read_text())
+        entry = data["packages"]["cli"][0]
+        for change in ("argv", "another_file", "another_setting", "another_setting_type", "hold"):
+            with self.subTest(change=change):
+                changed = copy.deepcopy(entry)
+                if change == "argv":
+                    changed["path"] = ["evidence", "calls", 1, "args"]
+                elif change == "another_file":
+                    changed["path"][-1] = "<HOME>/.claude/settings.json"
+                else:
+                    value = json.loads(changed["candidate"]["value"])
+                    if change == "another_setting":
+                        value["unreviewed"] = True
+                    elif change == "another_setting_type":
+                        value["disableAllHooks"] = 1
+                    else:
+                        value["crossSessionInbound"] = "hold"
+                    changed["candidate"]["value"] = json.dumps(value)
+                changed_data = copy.deepcopy(data)
+                changed_data["packages"]["cli"][0] = changed
+                with patch.object(driver, "load_json", return_value=changed_data):
+                    with self.assertRaisesRegex(driver.Invalid, "limited to run-local inbound settings"):
+                        driver.load_expected_differences(repo, data["baseline"])
 
     def test_invalid_reviewed_lists_are_rejected(self):
         repo = Path(__file__).resolve().parent.parent
         original = json.loads((repo / driver.EXPECTED_DIFFERENCES).read_text())
         mutations = [
             (lambda data: data["packages"]["cli"].append(copy.deepcopy(data["packages"]["reconcile"][0])),
-             "CLI differences are forbidden"),
+             "CLI differences are limited to run-local inbound settings"),
             (lambda data: data["packages"]["reconcile"].append(copy.deepcopy(data["packages"]["reconcile"][0])),
              "duplicate expected difference"),
             (lambda data: data["packages"]["reconcile"][0].update(main={"present": False, "value": None}),

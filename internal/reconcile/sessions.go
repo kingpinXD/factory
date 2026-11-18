@@ -156,6 +156,7 @@ func (r *run) observe(e *entity) {
 	}
 	s, ok := lookup.Session, lookup.Presence == session.Present
 	if ok {
+		r.observeClaudePermissionRepair(e, s)
 		e.st.ShortID = s.ID
 	}
 	r.noteListed(e, s, ok)
@@ -194,6 +195,8 @@ func listedAs(s session.Session, ok bool) string {
 	switch {
 	case !ok:
 		return "not listed"
+	case s.WaitingFor != "":
+		return s.State + " (" + s.Status + ": " + s.WaitingFor + ")"
 	case s.Status == "":
 		return s.State
 	}
@@ -232,7 +235,7 @@ func (r *run) transcriptTurnEnd(sess *entity, s session.Session) time.Time {
 func (r *run) turnEnded(sess *entity) bool {
 	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
 	s := lookup.Session
-	return lookup.Presence == session.Present && s.Live() && (turnEndedInListing(s) || !sess.turnEndedAt.IsZero())
+	return lookup.Presence == session.Present && s.Live() && !claudePermissionPrompt(s) && (turnEndedInListing(s) || !sess.turnEndedAt.IsZero())
 }
 
 // turnEndedInListing reports whether the listing shows the session's turn
@@ -479,6 +482,9 @@ func (r *run) launch(owner *entity, sess *entity) error {
 
 // post gives a live session its new work through its socket.
 func (r *run) post(owner, sess *entity, s session.Session, news []delivery) error {
+	if claudePermissionPrompt(s) {
+		return nil
+	}
 	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
 	if lookup.Presence != session.Present {
 		return nil
@@ -524,7 +530,23 @@ func (r *run) wake(sess *entity) error {
 	case session.Unknown, session.Quarantined:
 		return nil
 	case session.Absent:
+		if _, pending := claudePermissionRepair(sess); pending {
+			return fmt.Errorf("permission repair waits for the stopped Claude session")
+		}
 		return r.launch(owner, sess)
+	}
+	if repair, pending := claudePermissionRepair(sess); pending {
+		s := lookup.Session
+		switch {
+		case s.ID != "" && s.ID != repair.Text:
+			if err := r.finishClaudePermissionRepair(sess, repair); err != nil {
+				return err
+			}
+		case s.Live():
+			return fmt.Errorf("permission repair waits for old Claude session %s to stop", repair.Text)
+		default:
+			return r.resumeClaudePermissionRepair(owner, sess, s, repair)
+		}
 	}
 	sess.st.NoPIDSince = time.Time{}
 	s := lookup.Session

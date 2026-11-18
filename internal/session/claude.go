@@ -14,7 +14,7 @@ func (c Claude) List(ctx context.Context) (Inventory, error) {
 	listed, known, err := c.Client.List(ctx)
 	sessions := make([]Session, 0, len(listed))
 	for _, s := range listed {
-		sessions = append(sessions, Session{Ref: Ref{Executor: "claude", ID: s.ID, Name: s.Name, ConversationID: s.SessionID, PID: s.PID}, Cwd: s.Cwd, Kind: s.Kind, Status: s.Status, State: s.State, StartedAt: s.StartedAt})
+		sessions = append(sessions, Session{Ref: Ref{Executor: "claude", ID: s.ID, Name: s.Name, ConversationID: s.SessionID, PID: s.PID}, Cwd: s.Cwd, Kind: s.Kind, Status: s.Status, WaitingFor: s.WaitingFor, State: s.State, StartedAt: s.StartedAt})
 	}
 	return Inventory{Sessions: sessions, Complete: err == nil && (known || len(listed) == 0)}, err
 }
@@ -47,4 +47,8 @@ func (c Claude) TurnEndedAt(ctx context.Context, ref Ref) (time.Time, error) {
 }
 func (c Claude) Models(ctx context.Context, ref Ref) (map[string][]string, error) {
 	return c.Client.Models(ctx, ref.ConversationID)
+}
+
+func (c Claude) ResumeConfigured(ctx context.Context, ref Ref, s Spec) error {
+	return c.Client.ResumeConfigured(ctx, ref.ID, claude.Spec{Name: s.Name, Model: s.Model, Effort: s.Effort, PromptFile: s.PromptFile, Task: s.Task, GHToken: s.GHToken, AutoCompactPct: s.AutoCompactPct, AutoCompactWindow: s.AutoCompactWindow, Prompt: s.Prompt, Agents: s.Agents})
 }

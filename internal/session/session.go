@@ -24,12 +24,13 @@ type Ref struct {
 type Session struct {
 	Ref
 	// OwnerID records the logical owner; it is not an execution capability.
-	OwnerID   string `json:"owner_id,omitempty"`
-	Cwd       string `json:"cwd"`
-	Kind      string `json:"kind"`
-	Status    string `json:"status"`
-	State     string `json:"state"`
-	StartedAt int64  `json:"started_at"`
+	OwnerID    string `json:"owner_id,omitempty"`
+	Cwd        string `json:"cwd"`
+	Kind       string `json:"kind"`
+	Status     string `json:"status"`
+	WaitingFor string `json:"waiting_for,omitempty"`
+	State      string `json:"state"`
+	StartedAt  int64  `json:"started_at"`
 }
 
 func (s Session) Live() bool { return s.PID != 0 }

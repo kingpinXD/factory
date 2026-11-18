@@ -239,7 +239,7 @@ func (r *run) superviseOwner(owner *entity) {
 	}
 	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
 	s := lookup.Session
-	if lookup.Presence != session.Present || !s.Live() || len(r.undelivered(owner, sess)) > 0 {
+	if lookup.Presence != session.Present || !s.Live() || claudePermissionPrompt(s) || len(r.undelivered(owner, sess)) > 0 {
 		return
 	}
 	subject := r.subject(owner)
@@ -265,15 +265,15 @@ func (r *run) superviseOwner(owner *entity) {
 // babysitterRecovery requires the newest open slot and fresh evidence that no
 // writer is active. A pending boundary denies recovery even with no helper jobs.
 func (r *run) babysitterRecovery(it, sess *entity) (session.Session, bool) {
-	if !watched(it) || it.st.Unanswered == 0 || !r.workAllowed(it) ||
+	if !watched(it) || !r.workAllowed(it) ||
 		sess == nil || r.babysitterOf(it) != sess || !sess.open() ||
 		!slices.Contains([]string{sessionRunning, sessionTurnEnded}, sess.cur.State) ||
-		nativeBoundaryState(sess).pending() || r.helperBusy(it) || len(r.undelivered(it, sess)) > 0 {
+		nativeBoundaryState(sess).pending() || r.helperBusy(it) {
 		return session.Session{}, false
 	}
 	observedLookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
 	observed := observedLookup.Session
-	if observedLookup.Presence != session.Present {
+	if observedLookup.Presence != session.Present || !claudePermissionPrompt(observed) && (it.st.Unanswered == 0 || len(r.undelivered(it, sess)) > 0) {
 		return session.Session{}, false
 	}
 	ctx, cancel := r.call()
@@ -293,7 +293,7 @@ func (r *run) babysitterRecovery(it, sess *entity) (session.Session, bool) {
 	// An old transcript cannot authorize idle-only recovery of a fresh writer.
 	idle := s.State == listedWorking && s.Status == listedIdle
 	ended := s.State == listedTurnEnded && (s.Status == "" || s.Status == listedIdle)
-	if err != nil || lookup.Presence != session.Present || !s.Live() || (!idle && !ended) ||
+	if err != nil || lookup.Presence != session.Present || !s.Live() || (!idle && !ended && !claudePermissionPrompt(s)) ||
 		s.ID != observed.ID || s.ConversationID != observed.ConversationID || s.PID != observed.PID || s.AttemptID != observed.AttemptID || s.Generation != observed.Generation {
 		return session.Session{}, false
 	}
@@ -668,6 +668,10 @@ func (r *run) superviseSession(sess *entity) {
 				r.fail("%v", err)
 			}
 		}
+		return
+	}
+	if claudePermissionPrompt(s) {
+		r.recoverClaudePermissionPrompt(sess, s)
 		return
 	}
 	r.postCompactions(sess, s)

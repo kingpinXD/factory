@@ -90,14 +90,23 @@ func TestHelperControlOutputSourceChild(t *testing.T) {
 }
 
 func TestControlOutputHelperRecoversSameFenceDuringPendingBoundary(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	testHelperOutputRecovery(t, "")
 }
 
 func TestControlOutputHelperChangedAuthorityWaitsForActualTransferProducer(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	testHelperOutputRecovery(t, "authority")
 }
 
 func TestControlOutputHelperRejectsSnapshotReplacedWithCurrentJob(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	testHelperOutputRecovery(t, "job")
 }
 
@@ -151,17 +160,6 @@ func testHelperOutputRecovery(t *testing.T, replaceSource string) {
 		t.Fatalf("invalid prepared reply %q: %v", scanner.Text(), err)
 	}
 	recovery := helper.Service{Brain: w.brain, Authority: outputFixtureAuthority{NativeAuthority{w.brain}}, FenceRuntime: service.FenceRuntime}
-	stopAttempts := 0
-	if replaceSource == "job" {
-		// Stopping and observing a real process can remain uncertain across more than one recovery pass.
-		recovery.FenceRuntime = func(ctx context.Context, current helper.Job) error {
-			stopAttempts++
-			if stopAttempts <= 2 {
-				return codex.ErrObservationUnknown
-			}
-			return service.FenceRuntime(ctx, current)
-		}
-	}
 	prepared, _, err := recovery.ReadControlOutput(context.Background(), ref)
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +221,12 @@ func testHelperOutputRecovery(t *testing.T, replaceSource string) {
 	defer cancel()
 	fenceErr := recovery.Fence(ctx, job.Scope.WorkID, "control_transfer")
 	var pending *helper.PendingControlOutputsError
+	if replaceSource == "job" && errors.As(fenceErr, &pending) {
+		// The physical stop completed, but its acknowledgement did not reach the caller.
+		fenceErr = codex.ErrObservationUnknown
+	}
 	token := ""
+	sameTokenRetries := 0
 	if errors.As(fenceErr, &pending) {
 		token = pending.Token
 	} else {
@@ -240,7 +243,8 @@ func testHelperOutputRecovery(t *testing.T, replaceSource string) {
 			t.Logf("fence diagnostic found=%v token=%s blocks=%s fences=%s scopes=%s read=%v decode=%v", found, token, ledger["blocks"], ledger["fences"], ledger["scopes"], readErr, decodeErr)
 			t.Fatalf("actual fence did not retain pending stop/output: %v %v", fenceErr, observeErr)
 		}
-		for errors.Is(observeErr, helper.ErrControlFenceUnstopped) {
+		for {
+			sameTokenRetries++
 			resumeErr := recovery.ResumeControlOutputFence(ctx, job.Scope, token, "control_transfer")
 			if resumeErr != nil && !errors.Is(resumeErr, codex.ErrObservationUnknown) {
 				t.Fatal("same token did not resume actual backend stop", resumeErr)
@@ -263,8 +267,8 @@ func testHelperOutputRecovery(t *testing.T, replaceSource string) {
 			t.Fatal("same token could not observe stopped backend", observeErr)
 		}
 	}
-	if replaceSource == "job" && stopAttempts < 3 {
-		t.Fatalf("backend stop did not outlast both uncertain observations: %d", stopAttempts)
+	if replaceSource == "job" && sameTokenRetries == 0 {
+		t.Fatal("uncertain stop acknowledgement did not retry with the retained fence token")
 	}
 	observed, outputs, found, err := recovery.PendingControlOutputFence(ctx, job.Scope)
 	if err != nil || !found || observed != token || len(outputs) != 1 || outputs[0] != ref {

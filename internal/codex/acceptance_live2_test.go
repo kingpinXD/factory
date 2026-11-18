@@ -48,6 +48,7 @@ func TestContract2LocalArtifactBindsRecordedOutcomeAndFullOwner(t *testing.T) {
 	prior.ID = "model-owner-one"
 	prior.RunDir = "/fixture/proof/remote"
 	r := contract2AcceptanceReceipt{Owner: owner, PriorOwners: []Owner{prior}, Bootstrap: Owner{ID: "bootstrap", Generation: owner.Generation, Worktree: "/fixture/proof", RunDir: "/fixture/proof/bootstrap", OutputRoot: "/fixture/proof", ControlOnly: true, CodexContract: 2}, Cancelled: "cancelled-1", Compaction: "compaction-1", Rounds: []PersistedTurn{{ConversationID: "conversation-1", Reply: "FACTORY_CODEX_ACCEPTANCE_ROUND_1"}, {ConversationID: "conversation-1", Reply: "FACTORY_CODEX_ACCEPTANCE_ROUND_2"}}}
+	r.Rounds[0].Reply = acceptanceContract2Reply(r.Grant, 1)
 	valid := map[string]any{
 		"rounds.json":                       r.Rounds,
 		"compaction.json":                   map[string]string{"id": "compaction-1", "thread": "conversation-1"},

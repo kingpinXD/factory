@@ -58,6 +58,10 @@ no environment variable or flag that marks unexecuted checks successful.
 Version 2 also requires a registered private repository and a passing
 `factory codex-verify --contract 2 --repo <owner/repo> --base <branch>`.
 
+Contract 2 also requires a local `factory_control inbox` read, its recorded outcome,
+and the model's acknowledgement of the returned message. Existing receipts need
+one new contract-2 verification for this stronger check; old proof files stay for audit.
+
 A failed contract-2 run keeps its proof files for audit. Clean shutdown seals the
 read grant, checks that its read process and contained writers have stopped, and
 records retirement. The next verification also checks interrupted proofs under

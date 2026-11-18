@@ -205,7 +205,7 @@ func TestAcceptanceExactReplyWithoutToolProofDoesNotPass(t *testing.T) {
 	p := &Protocol{events: make(chan Message, 2), done: make(chan struct{})}
 	p.events <- Message{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread","turnId":"turn","item":{"type":"agentMessage","text":"expected"}}`)}
 	p.events <- Message{Method: "turn/completed", Params: json.RawMessage(`{"threadId":"thread","turn":{"id":"turn","status":"completed"}}`)}
-	if _, err := acceptanceWaitTurn(context.Background(), p, "thread", "turn", nil, "/unused", 1); !errors.Is(err, ErrObservationUnknown) || !strings.Contains(err.Error(), "did not invoke required contained operation") {
+	if _, err := acceptanceWaitTurn(context.Background(), p, "thread", "turn", nil, "/unused", 1, nil); !errors.Is(err, ErrObservationUnknown) || !strings.Contains(err.Error(), "did not invoke required contained operation") {
 		t.Fatal("fixed reply passed without exercising contained file tools")
 	}
 }

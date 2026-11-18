@@ -164,7 +164,7 @@ func dispatcherGrantFixture(t *testing.T) (string, string, codex.AcceptanceReadG
 		Image    string
 	}{"factory-codex-acceptance-v1", fileSHA(binary), selection.SchemaVersion, profile, routes, selection.Binaries, image}
 	legacy := codex.ProgramProcessDigest(pins).String()
-	sum := sha256.Sum256([]byte("factory-codex-acceptance-v2\x00" + legacy))
+	sum := sha256.Sum256([]byte("factory-codex-acceptance-v2-local-control-read\x00" + legacy))
 	binding := hex.EncodeToString(sum[:])
 	proofID := "proof-offline-actual-cli"
 	proof := filepath.Join(brain, "factory", "codex", "acceptance", binding, proofID)

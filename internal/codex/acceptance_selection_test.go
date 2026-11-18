@@ -53,7 +53,7 @@ func contract2ReceiptFixture(t *testing.T) (string, executor.Selection, contract
 	prior.ID, prior.RunDir = "model-owner-one", filepath.Join(dir, "remote")
 	r.PriorOwners = []Owner{prior}
 	for at := 1; at <= 2; at++ {
-		reply := fmt.Sprintf("FACTORY_CODEX_ACCEPTANCE_ROUND_%d", at)
+		reply := acceptanceContract2Reply(ref, at)
 		r.Rounds = append(r.Rounds, PersistedTurn{Policy: EvidencePolicy, ConversationID: "proof-thread", TurnID: fmt.Sprintf("round-%d", at), ConfiguredModel: executor.CodexModel, ConfiguredEffort: "low", Reply: reply, ReplySHA256: hash([]byte(reply)), VerifiedAt: grant.AdmittedAt})
 	}
 	request := acceptanceProgramReadRequest(grant, ref)
@@ -78,8 +78,17 @@ func contract2ReceiptFixture(t *testing.T) (string, executor.Selection, contract
 		t.Fatal(err)
 	}
 	r.Read = ProgramReadResultRef{RequestID: request.RequestID, RequestSHA256: requestRef.SHA256, ResponseSHA256: sha256.Sum256(resultData), Process: closed}
+	call, _ := json.Marshal(ToolInvocation{Tool: "factory_control", CallID: "qualification-local-read", ThreadID: r.Rounds[0].ConversationID, TurnID: r.Rounds[0].TurnID, Arguments: json.RawMessage(`{"op":"inbox","payload":{}}`)})
+	if _, err := acceptanceControlRead(t.Context(), brain, ref, prior, Message{ID: json.RawMessage(`1`), Method: "item/tool/call", Params: call}, r.Rounds[0].ConversationID, r.Rounds[0].TurnID); err != nil {
+		t.Fatal(err)
+	}
+	localRead, err := os.ReadFile(filepath.Join(dir, "local-control-read.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	values := map[string]any{
 		"rounds.json":                       r.Rounds,
+		"local-control-read.json":           json.RawMessage(localRead),
 		"compaction.json":                   map[string]string{"id": r.Compaction, "thread": "proof-thread"},
 		"cancellation.json":                 map[string]string{"thread": "proof-thread", "turn": r.Cancelled, "writer_sha256": strings.Repeat("c", 64)},
 		"guard-denied.json":                 map[string]any{"owner": r.Owner.ID, "generation": r.Owner.Generation, "method": "fs/writeFile", "rejected_requests": 1, "absent_path": filepath.Join(r.Owner.Worktree, "revoked-generation-write")},

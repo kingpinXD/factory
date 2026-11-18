@@ -15,7 +15,7 @@ import (
 	"github.com/kingpinXD/factory/internal/workspace"
 )
 
-const acceptanceProtocol2 = "factory-codex-acceptance-v2"
+const acceptanceProtocol2 = "factory-codex-acceptance-v2-local-control-read"
 
 type Contract2AcceptanceRef struct {
 	Binding       string `json:"binding"`
@@ -137,10 +137,10 @@ func validateContract2ReceiptLocal(ctx context.Context, brain string, selection 
 		return err
 	}
 	model := acceptanceReceipt{Protocol: receipt.Protocol, Binding: receipt.Binding, Directory: receipt.Directory, PriorOwners: receipt.PriorOwners, Owner: receipt.Owner, Rounds: receipt.Rounds, Cancelled: receipt.Cancelled, Compaction: receipt.Compaction, CreatedAt: receipt.CreatedAt}
-	if len(receipt.Artifacts) != 10 {
+	if len(receipt.Artifacts) != 11 {
 		return ErrObservationUnknown
 	}
-	paths := map[string]bool{"rounds.json": false, "compaction.json": false, "cancellation.json": false, "guard-denied.json": false, "missing-environment.json": false, "credential-policy.json": false, "bootstrap-initial.json": false, "bootstrap/containment.json": false, "remote/containment.json": false, "remote-round-two/containment.json": false}
+	paths := map[string]bool{"rounds.json": false, "compaction.json": false, "cancellation.json": false, "guard-denied.json": false, "missing-environment.json": false, "credential-policy.json": false, "local-control-read.json": false, "bootstrap-initial.json": false, "bootstrap/containment.json": false, "remote/containment.json": false, "remote-round-two/containment.json": false}
 	for _, artifact := range receipt.Artifacts {
 		seen, ok := paths[artifact.Path]
 		if !ok || seen {
@@ -157,7 +157,12 @@ func validateContract2ReceiptLocal(ctx context.Context, brain string, selection 
 		if err := validateContract2Artifact(receipt, artifact.Path, data); err != nil {
 			return err
 		}
-		if filepath.Base(artifact.Path) == artifact.Path && artifact.Path != "credential-policy.json" && artifact.Path != "bootstrap-initial.json" {
+		if artifact.Path == "local-control-read.json" {
+			if err := validateAcceptanceLocalRead(ctx, brain, receipt, data); err != nil {
+				return err
+			}
+		}
+		if filepath.Base(artifact.Path) == artifact.Path && artifact.Path != "credential-policy.json" && artifact.Path != "bootstrap-initial.json" && artifact.Path != "local-control-read.json" {
 			model.Artifacts = append(model.Artifacts, artifact)
 		}
 	}
@@ -216,7 +221,7 @@ func validateContract2Artifact(receipt contract2AcceptanceReceipt, name string, 
 			return ErrObservationUnknown
 		}
 		for at, round := range receipt.Rounds {
-			if round.Reply != fmt.Sprintf("FACTORY_CODEX_ACCEPTANCE_ROUND_%d", at+1) {
+			if round.Reply != acceptanceContract2Reply(receipt.Grant, at+1) {
 				return ErrObservationUnknown
 			}
 		}
@@ -260,7 +265,7 @@ func (p *Contract2Probe) publishReceipt(ctx context.Context, proof acceptanceRec
 		}
 	}
 	receipt := contract2AcceptanceReceipt{Protocol: acceptanceProtocol2, Contract: 2, Binding: p.grant.Binding, Directory: p.directory, CreatedAt: time.Now().UTC(), Grant: p.grant, Bootstrap: p.bootstrap, Read: result, PriorOwners: proof.PriorOwners, Owner: proof.Owner, Rounds: proof.Rounds, Cancelled: proof.Cancelled, Compaction: proof.Compaction, Artifacts: proof.Artifacts}
-	for _, name := range []string{"credential-policy.json", "bootstrap-initial.json", "bootstrap/containment.json", "remote/containment.json", "remote-round-two/containment.json"} {
+	for _, name := range []string{"local-control-read.json", "credential-policy.json", "bootstrap-initial.json", "bootstrap/containment.json", "remote/containment.json", "remote-round-two/containment.json"} {
 		data, err := readAcceptanceArtifact(filepath.Join(p.directory, name))
 		if err != nil {
 			return err

@@ -526,7 +526,13 @@ func (r *Runtime) handleHostCommand(ctx context.Context, p *Protocol, record *Re
 	return fmt.Errorf("unsupported Codex host command")
 }
 
-func (r *Runtime) handleEvent(ctx context.Context, p *Protocol, owner Owner, record *Record, event Message) error {
+func (r *Runtime) handleEvent(ctx context.Context, p *Protocol, owner Owner, record *Record, event Message) (result error) {
+	defer func() {
+		if result != nil && record.Schema == 2 && event.Method == "item/tool/call" {
+			result = errors.Join(result, RecordControlFailure(r.Brain, record.attemptRef(), event.Params, "tool_dispatch", result))
+		}
+	}()
+
 	if len(event.ID) != 0 {
 		if event.Method != "item/tool/call" {
 			return p.Reply(ctx, event, nil, fmt.Errorf("native approval is disabled"))
@@ -540,7 +546,13 @@ func (r *Runtime) handleEvent(ctx context.Context, p *Protocol, owner Owner, rec
 			return ErrObservationUnknown
 		}
 		if call.Tool != "factory_control" {
-			return p.Reply(ctx, event, nil, fmt.Errorf("unscoped tool"))
+			cause := fmt.Errorf("unscoped tool")
+			if record.Schema == 2 {
+				if err := RecordControlFailure(r.Brain, record.attemptRef(), event.Params, "tool_scope", cause); err != nil {
+					return errors.Join(cause, err)
+				}
+			}
+			return p.Reply(ctx, event, nil, cause)
 		}
 		if err := r.Containment.Check(ctx, owner); err != nil {
 			return err

@@ -21,7 +21,14 @@ import (
 	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
-func coordinatorControlV2(ctx context.Context, brain string, attempt codex.AttemptRef, data []byte) (any, error) {
+func coordinatorControlV2(ctx context.Context, brain string, attempt codex.AttemptRef, data []byte) (output any, result error) {
+	stage := "request_decode"
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, codex.RecordControlFailure(brain, attempt, data, stage, result))
+		}
+	}()
+
 	invocation, err := codex.DecodeToolInvocation(data)
 	if err != nil {
 		return nil, err
@@ -29,10 +36,12 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if invocation.Tool != toolcontract.FactoryControl {
 		return nil, codex.ErrObservationUnknown
 	}
+	stage = "control_ingress"
 	spec, err := codex.ValidateAttemptControlIngress(ctx, brain, attempt, invocation.ThreadID, invocation.TurnID)
 	if err != nil {
 		return nil, err
 	}
+	stage = "coordinator_authority"
 	if err := reconcile.CoordinatorAuthority(brain, spec); err != nil {
 		return nil, err
 	}
@@ -73,18 +82,25 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
 	}
+	stage = "original_request"
 	originalRef, err := controlrecord.StoreOriginal(brain, original)
 	if err != nil {
 		return nil, err
 	}
+	stage = "owner_authority"
 	ownerAuthority, err := reconcile.ResolveOwnerAuthority(ctx, brain, spec.EpicID, spec.Task)
 	if err != nil {
 		return nil, err
 	}
 	service := helperService(brain)
+	stage = "outcome_recovery"
 	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
 		if record.Input.Operation != original.Operation || record.Input.PayloadSHA256 != original.PayloadSHA256 {
 			return nil, effects.ErrEvidence
+		}
+		stage = "outcome_validation"
+		if err := programme.Service().Controls.ValidateOutcome(ctx, id, record.Input, record.Outcome); err != nil {
+			return nil, err
 		}
 		if _, err := programme.Service().CompleteControl(ctx, id, record.Outcome); err != nil {
 			return nil, err
@@ -161,31 +177,18 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	var localProof controlrecord.ImmutableRef
 	var localSnapshot controlrecord.ReplySnapshot
 	if localControlV2(envelope.Op, input) {
-		localProof, localSnapshot, err = controlrecord.FindReplySnapshot(brain, originalRef)
-		if errors.Is(err, os.ErrNotExist) {
+		stage = "reply_snapshot"
+		localProof, localSnapshot, err = controlrecord.CaptureReplySnapshot(brain, originalRef, controlInput, func() (any, error) {
 			value, readErr := scopedCoordinatorControl(ctx, brain, spec, controlRequest{Op: envelope.Op, Payload: envelope.Payload})
 			if readErr != nil {
-				value, readErr = correctedControlReply(readErr)
-				if readErr != nil {
-					return nil, readErr
-				}
+				return correctedControlReply(readErr)
 			}
-			reply, err := json.Marshal(value)
-			if err != nil {
-				return nil, err
-			}
-			if len(reply) > toolcontract.ControlLimit {
-				return nil, fmt.Errorf("coordinator result exceeds transport limit")
-			}
-			localSnapshot = controlrecord.ReplySnapshot{Schema: 2, Original: originalRef, Input: controlInput, Reply: reply, ResponseSHA256: sha256.Sum256(reply)}
-			localProof, err = controlrecord.StoreReplySnapshot(brain, localSnapshot)
-		}
+			return value, nil
+		})
 		if err != nil {
 			return nil, err
 		}
-		if !reflect.DeepEqual(localSnapshot.Input, controlInput) {
-			return nil, effects.ErrEvidence
-		}
+
 	}
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
@@ -196,6 +199,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if err := reconcile.ValidateAdmittedOwnerAuthority(ctx, brain, ownerAuthority); err != nil {
 		return nil, err
 	}
+	stage = "control_enrollment"
 	control, err = programme.Service().EnrollControl(ctx, id, controlInput)
 	if err != nil {
 		return nil, err
@@ -203,6 +207,10 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
 		if !reflect.DeepEqual(record.Input, controlInput) {
 			return nil, effects.ErrEvidence
+		}
+		stage = "outcome_validation"
+		if err := programme.Service().Controls.ValidateOutcome(ctx, id, record.Input, record.Outcome); err != nil {
+			return nil, err
 		}
 		if _, err := programme.Service().CompleteControl(ctx, id, record.Outcome); err != nil {
 			return nil, err
@@ -319,9 +327,11 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 
 	}
 	record := controlrecord.OutcomeRecord{Schema: 2, Original: originalRef, Input: controlInput, Outcome: outcome, Reply: reply, ReplySHA256: sha256.Sum256(reply), Proof: proof}
+	stage = "outcome_record"
 	if _, err := controlrecord.StoreOutcome(brain, record); err != nil {
 		return nil, err
 	}
+	stage = "outcome_validation"
 	if _, err := programme.Service().CompleteControl(ctx, id, outcome); err != nil {
 		return nil, err
 	}

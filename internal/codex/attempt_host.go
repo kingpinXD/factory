@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/kingpinXD/factory/internal/toolcontract"
 	"io"
@@ -226,7 +227,14 @@ func ValidateAttemptControlCall(brain string, ref AttemptRef, threadID, turnID s
 }
 
 // Typed controls require the program-owned effects dispatcher, never the legacy writer.
-func (r *Runtime) attemptControlTool(ctx context.Context, record Record, params json.RawMessage) (json.RawMessage, error) {
+func (r *Runtime) attemptControlTool(ctx context.Context, record Record, params json.RawMessage) (reply json.RawMessage, result error) {
+	stage := "control_process"
+	defer func() {
+		if result != nil {
+			result = errors.Join(result, RecordControlFailure(r.Brain, record.attemptRef(), params, stage, result))
+		}
+	}()
+
 	if record.Schema != 2 || record.CodexContract != 2 || record.AttemptID == "" || r.FactoryBin == "" {
 		return nil, ErrAttemptIntegration
 	}
@@ -246,6 +254,7 @@ func (r *Runtime) attemptControlTool(ctx context.Context, record Record, params 
 	if err := command.Run(); err != nil {
 		return nil, fmt.Errorf("Codex scoped attempt operation failed: %w", err)
 	}
+	stage = "control_reply"
 	return DecodeToolReply(output.Bytes())
 }
 

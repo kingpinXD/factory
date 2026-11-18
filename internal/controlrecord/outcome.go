@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -109,6 +111,33 @@ type ReplySnapshot struct {
 	Input          effects.ControlInput `json:"input"`
 	Reply          json.RawMessage      `json:"reply"`
 	ResponseSHA256 effects.Digest       `json:"response_sha256"`
+}
+
+func CaptureReplySnapshot(brain string, original OriginalRequestRef, input effects.ControlInput, read func() (any, error)) (ImmutableRef, ReplySnapshot, error) {
+	proof, snapshot, err := FindReplySnapshot(brain, original)
+	if err == nil {
+		if snapshot.Input != input {
+			return ImmutableRef{}, ReplySnapshot{}, effects.ErrEvidence
+		}
+		return proof, snapshot, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return ImmutableRef{}, ReplySnapshot{}, err
+	}
+	value, err := read()
+	if err != nil {
+		return ImmutableRef{}, ReplySnapshot{}, err
+	}
+	reply, err := json.Marshal(value)
+	if err != nil {
+		return ImmutableRef{}, ReplySnapshot{}, err
+	}
+	if len(reply) > toolcontract.ControlLimit {
+		return ImmutableRef{}, ReplySnapshot{}, fmt.Errorf("coordinator result exceeds transport limit")
+	}
+	snapshot = ReplySnapshot{Schema: 2, Original: original, Input: input, Reply: reply, ResponseSHA256: sha256.Sum256(reply)}
+	proof, err = StoreReplySnapshot(brain, snapshot)
+	return proof, snapshot, err
 }
 
 func StoreReplySnapshot(brain string, snapshot ReplySnapshot) (ImmutableRef, error) {

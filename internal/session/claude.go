@@ -50,5 +50,5 @@ func (c Claude) Models(ctx context.Context, ref Ref) (map[string][]string, error
 }
 
 func (c Claude) ResumeConfigured(ctx context.Context, ref Ref, s Spec) error {
-	return c.Client.ResumeConfigured(ctx, ref.ID, claude.Spec{Name: s.Name, Model: s.Model, Effort: s.Effort, PromptFile: s.PromptFile, Task: s.Task, GHToken: s.GHToken, AutoCompactPct: s.AutoCompactPct, AutoCompactWindow: s.AutoCompactWindow, Prompt: s.Prompt, Agents: s.Agents})
+	return c.Client.ResumeConfiguredFrom(ctx, ref.ID, ref.ConversationID, claude.Spec{Name: s.Name, Model: s.Model, Effort: s.Effort, PromptFile: s.PromptFile, Task: s.Task, GHToken: s.GHToken, AutoCompactPct: s.AutoCompactPct, AutoCompactWindow: s.AutoCompactWindow, Prompt: s.Prompt, Agents: s.Agents})
 }

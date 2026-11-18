@@ -544,6 +544,9 @@ func (r *run) itemStartable(e *entity) (bool, string, error) {
 		return false, "", err
 	}
 	for _, it := range items {
+		if r.claudePermissionRetried(e, it) {
+			return true, "", nil
+		}
 		// Only nothing_startable blocks a running set on a file trigger.
 		// A set blocked by its restart budget still needs the planner.
 		if e.set != nil && e.cur.State == stateBlocked && e.enteredBy.From == setRunning && e.enteredBy.Trigger == blueprint.TriggerFile && r.openingPR(it) {
@@ -612,6 +615,9 @@ func (r *run) sessionTurnEnded(e *entity) (bool, string, error) {
 // noPID: the session has been listed with no pid, or not at all, for
 // supervision.dead_after.
 func (r *run) noPID(e *entity) (bool, string, error) {
+	if _, pending := claudePermissionRepair(e); pending {
+		return false, "", nil
+	}
 	lookup := r.lookupSession(e.entry.Epic, e.session.Name)
 	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
 		return false, "", nil

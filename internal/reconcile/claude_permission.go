@@ -3,10 +3,13 @@ package reconcile
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/kingpinXD/factory/internal/claude"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/session"
 )
@@ -16,6 +19,9 @@ func claudePermissionPrompt(s session.Session) bool {
 }
 
 func (r *run) recoverClaudePermissionPrompt(sess *entity, s session.Session) {
+	if repair, pending := claudePermissionRepair(sess); pending && permissionRepairStopped(sess, repair) {
+		return
+	}
 	owner := r.ents[sess.session.Task]
 	if owner == nil || owner.cur.State == stateNeedsYou || !r.needsSession(owner) {
 		return
@@ -37,15 +43,24 @@ func (r *run) recoverClaudePermissionPrompt(sess *entity, s session.Session) {
 	if len(r.hourRestarts(owner)) >= r.restartLimit(sess.session.Component) || r.helperBusy(owner) || !r.accountAllows(sess, false) {
 		return
 	}
-	if _, pending := claudePermissionRepair(sess); !pending {
-		if _, err := r.append(sess, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Text: s.ID, Key: claudePermissionRepairPrefix + s.ID}); err != nil {
-			r.fail("%s: record permission repair: %v", sess.id, err)
-			return
-		}
+	identity, err := json.Marshal(s.Ref)
+	if err != nil {
+		r.fail("%s: %v", sess.id, err)
+		return
 	}
+	if _, err = r.append(sess, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Text: string(identity), Key: claudePermissionIdentityPrefix + s.ID}); err != nil {
+		r.fail("%s: record permission identity: %v", sess.id, err)
+		return
+	}
+	if _, err = r.append(sess, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Text: s.ID, Key: claudePermissionRepairPrefix + s.ID}); err != nil {
+		r.fail("%s: record permission repair: %v", sess.id, err)
+		return
+	}
+
 	r.restart(subject, sess, s, why)
 }
 
+const claudePermissionIdentityPrefix = "claude-permission-identity:"
 const claudePermissionRepairPrefix = "claude-permission-repair:"
 const claudePermissionRepairedPrefix = "claude-permission-repaired:"
 const claudePermissionResumePrefix = "claude-permission-resume:"
@@ -53,6 +68,7 @@ const claudePermissionResumePrefix = "claude-permission-resume:"
 type claudePermissionResume struct {
 	Prompt    string   `json:"prompt"`
 	Delivered []string `json:"delivered"`
+	Previous  []string `json:"previous"`
 }
 
 func claudePermissionRepair(sess *entity) (events.Event, bool) {
@@ -92,7 +108,9 @@ func (r *run) observeClaudePermissionRepair(sess *entity, s session.Session) {
 	if repair.Seq == 0 || s.ID == "" || s.ID == repair.Text {
 		return
 	}
-	if _, prepared := sess.byKey(claudePermissionResumePrefix + seqRef(repair)); !prepared {
+	copy, prepared := sess.byKey(claudePermissionResumePrefix + seqRef(repair))
+	var intent claudePermissionResume
+	if !prepared || json.Unmarshal([]byte(copy.Text), &intent) != nil || slices.Contains(intent.Previous, s.ID) || s.StartedAt < copy.At.UnixMilli() {
 		return
 	}
 	if err := r.finishClaudePermissionRepair(sess, repair); err != nil {
@@ -116,6 +134,11 @@ func (r *run) resumeClaudePermissionRepair(owner, sess *entity, s session.Sessio
 			return err
 		}
 	} else {
+		for _, previous := range r.inventory("claude").Sessions {
+			if previous.Name == sess.session.Name {
+				prepared.Previous = append(prepared.Previous, previous.ID)
+			}
+		}
 		news := r.unacknowledged(owner, sess)
 		prepared.Prompt = r.resumePrompt(owner, sess.session.Component, news)
 		for _, d := range news {
@@ -137,4 +160,112 @@ func (r *run) resumeClaudePermissionRepair(owner, sess *entity, s session.Sessio
 		return err
 	}
 	return r.finishClaudePermissionRepair(sess, repair)
+}
+
+const claudePermissionFailurePrefix = "claude-permission-failed:"
+
+func permissionRepairStopped(sess *entity, repair events.Event) bool {
+	for _, ev := range sess.evs {
+		if ev.Seq > repair.Seq && ev.Kind == events.KindDone && ev.Sender == events.SenderProgram && ev.Text == stopText {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *run) driveClaudePermissionRepair(sess *entity) error {
+	repair, pending := claudePermissionRepair(sess)
+	if !pending || !permissionRepairStopped(sess, repair) {
+		return nil
+	}
+	owner := r.ents[sess.session.Task]
+	if owner == nil || !r.needsSession(owner) || !r.accountAllows(sess, false) {
+		return nil
+	}
+	subject := r.subject(owner)
+	if subject == nil {
+		subject = owner
+	}
+	if subject.cur.State == stateNeedsYou || subject.cur.State == stateBlocked || owner.cur.State == stateBlocked || owner.cur.State == stateNeedsYou {
+		return nil
+	}
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+		return nil
+	}
+	if lookup.Presence == session.Present && lookup.Session.Live() {
+		return nil
+	}
+	original := session.Session{Ref: session.Ref{Executor: "claude", ID: repair.Text, Name: sess.session.Name}}
+	if identity, ok := sess.byKey(claudePermissionIdentityPrefix + repair.Text); ok {
+		if err := json.Unmarshal([]byte(identity.Text), &original.Ref); err != nil {
+			return r.claudePermissionRepairFailure(subject, sess, repair, err)
+		}
+		original.PID = 0
+	}
+	// The name's preferred row may be an older job, not the stopped copy.
+	for _, row := range r.inventory("claude").Sessions {
+		if row.ID == repair.Text {
+			if original.ConversationID != "" && original.ConversationID != row.ConversationID {
+				return r.claudePermissionRepairFailure(subject, sess, repair, fmt.Errorf("conversation identity changed for Claude job %s", repair.Text))
+			}
+			original = row
+			break
+		}
+	}
+	if original.Live() || original.State == listedWorking {
+		return nil
+	}
+	err := r.resumeClaudePermissionRepair(owner, sess, original, repair)
+	if errors.Is(err, claude.ErrListingUnknown) || errors.Is(err, claude.ErrLive) || errors.Is(err, claude.ErrRestarting) {
+		return err
+	}
+	if err != nil {
+		return r.claudePermissionRepairFailure(subject, sess, repair, err)
+	}
+
+	sess.st.NoPIDSince = time.Time{}
+	return nil
+}
+
+func (r *run) claudePermissionRepairFailure(subject, sess *entity, repair events.Event, err error) error {
+	key := claudePermissionFailurePrefix + sess.id + ":" + seqRef(repair) + ":" + fmt.Sprint(lastLeft(subject, stateNeedsYou))
+	_, appendErr := r.append(subject, events.Event{At: r.now, Kind: events.KindError, Sender: events.SenderProgram, Text: "Claude permission repair for " + sess.session.Name + ": " + err.Error() + "; retry after restoring its owned conversation evidence", Key: key})
+	if appendErr != nil {
+		return appendErr
+	}
+	return err
+}
+
+// A user retry releases only the blocked owner of an unfinished repair. Other
+// exhausted coordinators still require the existing planner escalation.
+func (r *run) claudePermissionRetried(owner, it *entity) bool {
+	if owner.set == nil || owner.cur.State != stateBlocked || !strings.HasPrefix(owner.enteredBy.TriggerRef, restartsRef) || !r.orchestratorWorking(it) {
+		return false
+	}
+	sess := r.ents[sessionID(owner.id, componentOrchestrator)]
+	if sess == nil {
+		return false
+	}
+	repair, pending := claudePermissionRepair(sess)
+	if !pending || !permissionRepairStopped(sess, repair) {
+		return false
+	}
+	retried, ok := eventBySeq(it, fmt.Sprint(lastLeft(it, stateNeedsYou)))
+	return ok && retried.Trigger == "user" && !retried.At.Before(owner.enteredBy.At)
+}
+
+func init() {
+	needsUserReasons = append(needsUserReasons, func(r *run, e *entity) (string, bool) {
+		for i := len(e.evs) - 1; i >= 0; i-- {
+			ev := e.evs[i]
+			if ev.Seq <= lastLeft(e, stateNeedsYou) {
+				break
+			}
+			if ev.Kind == events.KindError && strings.HasPrefix(ev.Key, claudePermissionFailurePrefix) {
+				return claudePermissionFailurePrefix + seqRef(ev), true
+			}
+		}
+		return "", false
+	})
 }

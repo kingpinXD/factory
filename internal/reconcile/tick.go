@@ -223,6 +223,12 @@ func (r *run) tickEntity(e *entity) {
 			return
 		}
 		r.observe(e)
+		if _, pending := claudePermissionRepair(e); pending && e.cur.State == sessionStarting {
+			if err := r.driveClaudePermissionRepair(e); err != nil {
+				r.fail("%s: %v", e.id, err)
+			}
+			return
+		}
 		r.measure(e)
 	}
 	if err := r.refuseStaleUIAnswers(e); err != nil {

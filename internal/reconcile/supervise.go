@@ -174,6 +174,11 @@ func (r *run) anySession() bool {
 func (r *run) expectsLiveSession(provider string) bool {
 	return slices.ContainsFunc(r.order(), func(id string) bool {
 		e := r.ents[id]
+		if e.session != nil {
+			if repair, pending := claudePermissionRepair(e); pending && permissionRepairStopped(e, repair) {
+				return false
+			}
+		}
 		return e.session != nil && r.providerForEpic(e.entry.Epic) == provider && slices.Contains([]string{sessionStarting, sessionRunning, sessionTurnEnded, sessionCompacting}, e.cur.State)
 	})
 }
@@ -741,6 +746,9 @@ func (r *run) countOtherRestarts() {
 				r.logged(r.append(e, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: t.From + " timed out", Key: "restart:timeout:" + seqRef(t)}))
 				r.restartWorker(e, "restart:timeout:"+e.id+":"+seqRef(t))
 			case e.session != nil && t.From == sessionDead && t.To == sessionStarting:
+				if _, pending := claudePermissionRepair(e); pending {
+					continue
+				}
 				owner := r.ents[e.session.Task]
 				if owner == nil {
 					continue
@@ -1079,7 +1087,13 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	case strings.HasPrefix(ref, deniedModelRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, deniedModelRef))
 		return ev.Text
+	case strings.HasPrefix(ref, claudePermissionFailurePrefix):
+		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, claudePermissionFailurePrefix))
+		return ev.Text
 	case strings.HasPrefix(ref, "babysitter-stalled:"):
+		if ev, ok := eventBySeq(e, strings.TrimPrefix(ref, "babysitter-stalled:")); ok && e.work != nil && (strings.HasPrefix(ev.Key, deadRestartPrefix+sessionID(e.work.Set, componentOrchestrator)+":") || e.st.PR == 0 && r.babysitterOf(e) == nil) {
+			return "its orchestrator exhausted its recovery budget; retry to resume its work"
+		}
 		return "its babysitter exhausted its recovery budget; the PR is not watched until you retry"
 	case strings.HasPrefix(ref, babysitterDiedRef):
 		n, _, _ := strings.Cut(strings.TrimPrefix(ref, babysitterDiedRef), ":")

@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -175,5 +176,80 @@ func TestListRetainsPermissionPromptReason(t *testing.T) {
 	}
 	if row["waitingFor"] != "permission prompt" {
 		t.Fatalf("listing lost permission prompt reason: %s", data)
+	}
+}
+
+func TestResumeConfiguredRecoversMissingJobFromOwnedTranscript(t *testing.T) {
+	for _, kind := range []string{"owned", "copied_history", "foreign_ancestor", "wrong_task", "wrong_cwd", "ambiguous", "live_other_job", "unknown_listing"} {
+		t.Run(kind, func(t *testing.T) {
+			f := &proc.Fake{}
+			c := testClient(t, f)
+			spec := Spec{Name: "factory:e1:orchestrator", Task: "e1", Agents: "{}"}
+			dir, _ := c.RunDir(spec.Name)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			const id = "de52c7f1-bbbe-45ba-9c44-84329190e3ca"
+			project := filepath.Join(c.Home, ".claude", "projects", "-owned")
+			if err := os.MkdirAll(project, 0700); err != nil {
+				t.Fatal(err)
+			}
+			task, cwd := spec.Task, dir
+			if kind == "wrong_task" {
+				task = "foreign"
+			}
+			if kind == "wrong_cwd" {
+				cwd = "/foreign"
+			}
+			raw, _ := json.Marshal(map[string]any{"type": "user", "sessionId": id, "cwd": cwd, "agentName": spec.Name, "message": map[string]any{"content": "factory-task: " + task}})
+			if kind == "copied_history" || kind == "foreign_ancestor" {
+				ancestorCwd := dir
+				if kind == "foreign_ancestor" {
+					ancestorCwd = "/foreign"
+				}
+				ancestor, _ := json.Marshal(map[string]any{"type": "user", "sessionId": "c7182a5b-0000-4000-8000-000000000000", "cwd": ancestorCwd, "message": map[string]any{"content": "factory-task: " + spec.Task}})
+				current, _ := json.Marshal(map[string]any{"type": "system", "sessionId": id, "cwd": dir, "agentName": spec.Name, "content": "compaction summary"})
+				raw = append(append(ancestor, '\n'), current...)
+			}
+			if err := os.WriteFile(filepath.Join(project, id+".jsonl"), append(raw, '\n'), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "ambiguous" {
+				if err := os.WriteFile(filepath.Join(project, "de52c7f1-1111-4111-8111-111111111111.jsonl"), append([]byte(strings.ReplaceAll(string(raw), id, "de52c7f1-1111-4111-8111-111111111111")), '\n'), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.Respond = func(cmd proc.Cmd) ([]byte, error) {
+				if cmd.Args[0] == "agents" {
+					if kind == "unknown_listing" {
+						return nil, fmt.Errorf("listing failed")
+					}
+					if kind == "live_other_job" {
+						return json.Marshal([]Session{{ID: "other", Name: spec.Name, Cwd: dir, PID: 12, State: "working"}})
+					}
+					return []byte("[]"), nil
+				}
+				return nil, nil
+			}
+			err := c.ResumeConfigured(context.Background(), "de52c7f1", spec)
+			if kind != "owned" && kind != "copied_history" {
+				if err == nil {
+					t.Fatal("unproven conversation resumed")
+				}
+				for _, call := range f.Calls() {
+					if call.Args[0] == "--bg" {
+						t.Fatal("unproven resume wrote")
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := f.Calls()
+			if got := calls[len(calls)-1].Args; len(got) < 3 || got[2] != id {
+				t.Fatalf("wrong conversation: %v", got)
+			}
+		})
 	}
 }

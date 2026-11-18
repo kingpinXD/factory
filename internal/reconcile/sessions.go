@@ -525,28 +525,15 @@ func (r *run) wake(sess *entity) error {
 	if owner == nil {
 		return fmt.Errorf("owner %s is not indexed", sess.session.Task)
 	}
+	if _, pending := claudePermissionRepair(sess); pending {
+		return r.driveClaudePermissionRepair(sess)
+	}
 	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
 	switch lookup.Presence {
 	case session.Unknown, session.Quarantined:
 		return nil
 	case session.Absent:
-		if _, pending := claudePermissionRepair(sess); pending {
-			return fmt.Errorf("permission repair waits for the stopped Claude session")
-		}
 		return r.launch(owner, sess)
-	}
-	if repair, pending := claudePermissionRepair(sess); pending {
-		s := lookup.Session
-		switch {
-		case s.ID != "" && s.ID != repair.Text:
-			if err := r.finishClaudePermissionRepair(sess, repair); err != nil {
-				return err
-			}
-		case s.Live():
-			return fmt.Errorf("permission repair waits for old Claude session %s to stop", repair.Text)
-		default:
-			return r.resumeClaudePermissionRepair(owner, sess, s, repair)
-		}
 	}
 	sess.st.NoPIDSince = time.Time{}
 	s := lookup.Session

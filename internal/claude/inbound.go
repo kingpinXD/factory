@@ -12,7 +12,11 @@ import (
 // conversation. Claude Code keeps saved options on a flagless resume, so a copy
 // is needed when those options no longer include Factory's settings.
 func (c Client) ResumeConfigured(ctx context.Context, id string, spec Spec) error {
-	previous, err := c.resumableSession(ctx, id)
+	return c.ResumeConfiguredFrom(ctx, id, "", spec)
+}
+
+func (c Client) ResumeConfiguredFrom(ctx context.Context, id, conversation string, spec Spec) error {
+	previous, err := c.configuredPrevious(ctx, id, conversation, spec)
 	if err != nil {
 		return err
 	}

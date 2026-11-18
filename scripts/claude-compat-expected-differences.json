@@ -480,6 +480,190 @@
           "present": true,
           "value": "2026-10-09T12:00:00Z"
         }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "events",
+          "e1-s1",
+          4,
+          "at"
+        ],
+        "main": {
+          "present": true,
+          "value": "2026-10-09T12:10:10Z"
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:16:16Z"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "events",
+          "e1-s1",
+          4,
+          "key"
+        ],
+        "main": {
+          "present": true,
+          "value": "e1-s1:running:blocked:tick:11:0"
+        },
+        "candidate": {
+          "present": true,
+          "value": "e1-s1:running:blocked:tick:21:0"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "events",
+          "e1-s1",
+          4,
+          "trigger_ref"
+        ],
+        "main": {
+          "present": true,
+          "value": "tick:11"
+        },
+        "candidate": {
+          "present": true,
+          "value": "tick:21"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "relations",
+          "event_tick:e1-s1#5"
+        ],
+        "main": {
+          "present": true,
+          "value": "11"
+        },
+        "candidate": {
+          "present": true,
+          "value": "17"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "same_numbers",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1",
+          "since"
+        ],
+        "main": {
+          "present": true,
+          "value": "2026-10-09T12:10:10Z"
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:16:16Z"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "different_targets",
+        "path": [
+          "evidence",
+          "events",
+          "e1-s1",
+          4,
+          "at"
+        ],
+        "main": {
+          "present": true,
+          "value": "2026-10-09T12:10:10Z"
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:16:16Z"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "different_targets",
+        "path": [
+          "evidence",
+          "events",
+          "e1-s1",
+          4,
+          "key"
+        ],
+        "main": {
+          "present": true,
+          "value": "e1-s1:running:blocked:tick:11:0"
+        },
+        "candidate": {
+          "present": true,
+          "value": "e1-s1:running:blocked:tick:21:0"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "different_targets",
+        "path": [
+          "evidence",
+          "events",
+          "e1-s1",
+          4,
+          "trigger_ref"
+        ],
+        "main": {
+          "present": true,
+          "value": "tick:11"
+        },
+        "candidate": {
+          "present": true,
+          "value": "tick:21"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "different_targets",
+        "path": [
+          "evidence",
+          "relations",
+          "event_tick:e1-s1#5"
+        ],
+        "main": {
+          "present": true,
+          "value": "11"
+        },
+        "candidate": {
+          "present": true,
+          "value": "17"
+        }
+      },
+      {
+        "scenario": "repository_routing",
+        "step": "different_targets",
+        "path": [
+          "evidence",
+          "states",
+          "e1-s1",
+          "since"
+        ],
+        "main": {
+          "present": true,
+          "value": "2026-10-09T12:10:10Z"
+        },
+        "candidate": {
+          "present": true,
+          "value": "2026-10-09T12:16:16Z"
+        }
       }
     ],
     "cli": []

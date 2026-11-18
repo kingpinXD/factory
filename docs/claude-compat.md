@@ -17,8 +17,12 @@ native dispatch acceptance remain outside this deterministic driver task.
 
 ## Reviewed differences
 
-`scripts/claude-compat-expected-differences.json` pins the 21 reviewed changes
-against main `e90b9bd`: six digest entries and fifteen scoped-clock entries.
+`scripts/claude-compat-expected-differences.json` pins 31 intended changes
+against main `e90b9bd`: six digest entries, fifteen scoped-clock entries and ten
+publication-liveness entries. In `repository_routing` (`same_numbers` and
+`different_targets`), the first set remains running until its PR is recorded.
+Its later idle transition changes the transition time, key, trigger reference,
+event-to-tick relation and status time. PR routing and writes stay the same.
 Each entry names the scenario, step and exact field path, with complete main
 and candidate values; `present: false` distinguishes a missing key from null.
 A changed array length records both complete arrays, including removed events.

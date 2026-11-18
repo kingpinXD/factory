@@ -92,7 +92,7 @@ class ExpectedDifferenceTests(unittest.TestCase):
         self.assertEqual(expected["baseline"], "e90b9bd00aa2b345eb00466ec8d77a73e4b64ec4")
         self.assertEqual(expected["packages"]["cli"], [])
         entries = expected["packages"]["reconcile"]
-        self.assertEqual(len(entries), 21)
+        self.assertEqual(len(entries), 31)
         scope = {}
         for entry in entries:
             coordinate = (entry["scenario"], entry["step"])
@@ -101,7 +101,9 @@ class ExpectedDifferenceTests(unittest.TestCase):
                                 ("usage_policy", "needs_you_reason"): 4,
                                 ("restart", "unknown_listing"): 3,
                                 ("restart", "resume"): 2,
-                                ("restart", "long_outage"): 10})
+                                ("restart", "long_outage"): 10,
+                                ("repository_routing", "same_numbers"): 5,
+                                ("repository_routing", "different_targets"): 5})
         with self.assertRaisesRegex(driver.Invalid, "frozen baseline"):
             driver.load_expected_differences(repo, "a" * 40)
 

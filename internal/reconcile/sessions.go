@@ -260,6 +260,9 @@ type delivery struct {
 func (r *run) deliveries(owner *entity) []delivery {
 	var out []delivery
 	for _, m := range events.Inbox(owner.evs) {
+		if owner.set != nil && m.Kind == events.KindMessage && m.Sender == events.SenderProgram && strings.HasPrefix(m.Key, "lease-notice:") && m.Lease != owner.st.Lease {
+			continue
+		}
 		out = append(out, delivery{ref: eventRef(owner.id, m), msg: m})
 	}
 	if owner.work != nil {
@@ -364,6 +367,9 @@ func (r *run) drive(owner *entity, component string) error {
 	if sess == nil {
 		return r.startSession(owner, component, id, name)
 	}
+	if err := r.notifyLeaseGrant(owner); err != nil {
+		return err
+	}
 	news := r.undelivered(owner, sess)
 	if len(news) == 0 {
 		return nil
@@ -374,6 +380,33 @@ func (r *run) drive(owner *entity, component string) error {
 		return nil
 	}
 	return r.post(owner, sess, s, news)
+}
+
+// notifyLeaseGrant also repairs grants written before lease notices existed.
+// The durable inbox message uses normal delivery retries and acknowledgements.
+func (r *run) notifyLeaseGrant(owner *entity) error {
+	if owner.set == nil || owner.st.Lease <= 1 || r.providerForEpic(owner.entry.Epic) != "claude" {
+		return nil
+	}
+	if _, ok := owner.byKey(leaseKey(owner.st.Lease)); !ok {
+		return nil
+	}
+	key := fmt.Sprintf("lease-notice:%d", owner.st.Lease)
+	if !owner.has(key) {
+		text := fmt.Sprintf("set: %s\nlease: %d\nThe program renewed your lease. Discard earlier lease values. If an action was refused for an old lease, check its outcome and retry with this lease.\n", owner.id, owner.st.Lease)
+		if _, err := r.append(owner, events.Event{At: r.now, Kind: events.KindMessage, Sender: events.SenderProgram, Lease: owner.st.Lease, Key: key, Text: text}); err != nil {
+			return err
+		}
+	}
+	// An unacknowledged old notice must not contradict the current grant.
+	for _, ev := range events.Inbox(owner.evs) {
+		if ev.Kind == events.KindMessage && ev.Sender == events.SenderProgram && strings.HasPrefix(ev.Key, "lease-notice:") && ev.Lease != owner.st.Lease {
+			if _, err := r.append(owner, events.Event{At: r.now, Kind: events.KindAck, Sender: events.SenderProgram, Ack: ev.Seq, Key: "lease-notice-superseded:" + seqRef(ev)}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // startSession makes the owner's session entity and starts the session,

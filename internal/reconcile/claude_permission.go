@@ -85,8 +85,21 @@ func claudePermissionRepair(sess *entity) (events.Event, bool) {
 	return repair, !done
 }
 
+// permissionResumeIntent returns the last launch snapshot, including legacy
+// intents prepared before retries recorded a separate snapshot for each launch.
+func permissionResumeIntent(sess *entity, repair events.Event) (events.Event, bool) {
+	key := claudePermissionResumePrefix + seqRef(repair)
+	for i := len(sess.evs) - 1; i >= 0; i-- {
+		ev := sess.evs[i]
+		if ev.Kind == events.KindIntent && ev.Sender == events.SenderProgram && (ev.Key == key || strings.HasPrefix(ev.Key, key+":launch:")) {
+			return ev, true
+		}
+	}
+	return events.Event{}, false
+}
+
 func (r *run) finishClaudePermissionRepair(sess *entity, repair events.Event) error {
-	copy, ok := sess.byKey(claudePermissionResumePrefix + seqRef(repair))
+	copy, ok := permissionResumeIntent(sess, repair)
 	if !ok {
 		return fmt.Errorf("permission repair has no configured resume intent")
 	}
@@ -108,7 +121,7 @@ func (r *run) observeClaudePermissionRepair(sess *entity, s session.Session) {
 	if repair.Seq == 0 || s.ID == "" || s.ID == repair.Text {
 		return
 	}
-	copy, prepared := sess.byKey(claudePermissionResumePrefix + seqRef(repair))
+	copy, prepared := permissionResumeIntent(sess, repair)
 	var intent claudePermissionResume
 	if !prepared || json.Unmarshal([]byte(copy.Text), &intent) != nil || slices.Contains(intent.Previous, s.ID) || s.StartedAt < copy.At.UnixMilli() {
 		return
@@ -128,29 +141,36 @@ func (r *run) resumeClaudePermissionRepair(owner, sess *entity, s session.Sessio
 		return fmt.Errorf("%s cannot restore Claude permission settings: runtime has no configured resume", sess.id)
 	}
 	var prepared claudePermissionResume
-	copy, exists := sess.byKey(claudePermissionResumePrefix + seqRef(repair))
+	copy, exists := permissionResumeIntent(sess, repair)
 	if exists {
 		if err := json.Unmarshal([]byte(copy.Text), &prepared); err != nil {
 			return err
 		}
-	} else {
-		for _, previous := range r.inventory("claude").Sessions {
-			if previous.Name == sess.session.Name {
-				prepared.Previous = append(prepared.Previous, previous.ID)
-			}
+	}
+	for _, previous := range r.inventory("claude").Sessions {
+		if previous.Name == sess.session.Name && !slices.Contains(prepared.Previous, previous.ID) {
+			prepared.Previous = append(prepared.Previous, previous.ID)
 		}
-		news := r.unacknowledged(owner, sess)
-		prepared.Prompt = r.resumePrompt(owner, sess.session.Component, news)
-		for _, d := range news {
-			prepared.Delivered = append(prepared.Delivered, d.ref)
-		}
-		data, err := json.Marshal(prepared)
-		if err != nil {
-			return err
-		}
-		if _, err = r.append(sess, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Key: claudePermissionResumePrefix + seqRef(repair), Text: string(data)}); err != nil {
-			return err
-		}
+	}
+	if err := r.notifyLeaseGrant(owner); err != nil {
+		return err
+	}
+	news := r.unacknowledged(owner, sess)
+	prepared.Prompt = r.resumePrompt(owner, sess.session.Component, news)
+	prepared.Delivered = nil
+	for _, d := range news {
+		prepared.Delivered = append(prepared.Delivered, d.ref)
+	}
+	data, err := json.Marshal(prepared)
+	if err != nil {
+		return err
+	}
+	key := claudePermissionResumePrefix + seqRef(repair)
+	if exists {
+		key += ":launch:" + seqRef(copy)
+	}
+	if _, err = r.append(sess, events.Event{At: r.now, Kind: events.KindIntent, Sender: events.SenderProgram, Key: key, Text: string(data)}); err != nil {
+		return err
 	}
 	spec, err := r.spec(owner, sess.session, prepared.Prompt)
 	if err != nil {

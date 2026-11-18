@@ -14,6 +14,9 @@ import (
 )
 
 func TestTerminalStopActualRequestCapturesBeforeTransition(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, _, _ := supervisorPlannerFixture(t)
 	if err := Stop(context.Background(), d, "e2", "UNIT actual public stop request"); err != nil {
 		t.Fatal(err)
@@ -42,6 +45,9 @@ func TestTerminalStopActualRequestCapturesBeforeTransition(t *testing.T) {
 }
 
 func TestTerminalStopActualPreTickClosesOriginalAndNeverSelectsSuccessor(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, rt, id := supervisorPlannerFixture(t)
 	name := sessionName("e2", componentPlanner)
 	original, err := rt.InspectCoordinatorAttemptByName(context.Background(), name)
@@ -139,6 +145,9 @@ func TestTerminalStopActualPreTickClosesOriginalAndNeverSelectsSuccessor(t *test
 }
 
 func TestTerminalStopReadyNoJobWorkCompletesActualClosedFence(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner, item, _, name := normalManagerWorkFixture(t)
 	rt.AttemptCapabilities = b2AttemptCaps{}
 	parent, err := rt.InspectCoordinatorAttemptByName(context.Background(), name)

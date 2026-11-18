@@ -216,6 +216,9 @@ func TestAWeeklyPauseWaitsForItsResetWithOneDM(t *testing.T) {
 }
 
 func TestTheProbeKeepsTheFigureFresh(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, reset := pausedWorld(t)
 	w.usage("u1", t0, 30, 40, reset, reset.Add(72*time.Hour))
 	w.tickAccount()
@@ -377,6 +380,9 @@ func TestAFiveHourPauseWithTheWeekNearItsLimitResumesAtTheReset(t *testing.T) {
 }
 
 func TestAStaleFigureDMsOnceThenStopsSessionsAsForAPause(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, reset := pausedWorld(t)
 	w.usage("u1", t0, 50, 40, reset, reset.Add(72*time.Hour))
 	// The probe cannot start, so no fresh figure comes.
@@ -540,6 +546,9 @@ func TestNothingStartsOnceAnotherTicksAccountStepPaused(t *testing.T) {
 }
 
 func TestAStaleFigureWithNoSessionRunningDMsNobody(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := newWorld(t)
 	w.realAccount()
 	// Open work with no session: an epic waiting on the user.
@@ -571,6 +580,9 @@ func (w *world) failProbe(fail bool) {
 // figure, so factory status shows its age. Once an entity opens, the probe is
 // prompted and its figure decides.
 func TestAnIdleFactoryKeepsItsAccountState(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := newWorld(t)
 	w.realAccount()
 	w.listSession("someone-else", 4103, "working")
@@ -619,6 +631,9 @@ func TestAnIdleFactoryKeepsItsAccountState(t *testing.T) {
 // account only goes near its limit, which holds back any new work. A live
 // factory session is work, even with every entity ended.
 func TestWhatCountsAsIdleForTheAccount(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name  string
 		live  bool
@@ -650,6 +665,9 @@ func TestWhatCountsAsIdleForTheAccount(t *testing.T) {
 // its 30-minute timeout does not run, so it never pauses for nothing. When
 // work opens again, the clock goes on from where it stopped.
 func TestAStaleAccountDoesNotPauseWhileTheFactoryIsIdle(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := newWorld(t)
 	w.realAccount()
 	w.failProbe(true)

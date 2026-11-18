@@ -262,6 +262,9 @@ func (r modelTelemetryRuntime) Models(context.Context, session.Ref) (map[string]
 	return nil, r.err
 }
 func TestCodexConfiguredPolicyKeepsUnavailableExecutionTelemetryExplicit(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, kind := range []string{"codex_policy", "claude", "untyped_error", "invalid_policy"} {
 		t.Run(kind, func(t *testing.T) {
 			w, d, fake := codexSampleWorld(t)
@@ -329,6 +332,9 @@ func codexCompactionFixture(t *testing.T) (*world, session.Spec, string) {
 	return w, fake.starts[0], file
 }
 func TestCodexManagerCompactionHasSeparateCheckpointBoundAuthority(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, kind := range []string{"valid", "changed_checkpoint", "later_write", "finished_boundary", "wrong_boundary_kind"} {
 		t.Run(kind, func(t *testing.T) {
 			w, spec, file := codexCompactionFixture(t)

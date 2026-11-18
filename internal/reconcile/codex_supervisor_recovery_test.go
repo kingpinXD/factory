@@ -204,6 +204,9 @@ func genuineSupervisorRequestForState(t *testing.T, w *world, d Deps, rt *codex.
 }
 
 func TestSupervisorActualObservedSourceRevalidatesWithoutForcingFreshClock(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, rt, id, request := genuineSupervisorRequest(t)
 	if request.Reason != "shutdown" {
 		t.Fatal("healthy supervisor mislabeled host failure")
@@ -238,6 +241,9 @@ func TestSupervisorActualObservedSourceRevalidatesWithoutForcingFreshClock(t *te
 }
 
 func TestSupervisorActualPendingSourceRejectsNewMessage(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, rt, id, request := genuineSupervisorRequest(t)
 	if _, err := store.AppendTo(w.brain, "e2", events.Event{At: time.Now().UTC(), Kind: events.KindMessage, Sender: senderUser, Text: "new actual user inbox message", Key: "supervisor-new-user-message"}); err != nil {
 		t.Fatal(err)
@@ -256,6 +262,9 @@ func TestSupervisorActualPendingSourceRejectsNewMessage(t *testing.T) {
 }
 
 func TestSupervisorActualSourceMissingCoverageHolds(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, rt, id, request := genuineSupervisorRequest(t)
 	overall, err := store.ReadOverall(w.brain)
 	if err != nil {
@@ -275,6 +284,9 @@ func TestSupervisorActualSourceMissingCoverageHolds(t *testing.T) {
 }
 
 func TestSupervisorActualRequestClosesOutsideTickAndManagerSelectsSuccessor(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, rt, id, request := genuineSupervisorRequest(t)
 	deadline := time.Now().Add(90 * time.Second)
 	var view codex.CoordinatorAttemptView

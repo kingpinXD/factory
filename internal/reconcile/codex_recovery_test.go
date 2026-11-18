@@ -48,6 +48,9 @@ func (r *splitRecoveryRuntime) RecoverLegacy(ctx context.Context) error {
 	return nil
 }
 func TestFactoryModernRecoveryRunsBeforeActualTickLock(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, base := codexSampleWorld(t)
 	runtime := &splitRecoveryRuntime{sampleCodexRuntime: base, brain: w.brain}
 	d.Runtimes["codex"] = runtime
@@ -93,6 +96,9 @@ func recoveryRealCoordinator(t *testing.T) (*world, *run, *codex.Runtime, codex.
 }
 
 func TestFactoryAutomaticRealFailedAttemptClosesOutsideTick(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, runtime, ref := recoveryRealCoordinator(t)
 	var v codex.Record
 	if err := store.ReadJSON(filepath.Join(w.brain, "factory/codex/sessions", ref.SessionID, "attempts", ref.AttemptID, "state.json"), &v); err != nil {
@@ -168,6 +174,9 @@ func pauseRequestFixture(t *testing.T) (*world, *run, *codex.Runtime, codex.Atte
 }
 
 func TestFactoryQuotaRequestClosesActualLivingHostOnNextPass(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, runtime, ref, _ := pauseRequestFixture(t)
 	view, err := runtime.InspectCoordinatorAttempt(context.Background(), ref.SessionID)
 	if err != nil || view.Stage != "claimed" {
@@ -337,6 +346,9 @@ func TestFactoryAdmittedPauseCompletesAfterActualAllowedRefresh(t *testing.T) {
 }
 
 func TestFactorySecondSameReasonRequestCannotOwnExistingSeal(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, runtime, ref, firstRef, first := preparedPauseRequestFixture(t)
 	interrupted := errors.New("actual post-seal domain boundary interrupted")
 	originalRecovery := runtime.ControlRecovery
@@ -416,6 +428,9 @@ func (f sealedControlRecoveryForRequestTest) RecoverSealedControls(ctx context.C
 }
 
 func TestFactoryCapabilityOnlyHoldDoesNotRequestLivingStop(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, runtime, ref := recoveryRealCoordinator(t)
 	r.d.ExecutorAdmission = func(context.Context, executor.Selection) error { return errors.New("actual unit capability hold") }
 	r.pauseCodexSessions()
@@ -453,6 +468,9 @@ func (c blockingRecoveryContainment) Fence(ctx context.Context, owner codex.Owne
 	}
 }
 func TestFactoryRequestedPhysicalFenceDoesNotHoldTick(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, runtime, ref, _ := pauseRequestFixture(t)
 	entered, release := make(chan struct{}), make(chan struct{})
 	runtime.Containment = blockingRecoveryContainment{Containment: runtime.Containment, entered: entered, release: release}

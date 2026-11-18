@@ -14,6 +14,9 @@ import (
 )
 
 func TestSupervisorActualNewOpenHoldBeyondSnapshotRevokesNewSeal(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, rt, id, request := genuineSupervisorRequest(t)
 	authority := rt.AttemptAuthority.(*factoryAttemptAuthority)
 	if err := supervisorTickCall(t, w.brain, func() error {

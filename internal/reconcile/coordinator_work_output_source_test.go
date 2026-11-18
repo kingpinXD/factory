@@ -88,6 +88,9 @@ func preparedWorkCoordinatorOutput(t *testing.T) (*world, codex.AttemptRef, help
 	return w, attempt, scope, owner, work, service, ref
 }
 func TestCoordinatorWorkOutputRecoversSamePreparedReferenceDuringPendingBoundaryAndFence(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	ctx := context.Background()
 	w, attempt, scope, owner, work, service, ref := preparedWorkCoordinatorOutput(t)
 	prepared, _, err := service.ReadControlOutput(ctx, ref)
@@ -152,6 +155,9 @@ func TestCoordinatorWorkOutputRecoversSamePreparedReferenceDuringPendingBoundary
 	}
 }
 func TestCoordinatorWorkOutputRetainedMatcherRejectsChangedGenerationBeforeWrite(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, scope, owner, work, service, ref := preparedWorkCoordinatorOutput(t)
 	ctx := context.Background()
 	prepared, _, err := service.ReadControlOutput(ctx, ref)
@@ -179,6 +185,9 @@ func TestCoordinatorWorkOutputRetainedMatcherRejectsChangedGenerationBeforeWrite
 	}
 }
 func TestCoordinatorWorkOutputCurrentDenyRefusesBeforePreparation(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	ctx := context.Background()
 	w, _, attempt, _, _, _, _ := workControlAuthorityFixture(t)
 	original := workControlOriginal(t, w, attempt, "denied-work-output", "file_write", map[string]any{"target": "e1-w1", "path": "checkpoint.v1.md", "text": "must not write"})

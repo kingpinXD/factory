@@ -205,6 +205,9 @@ func (a b2OfflineAuthority) CheckStart(ctx context.Context, j helper.Job) error 
 	return a.checkStartQualified(ctx, j, b2Qualification)
 }
 func TestB2ActualBrokerReplyOnlyRootAdmission(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, req := b2World(t)
 	// Actual programme log contains the planning entry and consumed helper plan.
 	l := b2Log(t, "planning")
@@ -438,6 +441,9 @@ func TestB2KnownMissingContractWaitDoesNotFakeAdmission(t *testing.T) {
 }
 
 func TestB2MissingCoordinatorWaitKeepsUnknownEvidenceHard(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, bad := range []string{"torn work log", "modern pointer", "running record loss", "corrupt legacy record"} {
 		t.Run(bad, func(t *testing.T) {
 			w, r, service, req := b2CapturedHandover(t)
@@ -491,6 +497,9 @@ func TestB2MissingCoordinatorWaitKeepsUnknownEvidenceHard(t *testing.T) {
 }
 
 func TestB2RestartBoundaryWaitKeepsCurrentContractStrict(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, state := range []string{sessionDead, sessionStarting} {
 		t.Run(state, func(t *testing.T) {
 			w, service, req, record, rp := codexStartFixture(t)
@@ -538,6 +547,9 @@ func TestB2RestartBoundaryWaitKeepsCurrentContractStrict(t *testing.T) {
 }
 
 func TestB2RestartWaitRejectsUnprovenBoundary(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, bad := range []string{"running", "older generation", "wrong owner", "wrong selection", "missing ready", "wrong grant marker", "wrong intent kind", "modern pointer", "corrupt record"} {
 		t.Run(bad, func(t *testing.T) {
 			w, service, req, record, rp := codexStartFixture(t)

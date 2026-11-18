@@ -113,6 +113,9 @@ func TestCodexQueuedHelperWaitsForOwnerRecovery(t *testing.T) {
 	}
 }
 func TestCodexStartAuthorityRequiresExactReadyOwnedHost(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, kind := range []string{"ready", "dead", "starting", "stopped", "compacting", "pending", "missing", "corrupt", "pid_mismatch", "wrong_generation", "host_starting", "host_compacting", "host_stopped", "turn_ended"} {
 		t.Run(kind, func(t *testing.T) {
 			w, s, req, record, rp := codexStartFixture(t)

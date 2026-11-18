@@ -15,6 +15,9 @@ import (
 )
 
 func TestCodexDownstreamAdmissionRequiresCurrentPhase(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, test := range []struct{ component, phase, file string }{{"verifier", "verifying", "verify.v1.md"}, {"pr-opener", "pr_open", "pr.v1.md"}} {
 		t.Run(test.component, func(t *testing.T) {
 			w, s, req, _, _ := codexStartFixture(t)

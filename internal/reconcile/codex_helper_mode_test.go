@@ -125,6 +125,9 @@ func TestCodexExistingPRRevisionKeepsVerifierScopeAndBindsDestination(t *testing
 	}
 }
 func TestCodexExistingPRRevisionDeniesChangedAuthority(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, which := range []string{"owner", "component", "mode", "parent", "lease", "provider", "recorded PR", "live PR", "handback", "stopped babysitter"} {
 		t.Run(which, func(t *testing.T) {
 			w, s, req := codexRevisionFixture(t)

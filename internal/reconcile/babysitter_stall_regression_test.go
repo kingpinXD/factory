@@ -132,6 +132,9 @@ func TestBabysitterStallRegressionIdleOpenPassWithDeliveredThreadsRecovers(t *te
 }
 
 func TestBabysitterStallRegressionDoesNotWakeWithoutEligibility(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, name := range []string{"healthy_wait", "busy_worker", "near_limit", "paused", "stale", "unknown_listing"} {
 		t.Run(name, func(t *testing.T) {
 			w, posted, baseline := stalledBabysitterWorld(t, name != "healthy_wait", name != "busy_worker")
@@ -175,6 +178,9 @@ func babysitterTickAt(w *world, at time.Duration) {
 }
 
 func TestBabysitterStallRegressionIdleChurnStillRestarts(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, posted, baseline := stalledBabysitterWorld(t, true, true)
 	cp := w.kinds(item, events.KindCheckpoint)[0]
 	for minute := 1; minute <= 55; minute++ {
@@ -223,6 +229,9 @@ func TestBabysitterStallRegressionIdleChurnStillRestarts(t *testing.T) {
 }
 
 func TestBabysitterStallRegressionNovelOutputResetsWindow(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, kind := range []string{events.KindCheckpoint, events.KindEnd} {
 		t.Run(kind, func(t *testing.T) {
 			w, posted, baseline := stalledBabysitterWorld(t, true, true)
@@ -295,6 +304,9 @@ func TestBabysitterStallRegressionHoldDoesNotAdvanceClock(t *testing.T) {
 }
 
 func TestBabysitterStallRegressionMixedRestartBudgets(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, budget := range []string{"hour", "item"} {
 		for _, deadFirst := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/deadFirst_%v", budget, deadFirst), func(t *testing.T) {
@@ -330,6 +342,9 @@ func TestBabysitterStallRegressionMixedRestartBudgets(t *testing.T) {
 }
 
 func TestBabysitterStallRegressionFreshEligibilityBeforeAction(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, action := range []string{"nudge", "restart"} {
 		for _, changed := range []string{"near_limit", "paused", "unknown_listing", "busy_worker"} {
 			t.Run(action+"/"+changed, func(t *testing.T) {
@@ -383,6 +398,9 @@ func TestBabysitterStallRegressionFreshEligibilityBeforeAction(t *testing.T) {
 }
 
 func TestBabysitterStallRegressionBoundaryAndClaudeHelperIsolation(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, gate := range []string{"boundary", "foreign_helper_ledger"} {
 		for _, action := range []string{"nudge", "restart"} {
 			t.Run(gate+"/"+action, func(t *testing.T) {

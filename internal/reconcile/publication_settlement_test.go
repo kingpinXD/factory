@@ -59,6 +59,9 @@ func publicationSettlementFixture(t *testing.T, operation string) (*world, Deps,
 }
 
 func TestSettlePublicationWritesOnlyExplicitObservedOutcome(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, operation := range []string{"push", "create", "ready"} {
 		for _, outcome := range []string{"landed", "not-landed"} {
 			t.Run(operation+"/"+outcome, func(t *testing.T) {
@@ -111,6 +114,9 @@ func TestSettlePublicationWritesOnlyExplicitObservedOutcome(t *testing.T) {
 }
 
 func TestSettlePublicationRefusesWrongAuthorityAndObservation(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, test := range []struct {
 		name, operation, outcome string
 		change                   func(*world, *Deps, *publication.Intent, *string, *int)

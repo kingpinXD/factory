@@ -31,6 +31,9 @@ func (f *quotaResumeRuntime) Resume(_ context.Context, ref session.Ref, _ string
 	return nil
 }
 func TestCodexQuotaHourlyManagerResumesSameSession(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, d, base := codexSampleWorld(t)
 	runtime := &quotaResumeRuntime{sampleCodexRuntime: base}
 	d.Runtimes["codex"] = runtime

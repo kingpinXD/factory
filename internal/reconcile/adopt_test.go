@@ -39,6 +39,9 @@ func (w *world) fixPR(change func(*gh.PR)) {
 }
 
 func TestARepairAdoptsTheUsersOwnOpenPRWithoutAnAnswer(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name     string
 		repair   bool

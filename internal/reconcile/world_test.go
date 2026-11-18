@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -303,14 +304,42 @@ func (w *world) listen(pid int) func() []string {
 		w.t.Fatal(err)
 	}
 	w.t.Cleanup(func() { ln.Close() })
+	raw, err := ln.SyscallConn()
+	if err != nil {
+		w.t.Fatal(err)
+	}
 	var got []string
 	return func() []string {
 		for {
-			// The deadline only ends the wait on an empty queue.
-			ln.SetDeadline(time.Now().Add(100 * time.Millisecond))
-			conn, err := ln.Accept()
+			var socket int
+			var acceptErr error
+			err := raw.Control(func(fd uintptr) {
+				syscall.ForkLock.RLock()
+				defer syscall.ForkLock.RUnlock()
+				for {
+					socket, _, acceptErr = syscall.Accept(int(fd))
+					if acceptErr != syscall.EINTR {
+						break
+					}
+				}
+				if acceptErr == nil {
+					syscall.CloseOnExec(socket)
+				}
+			})
 			if err != nil {
+				w.t.Fatal(err)
+			}
+			if acceptErr == syscall.EAGAIN || acceptErr == syscall.EWOULDBLOCK {
 				return slices.Clone(got)
+			}
+			if acceptErr != nil {
+				w.t.Fatal(acceptErr)
+			}
+			file := os.NewFile(uintptr(socket), "fixture-inbox")
+			conn, err := net.FileConn(file)
+			file.Close()
+			if err != nil {
+				w.t.Fatal(err)
 			}
 			var m struct {
 				Message struct{ Content string }

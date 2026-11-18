@@ -350,6 +350,9 @@ func TestProgrammeReadRejectsMissingOriginalSourceBeforeAnyWrite(t *testing.T) {
 }
 
 func TestProgrammeReadPreparePersistsOneExactOriginalAndQueue(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, runtime, attempt, source := realReadSourceFixture(t)
 	admission, err := buildControlReadLocked(context.Background(), w.brain, source, b2Qualification)
 	if err != nil {
@@ -706,6 +709,9 @@ func TestProgrammeReadWorkerRecoversActualCrashBeforeQueueAndKeepsHealthyRows(t 
 }
 
 func TestProgrammeReadWorkerDoesNotStartAfterSourceSeal(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, runtime, attempt, source := realReadSourceFixtureWithSetup(t, normalReadExecutablePins(t))
 	trace := normalReadContainmentFixture(t, w, attempt)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -741,6 +747,9 @@ func TestProgrammeReadWorkerDoesNotStartAfterSourceSeal(t *testing.T) {
 }
 
 func TestProgrammeReadCurrentCoordinatorGuardRechecksRepositoryPolicy(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, _, source := realReadSourceFixture(t)
 	original, err := controlrecord.ReadOriginal(w.brain, source.Original)
 	if err != nil {
@@ -805,6 +814,9 @@ func TestProgrammeReadCurrentCoordinatorGuardRechecksRepositoryPolicy(t *testing
 }
 
 func TestProgrammeReadLookupRetainsActualRequestAfterSourceStops(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, runtime, attempt, source := realReadSourceFixture(t)
 	a, err := buildControlReadLocked(context.Background(), w.brain, source, b2Qualification)
 	if err != nil {

@@ -14,6 +14,9 @@ import (
 )
 
 func TestClaudeCheckpointListsAfterGitHubReads(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	capture := &compatCapture{t: t, roots: map[string]string{}}
 	compatCheckpoint(capture)
 	step := capture.trace.Scenarios[0].Steps[2]
@@ -48,6 +51,9 @@ func (r tracingClaudeInventory) List(ctx context.Context) (session.Inventory, er
 }
 
 func TestClaudeWorkerRetryListsOncePerTick(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	originalDeps := compatCandidateDeps
 	t.Cleanup(func() { compatCandidateDeps = originalDeps })
 	ticks := 0

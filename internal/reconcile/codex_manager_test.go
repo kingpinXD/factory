@@ -182,6 +182,9 @@ func ordinaryManagerFixture(t *testing.T) (*world, *run, *codex.Runtime, *entity
 }
 
 func TestOrdinaryManagerCreatesActualFirstLeaseActivationAndAttempt(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	if _, _, found, err := nativeReadActivation(owner); err != nil || found || owner.st.Lease != 0 {
 		t.Fatal("fixture preseeded initial authority", err)
@@ -257,6 +260,9 @@ func (managerOfflineContainment) Fence(context.Context, codex.Owner) error   { r
 func (managerOfflineContainment) Promote(context.Context, codex.Owner) error { return nil }
 
 func TestOrdinaryManagerRecoversTwoActualFailedHostsWithoutChangingAuthority(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	put(t, filepath.Join(w.brain, "s6-fail-prepare"), "fail actual contained preparation")
 	id, name := r.sessionSlot(owner, componentOrchestrator)
@@ -365,6 +371,9 @@ func (managerDenyCapabilities) VerifyAttempt(context.Context, executor.Selection
 }
 
 func TestManagerSameSelectedAttemptTwoQueuedChildrenHaveOneActualClaim(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	id, name := r.sessionSlot(owner, componentOrchestrator)
 	rt.AttemptCapabilities = managerDenyCapabilities{}
@@ -451,6 +460,9 @@ func managerCleanupOwnedChildren(t *testing.T, brain string, _ *codex.Runtime, _
 }
 
 func TestActualTickUsesOrdinaryManagerWithoutPreseededActivation(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	if _, err := r.append(owner, events.Event{At: r.now, Kind: events.KindMessage, Sender: events.SenderProgram, Text: "actual work delivered to new owner", Key: "ordinary-tick-inbox"}); err != nil {
 		t.Fatal(err)
@@ -502,6 +514,9 @@ func TestActualTickUsesOrdinaryManagerWithoutPreseededActivation(t *testing.T) {
 }
 
 func TestManagerRepairsSelectedChargeBeforeLaunchWithoutRebudgetOrRefund(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	id, name := r.sessionSlot(owner, componentOrchestrator)
 	rt.AttemptCapabilities = managerDenyCapabilities{}
@@ -595,6 +610,9 @@ func TestManagerRepairsSelectedChargeBeforeLaunchWithoutRebudgetOrRefund(t *test
 }
 
 func TestManagerInitialGrantReplayRequiresExactModernRegistration(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	id, name := r.sessionSlot(owner, componentOrchestrator)
 	// Admit no child. Force a real later qualification failure after the actual
@@ -645,6 +663,9 @@ func TestManagerInitialGrantReplayRequiresExactModernRegistration(t *testing.T) 
 }
 
 func TestManagerPreparedLaunchKeepsArrivingInboxUntilActualPost(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner := ordinaryManagerFixture(t)
 	id, name := r.sessionSlot(owner, componentOrchestrator)
 	rt.AttemptCapabilities = managerDenyCapabilities{}
@@ -808,6 +829,9 @@ func normalManagerWorkFixture(t *testing.T) (*world, *run, *codex.Runtime, *enti
 }
 
 func TestManagerNormalOwnerProducesDependentWorkAuthorityAndClock(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, r, rt, owner, item, id, name := normalManagerWorkFixture(t)
 	workActivation, _, found, err := nativeReadActivation(item)
 	if err != nil || !found || workActivation.WorkGeneration == "" || workActivation.OwnerActivation == nil {

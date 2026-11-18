@@ -8,6 +8,9 @@ import (
 )
 
 func TestCodexConflictingInventoryKeepsSiblingUsable(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, kind := range []string{"indexed_owner", "indexed_epic", "duplicate", "unindexed_owner", "unbound_row"} {
 		t.Run(kind, func(t *testing.T) {
 			w, d, f := codexSampleWorld(t)

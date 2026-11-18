@@ -51,6 +51,9 @@ func workControlAuthorityFixture(t *testing.T) (*world, *codex.Runtime, codex.At
 	return w, runtime, attempt, scope, owner, work, helper.Service{Brain: w.brain, Authority: authority}
 }
 func TestWorkControlAuthoritiesUseCapturedOldWorkGenerationDuringPendingBoundary(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w, _, _, scope, owner, work, _ := workControlAuthorityFixture(t)
 	ctx := context.Background()
 	if err := validateWorkControlAuthorities(ctx, w.brain, scope, owner, work, b2Qualification); err != nil {
@@ -91,6 +94,9 @@ func TestWorkControlAuthoritiesUseCapturedOldWorkGenerationDuringPendingBoundary
 	}
 }
 func TestWorkControlRecoveryResumesOnlyAlreadyAdmittedNoJobFence(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	ctx := context.Background()
 	w, _, attempt, scope, owner, work, helpers := workControlAuthorityFixture(t)
 	binary, err := os.Executable()
@@ -155,6 +161,9 @@ func workControlOriginal(t *testing.T, w *world, attempt codex.AttemptRef, call,
 	return ref
 }
 func TestWorkControlPositiveSnapshotCompletesBeforeMissingOldGenerationWithoutReread(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	ctx := context.Background()
 	w, _, attempt, scope, owner, work, _ := workControlAuthorityFixture(t)
 	message := w.append(w.dir("e1-w1"), events.Event{Kind: events.KindMessage, Sender: "user", Text: "actual captured inbox"})
@@ -219,6 +228,9 @@ func TestWorkControlPositiveSnapshotCompletesBeforeMissingOldGenerationWithoutRe
 }
 
 func TestWorkControlClosesActualScopedEventWithoutStoppingHealthySetAttempt(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	ctx := context.Background()
 	w, _, attempt, scope, owner, work, helpers := workControlAuthorityFixture(t)
 	original := workControlOriginal(t, w, attempt, "scoped-event-cut", "event", map[string]any{"target": "e1-w1", "kind": "message", "text": "must not append after scoped fence", "to": "user"})

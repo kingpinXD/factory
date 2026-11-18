@@ -97,7 +97,7 @@ func validateContract2ReceiptLocal(ctx context.Context, brain string, selection 
 		return ErrObservationUnknown
 	}
 	grant, err := loadAcceptanceReadGrant(brain, receipt.Grant)
-	if err != nil || !sameAcceptanceSelection(grant.Selection, selection) || ProgramProcessDigest(grant.Owner) != ProgramProcessDigest(receipt.Bootstrap) {
+	if err != nil || contract2AcceptanceBinding(grant.Selection) != receipt.Binding || ProgramProcessDigest(grant.Owner) != ProgramProcessDigest(receipt.Bootstrap) {
 		return ErrObservationUnknown
 	}
 	seal, err := readAcceptanceReadSeal(brain, receipt.Grant)
@@ -165,7 +165,7 @@ func validateContract2ReceiptLocal(ctx context.Context, brain string, selection 
 		return err
 	}
 	for _, owner := range append([]Owner{receipt.Owner}, receipt.PriorOwners...) {
-		if owner.ControlOnly || owner.CodexContract != 2 || owner.Worktree != grant.Target.Worktree || owner.Generation != grant.Binding || !sameAcceptanceSelection(owner.Selection, selection) {
+		if owner.ControlOnly || owner.CodexContract != 2 || owner.Worktree != grant.Target.Worktree || owner.Generation != grant.Binding || !sameAcceptanceSelection(owner.Selection, grant.Selection) {
 			return ErrObservationUnknown
 		}
 	}

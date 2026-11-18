@@ -35,8 +35,8 @@ var Guards = map[string]string{
 	// set
 	"lease_taken":       "an orchestrator holds the set's lease",
 	"session_started":   "the entity's session is listed",
-	"nothing_startable": "no open item can start now",
-	"item_startable":    "an open item can start now",
+	"nothing_startable": "no item is being worked, no orchestrator PR opening remains and no open item can start now",
+	"item_startable":    "an open item can start now, or a set blocked because nothing was startable still has an orchestrator PR to open",
 	"items_finished":    "every item is merged or cancelled",
 	"handed_back":       "an item of the set got its worktree back from its babysitter since the set entered its state",
 	"item_released":     "an item of the set went back to work before pr_open, its blockers released, since the set entered its state",

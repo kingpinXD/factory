@@ -319,11 +319,13 @@ func (r *run) needsSession(owner *entity) bool {
 		items, _ := r.itemsOf(owner)
 		return slices.ContainsFunc(items, func(it *entity) bool {
 			_, ok := worktreeReady(it)
-			return ok && (active(it) || r.openingPR(it))
+			return ok && r.orchestratorWorking(it)
 		})
 	}
 	return false
 }
+
+func (r *run) orchestratorWorking(it *entity) bool { return active(it) || r.openingPR(it) }
 
 // openingPR reports whether the orchestrator is opening the item's PR: the
 // item is in pr_open and nothing hands its worktree over yet. With its PR

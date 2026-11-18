@@ -354,11 +354,11 @@ machines:
         health: events
       running:
         entry: the orchestrator works the set's items, starting the next startable one when the current one reaches pr_open
-        exits: blocked when nothing in it can start or it used up its restarts; done when every item is merged or cancelled
+        exits: blocked when no item is being worked, no orchestrator PR opening remains and nothing can start, or it used up its restarts; done when every item is merged or cancelled
         health: events
       blocked:
-        entry: nothing in the set can start (the orchestrator ended its turn), or it used up its restarts (one planner run)
-        exits: running when an item can start (the tick nudges the orchestrator), an item's blockers are released (the orchestrator is told to resume it), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
+        entry: no item is being worked, no orchestrator PR opening remains and nothing can start, or it used up its restarts (one planner run)
+        exits: running when an item can start (the tick nudges the orchestrator), an idle-blocked set still has a PR to open, an item's blockers are released (the orchestrator is told to resume it), the planner sends an instruction, or a handback gives the orchestrator an item back; done when every item is merged or cancelled
         health: waits
       needs_you:
         entry: only the user can settle it (DM sent)

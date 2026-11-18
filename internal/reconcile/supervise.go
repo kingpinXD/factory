@@ -352,6 +352,15 @@ func (r *run) subject(owner *entity) *entity {
 			return it
 		}
 	}
+	// Codex publication belongs to the repo worker, not its orchestrator.
+	if r.providerForEpic(owner.entry.Epic) != "claude" {
+		return nil
+	}
+	for _, it := range items {
+		if _, ready := worktreeReady(it); ready && r.openingPR(it) {
+			return it
+		}
+	}
 	return nil
 }
 

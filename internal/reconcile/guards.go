@@ -537,13 +537,18 @@ func (r *run) itemsFinished(e *entity) (bool, string, error) {
 	return true, "", nil
 }
 
-// itemStartable: an item of the set or epic can start now.
+// itemStartable: an item can start, or an idle-blocked set still has a PR to open.
 func (r *run) itemStartable(e *entity) (bool, string, error) {
 	items, err := r.itemsOf(e)
 	if err != nil {
 		return false, "", err
 	}
 	for _, it := range items {
+		// Only nothing_startable blocks a running set on a file trigger.
+		// A set blocked by its restart budget still needs the planner.
+		if e.set != nil && e.cur.State == stateBlocked && e.enteredBy.From == setRunning && e.enteredBy.Trigger == blueprint.TriggerFile && r.openingPR(it) {
+			return true, "", nil
+		}
 		if ok, err := r.canStart(it); ok || err != nil {
 			return ok, "", err
 		}
@@ -551,13 +556,13 @@ func (r *run) itemStartable(e *entity) (bool, string, error) {
 	return false, "", nil
 }
 
-// nothingStartable: no item of the set is being worked and none can start.
+// nothingStartable: no orchestrator work remains and no item can start.
 func (r *run) nothingStartable(e *entity) (bool, string, error) {
 	items, err := r.itemsOf(e)
 	if err != nil {
 		return false, "", err
 	}
-	if slices.ContainsFunc(items, active) {
+	if slices.ContainsFunc(items, r.orchestratorWorking) {
 		return false, "", nil
 	}
 	ok, _, err := r.itemStartable(e)

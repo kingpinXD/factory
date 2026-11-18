@@ -38,6 +38,21 @@ func (c Client) configuredPrevious(ctx context.Context, id, conversation string,
 			if conversation != "" && row.SessionID != conversation {
 				return Session{}, fmt.Errorf("resume %s: conversation identity changed", id)
 			}
+			if row.Name == "" && row.SessionID != "" {
+				dir, err := c.RunDir(spec.Name)
+				if err != nil {
+					return Session{}, err
+				}
+				if row.Cwd == dir {
+					if !conversationUUID.MatchString(row.SessionID) || (id != row.SessionID[:8] && id != row.SessionID) {
+						return Session{}, fmt.Errorf("resume %s: invalid listed conversation", id)
+					}
+					if _, err := c.ownedConversation(ctx, row.SessionID, dir, spec); err != nil {
+						return Session{}, err
+					}
+					row.Name = spec.Name
+				}
+			}
 			return row, nil
 		}
 	}

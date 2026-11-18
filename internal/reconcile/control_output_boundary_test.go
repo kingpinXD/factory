@@ -151,6 +151,17 @@ func testHelperOutputRecovery(t *testing.T, replaceSource string) {
 		t.Fatalf("invalid prepared reply %q: %v", scanner.Text(), err)
 	}
 	recovery := helper.Service{Brain: w.brain, Authority: outputFixtureAuthority{NativeAuthority{w.brain}}, FenceRuntime: service.FenceRuntime}
+	stopAttempts := 0
+	if replaceSource == "job" {
+		// Stopping and observing a real process can remain uncertain across more than one recovery pass.
+		recovery.FenceRuntime = func(ctx context.Context, current helper.Job) error {
+			stopAttempts++
+			if stopAttempts <= 2 {
+				return codex.ErrObservationUnknown
+			}
+			return service.FenceRuntime(ctx, current)
+		}
+	}
 	prepared, _, err := recovery.ReadControlOutput(context.Background(), ref)
 	if err != nil {
 		t.Fatal(err)
@@ -229,11 +240,31 @@ func testHelperOutputRecovery(t *testing.T, replaceSource string) {
 			t.Logf("fence diagnostic found=%v token=%s blocks=%s fences=%s scopes=%s read=%v decode=%v", found, token, ledger["blocks"], ledger["fences"], ledger["scopes"], readErr, decodeErr)
 			t.Fatalf("actual fence did not retain pending stop/output: %v %v", fenceErr, observeErr)
 		}
-		if errors.Is(observeErr, helper.ErrControlFenceUnstopped) {
-			if err := recovery.ResumeControlOutputFence(ctx, job.Scope, token, "control_transfer"); err != nil {
-				t.Fatal("same token did not resume actual backend stop", err)
+		for errors.Is(observeErr, helper.ErrControlFenceUnstopped) {
+			resumeErr := recovery.ResumeControlOutputFence(ctx, job.Scope, token, "control_transfer")
+			if resumeErr != nil && !errors.Is(resumeErr, codex.ErrObservationUnknown) {
+				t.Fatal("same token did not resume actual backend stop", resumeErr)
+			}
+			observed, _, retained, err := recovery.PendingControlOutputFence(ctx, job.Scope)
+			if !retained || observed != token {
+				t.Fatalf("backend stop changed its fence: %q != %q: %v", observed, token, err)
+			}
+			observeErr = err
+			if !errors.Is(observeErr, helper.ErrControlFenceUnstopped) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("same token did not finish actual backend stop: %v (last stop: %v)", ctx.Err(), resumeErr)
+			case <-time.After(10 * time.Millisecond):
 			}
 		}
+		if observeErr != nil {
+			t.Fatal("same token could not observe stopped backend", observeErr)
+		}
+	}
+	if replaceSource == "job" && stopAttempts < 3 {
+		t.Fatalf("backend stop did not outlast both uncertain observations: %d", stopAttempts)
 	}
 	observed, outputs, found, err := recovery.PendingControlOutputFence(ctx, job.Scope)
 	if err != nil || !found || observed != token || len(outputs) != 1 || outputs[0] != ref {

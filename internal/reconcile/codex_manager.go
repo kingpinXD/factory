@@ -94,6 +94,9 @@ func (r *run) manageCodexCoordinator(owner, sess *entity) error {
 	if err != nil {
 		return err
 	}
+	if handled, err := r.refreshCodexQualification(owner, sess, runtime, verify); handled || err != nil {
+		return err
+	}
 	view, err := runtime.InspectCoordinatorAttemptByName(r.ctx, sess.session.Name)
 	if errors.Is(err, os.ErrNotExist) {
 		return r.prepareInitialCodexCoordinator(owner, sess, runtime, verify)
@@ -332,7 +335,10 @@ func (r *run) coordinatorReplacementMode(sess *entity, view codex.CoordinatorAtt
 		return "", err
 	}
 	switch request.Mode {
-	case "process_pause", "process_replace":
+	case "process_pause", "process_replace", "qualification_refresh":
+		if request.Mode == "qualification_refresh" {
+			return "process_replace", nil
+		}
 		return request.Mode, nil
 	case "explicit_stop", "owner_transfer":
 		return "", nil
@@ -382,8 +388,21 @@ func (r *run) readCoordinatorSelectionLocked(sess *entity, key string, previous 
 			return intent, err
 		}
 		var request CoordinatorCloseRequest
-		if toolcontract.DecodeBroker([]byte(requestEv.Text), &request) != nil || request.Mode != intent.Mode || request.Attempt != previous || request.Reason != old.SealReason || request.Authority != intent.Authority {
+		if toolcontract.DecodeBroker([]byte(requestEv.Text), &request) != nil {
 			return intent, effects.ErrEvidence
+		}
+		refresh := request.Mode == "qualification_refresh" && intent.Mode == "process_replace"
+		if !refresh && (request.Mode != intent.Mode || request.Authority != intent.Authority) || request.Attempt != previous || request.Reason != old.SealReason {
+			return intent, effects.ErrEvidence
+		}
+		if refresh {
+			if err := validateQualificationClose(r.ctx, r.d.Brain, request, verify); err != nil {
+				return intent, err
+			}
+			_, activation, err := nativeAuthority(r.ctx, r.d.Brain, old.EpicID, old.OwnerID, current, &intent.Authority, verify)
+			if err != nil || activation.Previous == nil || *activation.Previous != request.Authority.Activation {
+				return intent, effects.ErrAuthority
+			}
 		}
 	}
 	_, _, err = nativeAuthority(r.ctx, r.d.Brain, old.EpicID, old.OwnerID, current, &intent.Authority, verify)

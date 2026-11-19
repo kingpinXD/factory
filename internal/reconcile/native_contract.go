@@ -127,6 +127,7 @@ type nativeBasisPolicy uint8
 const (
 	nativeAdmissionBasis nativeBasisPolicy = iota
 	nativePreparedOutputBasis
+	nativeQualificationRetirementBasis
 )
 
 func nativeBasis(ix store.Index, e *entity) ([]nativeOwnerBasis, error) {
@@ -269,7 +270,10 @@ func nativeOutputRecoveryAuthority(ctx context.Context, brain string, expected O
 func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current bool, expected *OwnerAuthority, verify nativeAcceptance, policy nativeBasisPolicy) (OwnerAuthority, nativeActivation, error) {
 	var out OwnerAuthority
 	var empty nativeActivation
-	if policy != nativeAdmissionBasis && policy != nativePreparedOutputBasis {
+	if policy != nativeAdmissionBasis && policy != nativePreparedOutputBasis && policy != nativeQualificationRetirementBasis {
+		return out, empty, effects.ErrAuthority
+	}
+	if policy == nativeQualificationRetirementBasis && (current || expected == nil) {
 		return out, empty, effects.ErrAuthority
 	}
 	if policy == nativePreparedOutputBasis && (!current || expected == nil) {
@@ -297,6 +301,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 		if ev.Recipient != codexAuthorityRecipient || ev.Kind != events.KindRequest || ev.Sender != events.SenderProgram || ev.Request != "activate" {
 			return out, empty, fmt.Errorf("retained activation event changed")
 		}
+		rec = nativeActivation{}
 		if err := toolcontract.DecodeBroker([]byte(ev.Text), &rec); err != nil {
 			return out, empty, err
 		}
@@ -312,7 +317,10 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 	if err != nil {
 		return out, empty, err
 	}
-	if acceptance != rec.Acceptance {
+	if acceptance != rec.Acceptance && policy == nativeAdmissionBasis && !current && expected != nil && qualificationSettlementAllowed(ctx, brain, *expected, verify) {
+		policy = nativeQualificationRetirementBasis
+	}
+	if acceptance != rec.Acceptance && (policy != nativeQualificationRetirementBasis || acceptance.Binding != rec.Acceptance.Binding || acceptance.ReceiptSHA256 == "") {
 		return out, empty, fmt.Errorf("authority qualification changed")
 	}
 	if err := nativeValidateBasis(ix, rec.Basis); err != nil {
@@ -322,7 +330,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 	if expected != nil && out != *expected {
 		return out, empty, fmt.Errorf("authority revision changed")
 	}
-	if current {
+	if current || policy == nativeQualificationRetirementBasis {
 		b, err := blueprint.Load(blueprint.Path(brain))
 		if err != nil {
 			return out, empty, err
@@ -331,7 +339,11 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 		if !ok || state.End {
 			return out, empty, fmt.Errorf("authority owner is not open")
 		}
-		basis, err := nativeBasisUsing(ix, e, policy)
+		basisPolicy := policy
+		if policy == nativeQualificationRetirementBasis {
+			basisPolicy = nativeAdmissionBasis
+		}
+		basis, err := nativeBasisUsing(ix, e, basisPolicy)
 		if err != nil {
 			return out, empty, err
 		}

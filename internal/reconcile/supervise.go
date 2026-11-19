@@ -1103,6 +1103,14 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 		return fmt.Sprintf("%s timed out %d times, and its planner was restarted each time", t.From, r.b.Values.Supervision.PlannerRunsPerProblem)
 	case strings.HasPrefix(ref, publicationHoldRef):
 		return strings.TrimPrefix(ref, publicationHoldRef) + "; use factory settle-publication " + e.id + " --write <key> --outcome landed (--head <sha> for push, --pr <N> for PR), or --outcome not-landed after resolving the conflict; then factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef) && strings.HasSuffix(ref, ":authority-changed"):
+		return "Codex verification changed and the saved planner inputs or ownership no longer match; restore the recorded configuration before factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef) && strings.HasSuffix(ref, ":helpers-unsettled"):
+		return "Codex verification changed and the old planner has unsettled helpers; settle their stop and publication evidence, then factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef) && strings.HasSuffix(ref, ":closure-unconfirmed"):
+		return "Codex verification changed and the old planner closure is unconfirmed; resolve its saved recovery hold, then factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef):
+		return "Codex contract-2 verification changed; factory retry " + e.id + " authorizes stopping the old planner and renewing its authority after closure and helper settlement"
 	case strings.HasPrefix(ref, unknownCodexDeliveryRef):
 		return "Codex session " + strings.TrimPrefix(ref, unknownCodexDeliveryRef) + " has an unknown receipt; factory retry authorizes one delivery"
 	case strings.HasPrefix(ref, missingRecheckScopeRef):

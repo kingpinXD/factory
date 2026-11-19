@@ -193,10 +193,11 @@ func (r *run) coordinatorAttemptView(sess *entity, runtime *codex.Runtime) (code
 }
 
 func validateCoordinatorCloseLocked(ctx context.Context, brain string, runtime *codex.Runtime, verify nativeAcceptance, sessionID string, request CoordinatorCloseRequest, now time.Time) error {
+	qualification := request.Mode == "qualification_refresh" && request.Reason == "shutdown"
 	quota := request.Mode == "process_pause" && request.Reason == "quota_pause"
 	supervisor := request.Mode == "process_replace" && request.Reason == "shutdown"
 	terminal := request.Mode == "explicit_stop" && request.Reason == "cancelled"
-	if request.Version != 2 || (!quota && !supervisor && !terminal) || !terminal && request.Cause.OwnerID != sessionID {
+	if request.Version != 2 || (!quota && !supervisor && !terminal && !qualification) || !terminal && !qualification && request.Cause.OwnerID != sessionID {
 		return effects.ErrAuthority
 	}
 	view, err := runtime.InspectCoordinatorAttempt(ctx, request.Attempt.SessionID)
@@ -238,6 +239,9 @@ func validateCoordinatorCloseLocked(ctx context.Context, brain string, runtime *
 		if stored.Kind != events.KindRequest || stored.Sender != events.SenderProgram || stored.Recipient != "codex-attempt" || stored.Request != "close" || stored.Text != string(data) || stored.Key != coordinatorCloseKey(request) {
 			return codex.ErrAttemptConflict
 		}
+	}
+	if qualification {
+		return validateQualificationClose(ctx, brain, request, verify)
 	}
 	if terminal {
 		cause, err := (ProgramEffects{Brain: brain}).boundEffectEvent(request.Cause)
@@ -420,7 +424,11 @@ func recoverRequestedCoordinators(ctx context.Context, brain string, runtime *co
 			copyAuthority := *authority
 			copyAuthority.runtime = &copyRuntime
 			copyRuntime.AttemptAuthority = &requestedCoordinatorAuthority{factoryAttemptAuthority: &copyAuthority, requestRef: CoordinatorCloseRequestRef{Event: nativeEventRef(id, ev)}, request: request, sessionID: id}
-			if err := copyRuntime.CloseAttempt(ctx, request.Attempt, request.Reason); err != nil {
+			closeCtx := ctx
+			if request.Mode == "qualification_refresh" {
+				closeCtx = qualificationSettlementContext(ctx, nativeEventRef(id, ev), request)
+			}
+			if err := copyRuntime.CloseAttempt(closeCtx, request.Attempt, request.Reason); err != nil {
 				holds = append(holds, err)
 			}
 		}

@@ -23,6 +23,7 @@ import (
 type ControlOperationRecovery struct {
 	programme ProgramEffects
 	helpers   helper.Service
+	verify    nativeAcceptance
 }
 
 func NewControlOperationRecovery(p ProgramEffects) (*ControlOperationRecovery, error) {
@@ -35,7 +36,7 @@ func NewControlOperationRecovery(p ProgramEffects) (*ControlOperationRecovery, e
 		}
 		return codex.NewBackend(p.Brain).Fence(ctx, j)
 	})
-	return &ControlOperationRecovery{programme: p, helpers: service}, nil
+	return &ControlOperationRecovery{programme: p, helpers: service, verify: codex.Contract2AcceptanceAuthority}, nil
 }
 
 func (r *ControlOperationRecovery) RecoverSealedControls(ctx context.Context, key effects.AttemptKey) error {
@@ -52,7 +53,7 @@ func (r *ControlOperationRecovery) RecoverSealedControls(ctx context.Context, ke
 	}
 	var holds []error
 	for _, control := range pending {
-		if err := r.recoverControl(ctx, control, &seal, nil); err != nil {
+		if err := r.recoverControl(controlrecord.WithOutcomeValidation(ctx, control.Receipt.Control), control, &seal, nil); err != nil {
 			holds = append(holds, err)
 		}
 	}
@@ -525,7 +526,7 @@ func (r *ControlOperationRecovery) recoverWorkControlsUsing(ctx context.Context,
 }
 
 func (r *ControlOperationRecovery) recoverEventControl(ctx context.Context, control effects.ControlState, original controlrecord.OriginalRequestRef, seal *effects.AttemptSeal, work *effects.WorkIngressSeal) error {
-	return r.recoverEventControlUsing(ctx, control, original, seal, work, codex.Contract2AcceptanceAuthority)
+	return r.recoverEventControlUsing(ctx, control, original, seal, work, r.verify)
 }
 
 func (r *ControlOperationRecovery) recoverEventControlUsing(ctx context.Context, control effects.ControlState, original controlrecord.OriginalRequestRef, seal *effects.AttemptSeal, work *effects.WorkIngressSeal, verify nativeAcceptance) error {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/executor"
+	"github.com/kingpinXD/factory/internal/fsm"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
 )
@@ -160,6 +162,64 @@ func qualificationCompletedEvent(t *testing.T, r *run, runtime *codex.Runtime, a
 	return id, source.Input, result
 }
 
+func qualificationPendingEvent(t *testing.T, r *run, attempt codex.AttemptRef) {
+	t.Helper()
+	record := settlementAttemptRecord(t, r.d.Brain, attempt)
+	id := effects.ControlID{Attempt: effects.AttemptKey{SessionID: attempt.SessionID, AttemptID: attempt.AttemptID}, ThreadID: record.ThreadID, TurnID: record.TurnID, CallID: "pending-before-reverification"}
+	payload, _ := json.Marshal(map[string]any{"op": "event", "payload": map[string]any{"kind": "message", "text": "retained pending planner event"}})
+	original, err := controlrecord.NewOriginal(toolcontract.FactoryControl, payload, &id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := controlrecord.StoreOriginal(r.d.Brain, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := json.Marshal(ref)
+	ctx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "-test.run=^TestControlEventReceivingDomainChild$")
+	command.Env = append(os.Environ(), "FACTORY_EVENT_SOURCE_CHILD="+r.d.Brain, "FACTORY_EVENT_SOURCE_INPUT="+string(input), "FACTORY_EVENT_SOURCE_CUT=after-receipt")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	t.Cleanup(func() {
+		if !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+		_ = stdin.Close()
+	})
+	var source controlrecord.ImmutableRef
+	if err := json.NewDecoder(stdout).Decode(&source); err != nil {
+		t.Fatal("receiving child failed before durable append", err)
+	}
+	if err := command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	err = command.Wait()
+	waited = true
+	if err == nil {
+		t.Fatal("receiving child exited without kill")
+	}
+	if _, _, err := controlrecord.FindOutcome(r.d.Brain, ref); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("fixture did not retain a pending control", err)
+	}
+}
+
 func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) {
 	testCodexPlannerRetryClosesActiveAttempt(t, renewedQualification)
 }
@@ -172,7 +232,47 @@ func TestCodexPlannerRetryAfterBinaryUpgradeRetiresOldBinding(t *testing.T) {
 	})
 }
 
-func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAcceptance) {
+func TestCodexPlannerRetryRecoversUnconfirmedClosure(t *testing.T) {
+	testCodexPlannerRetryClosesActiveAttempt(t, renewedQualification, "scheduled")
+}
+
+func TestCodexPlannerRetryAfterBinaryUpgradeRecoversUnconfirmedClosure(t *testing.T) {
+	for _, retryAgain := range []bool{false, true} {
+		name := "scheduled"
+		if retryAgain {
+			name = "second_retry"
+		}
+		t.Run(name, func(t *testing.T) {
+			testCodexPlannerRetryClosesActiveAttempt(t, func(ctx context.Context, brain string, selected executor.Selection) (codex.Contract2AcceptanceRef, error) {
+				ref, err := renewedQualification(ctx, brain, selected)
+				ref.Binding = strings.Repeat("d", 64)
+				return ref, err
+			}, name)
+		})
+	}
+}
+
+func TestCodexQualificationRetryKeepsRealRecoveryHeld(t *testing.T) {
+	for _, reason := range []string{"effects_unsettled", "integration_unavailable"} {
+		t.Run(reason, func(t *testing.T) {
+			testCodexPlannerRetryClosesActiveAttempt(t, renewedQualification, reason)
+		})
+	}
+}
+
+type qualificationUnconfirmedContainment struct {
+	codex.Containment
+	pending bool
+}
+
+func (c *qualificationUnconfirmedContainment) Fence(ctx context.Context, owner codex.Owner) error {
+	if c.pending {
+		return codex.ErrObservationUnknown
+	}
+	return c.Containment.Fence(ctx, owner)
+}
+
+func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAcceptance, delayed ...string) {
 	t.Helper()
 	if isolatedParallelTest(t) {
 		return
@@ -211,6 +311,10 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 		time.Sleep(5 * time.Millisecond)
 	}
 	completedID, completedInput, completedEvent := qualificationCompletedEvent(t, r, runtime, before.Ref)
+	if len(delayed) != 0 {
+		qualificationPendingEvent(t, r, before.Ref)
+		runtime.ControlRecovery.(*ControlOperationRecovery).verify = qualify
+	}
 	oldAuthority, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, b2Qualification)
 	if err != nil {
 		t.Fatal(err)
@@ -286,19 +390,87 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	if _, _, err := nativeAuthority(annotated, w.brain, "e1", owner.id, true, &oldAuthority, qualify); err == nil {
 		t.Fatal("retirement context admitted new work on active turn")
 	}
-	recoverOnce := func() error { return recoverRequestedCoordinators(r.ctx, w.brain, runtime) }
-	if err := recoverOnce(); errors.Is(err, codex.ErrObservationUnknown) {
-		if ref, held := r.codexQualificationChanged(owner); !held || !strings.HasSuffix(ref, ":closure-unconfirmed") {
-			t.Fatal("failed closure did not return to waiting on user", ref)
+	if len(delayed) != 0 {
+		containment := &qualificationUnconfirmedContainment{Containment: runtime.Containment, pending: true}
+		runtime.Containment = containment
+		if err := recoverRequestedCoordinators(r.ctx, w.brain, runtime); !errors.Is(err, codex.ErrObservationUnknown) {
+			t.Fatal("first closure did not retain an unconfirmed seal", err)
 		}
-		if err := makeFixtureCodexRecoveryDue(r.ctx, w.brain, runtime, before.Ref, recoverOnce); err != nil {
+		containment.pending = false
+		view, err := runtime.InspectCoordinatorAttemptByName(r.ctx, name)
+		if err != nil || view.Stage != "sealing" || !view.NextCheckAt.After(time.Now()) {
+			t.Fatal("unconfirmed closure lacks scheduled recovery", view, err)
+		}
+		previousNow := r.now
+		r.now = view.NextCheckAt.Add(time.Second)
+		if ref, held := r.codexQualificationChanged(owner); !held || !strings.HasSuffix(ref, ":closure-unconfirmed") {
+			t.Fatal("overdue closure without a fresh recovery schedule hid its hold", ref)
+		}
+		r.now = previousNow
+		if delayed[0] == "second_retry" {
+			old, _, _, err := nativeReadActivation(owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			next, err := qualify(r.ctx, w.brain, executor.Selection{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Retain the transition emitted by older binaries before this fix.
+			if _, err := r.move(owner, fsm.Cur{State: stateNeedsYou, Prev: []string{owner.cur.State}}, "tick", qualificationRef(old, next)+":closure-unconfirmed"); err != nil {
+				t.Fatal(err)
+			}
+			if err := Retry(r.ctx, w.deps(), owner.id); err != nil {
+				t.Fatal(err)
+			}
+			owner.evs = w.log(owner.id)
+			r.applyRequests(owner)
+			if err := managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, sess) }); err != nil {
+				t.Fatal("resume retained close after second retry", err)
+			}
+		}
+		r.tickEntity(owner)
+		if owner.cur.State == stateNeedsYou {
+			t.Fatal("scheduled closure returned epic to needs_you", owner.enteredBy.TriggerRef)
+		}
+		if err := makeFixtureCodexRecoveryDue(r.ctx, w.brain, runtime, before.Ref, func() error { return recoverModernCoordinators(r.ctx, r.d) }); err != nil {
 			t.Fatal("wait for actual fixture processes to stop", err)
 		}
-		if err := recoverOnce(); err != nil {
-			t.Fatal("finish actual planner closure", err)
+		if delayed[0] == "effects_unsettled" || delayed[0] == "integration_unavailable" {
+			runtime.ControlRecovery = sealedControlRecoveryForRequestTest(func(context.Context, effects.AttemptKey) error {
+				if delayed[0] == "integration_unavailable" {
+					return codex.ErrAttemptIntegration
+				}
+				return &effects.AttemptSettlementHeldError{Attempt: completedID.Attempt}
+			})
+			if err := recoverModernCoordinators(r.ctx, r.d); err == nil {
+				t.Fatal("genuine recovery hold disappeared")
+			}
+			view, err := runtime.InspectCoordinatorAttemptByName(r.ctx, name)
+			if err != nil || view.RecoveryReason != delayed[0] || !view.NextCheckAt.After(time.Now()) {
+				t.Fatal("genuine recovery hold lost its reason or schedule", view, err)
+			}
+			r.tickEntity(owner)
+			if owner.cur.State != stateNeedsYou {
+				t.Fatal("genuine held recovery did not request user action")
+			}
+			return
 		}
-	} else if err != nil {
-		t.Fatal("physically retire old planner", err)
+		if err := recoverModernCoordinators(r.ctx, r.d); err != nil {
+			t.Fatal("due recovery tick cannot finish retained close", err)
+		}
+	} else {
+		recoverOnce := func() error { return recoverRequestedCoordinators(r.ctx, w.brain, runtime) }
+		if err := recoverOnce(); errors.Is(err, codex.ErrObservationUnknown) {
+			if err := makeFixtureCodexRecoveryDue(r.ctx, w.brain, runtime, before.Ref, recoverOnce); err != nil {
+				t.Fatal("wait for actual fixture processes to stop", err)
+			}
+			if err := recoverOnce(); err != nil {
+				t.Fatal("finish actual planner closure", err)
+			}
+		} else if err != nil {
+			t.Fatal("physically retire old planner", err)
+		}
 	}
 	closed, err := runtime.InspectCoordinatorAttemptByName(r.ctx, name)
 	if err != nil || closed.Stage != "closed" {
@@ -323,7 +495,11 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 		}
 	}
 	closedRecord := settlementAttemptRecord(t, w.brain, before.Ref)
-	if closedRecord.Closure.Settlement.Journal.ControlCount != 1 {
+	wantControls := uint64(1)
+	if len(delayed) != 0 {
+		wantControls++
+	}
+	if closedRecord.Closure.Settlement.Journal.ControlCount != wantControls {
 		t.Fatal("closure did not retain the completed control")
 	}
 	unconfirmed := *runtime
@@ -372,6 +548,9 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	_ = managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, sess) })
 	if len(w.log(owner.id)) != count {
 		t.Fatal("repeated tick duplicated qualification activation")
+	}
+	if len(r.errs) != 0 {
+		t.Fatal("follow-up manager tick failed", r.errs)
 	}
 	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, &oldAuthority, qualify); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatal("old authority accepted after renewal", err)

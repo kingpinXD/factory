@@ -408,10 +408,6 @@ func recoverRequestedCoordinators(ctx context.Context, brain string, runtime *co
 					holds = append(holds, codex.ErrAttemptConflict)
 					continue
 				}
-				if err := validateCoordinatorCloseLocked(ctx, brain, runtime, authority.verify, id, request, time.Now().UTC()); err != nil {
-					holds = append(holds, err)
-					continue
-				}
 				if err := runtime.ValidateAttemptClosure(ctx, codex.AttemptClosureRef{Attempt: view.Ref, ClosureSHA256: view.ClosureSHA256}); err != nil {
 					holds = append(holds, err)
 				}

@@ -17,6 +17,7 @@ type CoordinatorAttemptView struct {
 	Stage                                            string
 	RecoveryKey                                      string
 	SealReason                                       string
+	RecoveryReason                                   string
 	CloseCause                                       *effects.EventRef
 	Revision                                         uint64
 	ClosureSHA256                                    string
@@ -89,6 +90,7 @@ func attemptManagerView(v Record) CoordinatorAttemptView {
 	}
 	if v.Recovery != nil {
 		out.NextCheckAt = v.Recovery.NextCheckAt
+		out.RecoveryReason = v.Recovery.Reason
 	}
 	return out
 }

@@ -54,7 +54,7 @@ func (r *run) codexQualificationChanged(owner *entity) (string, bool) {
 		if runtime, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
 			_, name := r.sessionSlot(owner, componentPlanner)
 			view, err := runtime.InspectCoordinatorAttemptByName(r.ctx, name)
-			if err != nil || view.Stage == "sealing" && !view.NextCheckAt.IsZero() {
+			if err != nil || view.Stage == "sealing" && !view.NextCheckAt.IsZero() && (view.RecoveryReason != "closure_unconfirmed" || !r.now.Before(view.NextCheckAt)) {
 				return ref + ":closure-unconfirmed", true
 			}
 			if view.Stage == "closed" {

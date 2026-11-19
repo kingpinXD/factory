@@ -371,6 +371,15 @@ func ReadControlEventPrefixMessageLocal(ctx context.Context, path string, prefix
 	}
 	return *found, nil
 }
+func ReadControlEventPrefixSnapshotLocal(ctx context.Context, path string, prefix ControlEventPrefix) ([]Event, error) {
+	var found []Event
+	err := readControlEventPrefixLocal(ctx, path, prefix, func(event Event) error {
+		found = append(found, event)
+		return nil
+	})
+	return found, err
+}
+
 func readControlEventPrefixLocal(ctx context.Context, path string, prefix ControlEventPrefix, visit func(Event) error) error {
 	if prefix.Bytes < 1 || len(prefix.SHA256) != sha256.Size*2 || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("invalid event prefix binding")

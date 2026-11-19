@@ -312,7 +312,11 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	}
 	completedID, completedInput, completedEvent := qualificationCompletedEvent(t, r, runtime, before.Ref)
 	if len(delayed) != 0 {
-		qualificationPendingEvent(t, r, before.Ref)
+		if strings.HasPrefix(delayed[0], "issue_") {
+			qualificationFailedIssue(t, r, runtime, before.Ref, delayed[0])
+		} else {
+			qualificationPendingEvent(t, r, before.Ref)
+		}
 		runtime.ControlRecovery.(*ControlOperationRecovery).verify = qualify
 	}
 	oldAuthority, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, b2Qualification)
@@ -323,6 +327,7 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	runtime.AttemptAuthority.(*factoryAttemptAuthority).verify = qualify
 	validator := runtime.Effects.Controls.(*codex.FactoryControlValidator)
 	validator.EventEvidence = qualificationEventAuthority{NativeAuthority{w.brain}, qualify}
+	validator.WriteEvidence = qualificationWriteAuthority{w.brain, qualify}
 	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, false, &oldAuthority, qualify); err == nil || !strings.Contains(err.Error(), "qualification changed") {
 		t.Fatal("changed proof accepted retained authority outside sealed retirement", err)
 	}
@@ -435,6 +440,10 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 		}
 		if err := makeFixtureCodexRecoveryDue(r.ctx, w.brain, runtime, before.Ref, func() error { return recoverModernCoordinators(r.ctx, r.d) }); err != nil {
 			t.Fatal("wait for actual fixture processes to stop", err)
+		}
+		if delayed[0] == "issue_prepared" || delayed[0] == "issue_intent" {
+			qualificationIssueRemainsUnknown(t, r, runtime, before.Ref, name)
+			return
 		}
 		if delayed[0] == "effects_unsettled" || delayed[0] == "integration_unavailable" {
 			runtime.ControlRecovery = sealedControlRecoveryForRequestTest(func(context.Context, effects.AttemptKey) error {

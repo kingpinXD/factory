@@ -537,8 +537,7 @@ func ValidateControlCompletion(op string, input toolcontract.IssueInput, proof [
 	return j.validate()
 }
 
-// CompletionEvidence finds only already proved writes. It never calls GitHub.
-func CompletionEvidence(op string, input toolcontract.IssueInput, log []events.Event) ([]events.Event, error) {
+func controlWriteKeys(op string, input toolcontract.IssueInput) ([]string, error) {
 	repo := strings.ToLower(strings.TrimSpace(input.Repo))
 	key := strings.TrimPrefix(op, "issue_")
 	var keys []string
@@ -556,6 +555,42 @@ func CompletionEvidence(op string, input toolcontract.IssueInput, log []events.E
 		keys = []string{"issue-close:" + target(repo, input.Number) + ":comment", "issue-close:" + target(repo, input.Number)}
 	default:
 		return nil, ErrOutcomeUnknown
+	}
+	return keys, nil
+}
+
+// ValidateControlNotPrepared rejects every journal step for this logical write.
+func ValidateControlNotPrepared(op string, input toolcontract.IssueInput, log []events.Event) error {
+	keys, err := controlWriteKeys(op, input)
+	if err != nil {
+		return err
+	}
+	if op == "issue_create" && input.Parent == "" {
+		keys = append(keys, "issue-attach:"+strings.ToLower(strings.TrimSpace(input.Repo))+":"+input.Key)
+	}
+	for _, ev := range log {
+		if strings.HasPrefix(ev.Key, "issue-request:") {
+			var prepared preparedWrite
+			if ev.Kind != events.KindRequest || ev.Recipient != journalRecipient || ev.Request != "issue-write" || toolcontract.DecodeBroker([]byte(ev.Text), &prepared) != nil || prepared.Version != 2 || prepared.Action.Key == "" || !validPrepared(prepared) || ev.Key != "issue-request:"+prepared.Action.Key {
+				return ErrOutcomeUnknown
+			}
+		}
+		for _, key := range keys {
+			for _, prefix := range []string{"issue-request:", "intent:", "issue-proof:", "done:"} {
+				if ev.Key == prefix+key {
+					return ErrOutcomeUnknown
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// CompletionEvidence finds only already proved writes. It never calls GitHub.
+func CompletionEvidence(op string, input toolcontract.IssueInput, log []events.Event) ([]events.Event, error) {
+	keys, err := controlWriteKeys(op, input)
+	if err != nil {
+		return nil, err
 	}
 	var proof []events.Event
 	for _, key := range keys {

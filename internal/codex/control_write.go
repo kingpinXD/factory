@@ -21,7 +21,14 @@ func (v *FactoryControlValidator) validateWriteOutcome(ctx context.Context, id e
 	if err != nil {
 		return err
 	}
-	if outcome.Outcome.Write == nil || outcome.Outcome.Write.Operation != input.Operation || outcome.Outcome.Write.Code != "applied" || outcome.Outcome.Write.EvidenceSHA256 != outcome.Proof.SHA256 || result.Control.Control != id || result.Input != input || !bytes.Equal(result.Reply, outcome.Reply) {
+	if result.Control.Control != id || result.Input != input || !bytes.Equal(result.Reply, outcome.Reply) {
+		return effects.ErrEvidence
+	}
+	if result.NotApplied == nil {
+		if outcome.Outcome.Write == nil || outcome.Outcome.Write.Operation != input.Operation || outcome.Outcome.Write.Code != "applied" || outcome.Outcome.Write.EvidenceSHA256 != outcome.Proof.SHA256 {
+			return effects.ErrEvidence
+		}
+	} else if outcome.Outcome.Kind != effects.ControlRejected || outcome.Outcome.Rejection == nil || outcome.Outcome.Rejection.Operation != input.Operation || outcome.Outcome.Rejection.Code != controlrecord.WriteNotPreparedCode || outcome.Outcome.Rejection.EvidenceSHA256 != outcome.Proof.SHA256 || !bytes.Equal(result.Reply, ControlWriteNotAppliedReply()) {
 		return effects.ErrEvidence
 	}
 	source, err := controlrecord.FindWriteSource(v.brain, result.Original)
@@ -63,6 +70,20 @@ func (v *FactoryControlValidator) validateWriteOutcome(ctx context.Context, id e
 	entry, err := ix.Lookup(result.Owner.OwnerID)
 	if err != nil {
 		return err
+	}
+	if result.NotApplied != nil {
+		if err := ValidateControlWriteStopped(ctx, v.brain, id, result.NotApplied.Seal); err != nil {
+			return err
+		}
+		log, err := events.ReadControlEventPrefixSnapshotLocal(ctx, store.EventsPath(entry.Dir), result.NotApplied.Prefix)
+		if err != nil {
+			return err
+		}
+		_, decoded, err := controlrecord.DecodeInput(v.brain, result.Original)
+		if err != nil {
+			return err
+		}
+		return ValidateControlWriteNotPrepared(v.brain, result.Original, input.Operation, decoded, log)
 	}
 	log, err := events.Read(store.EventsPath(entry.Dir))
 	if err != nil {

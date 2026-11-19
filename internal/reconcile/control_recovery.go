@@ -80,7 +80,7 @@ func (r *ControlOperationRecovery) recoverControl(ctx context.Context, control e
 		return r.recoverReadControl(ctx, control, originalRef, seal, work)
 	}
 	if toolcontract.IsWriteOperationForContract(original.Tool, original.Operation, 2) {
-		proof, result, err := RecoverControlWriteResult(ctx, r.programme.Brain, control, originalRef)
+		proof, result, err := recoverControlWriteResult(ctx, r.programme.Brain, control, originalRef, seal, r.verify)
 		if err != nil {
 			return err
 		}
@@ -88,6 +88,9 @@ func (r *ControlOperationRecovery) recoverControl(ctx context.Context, control e
 			return effects.ErrEvidence
 		}
 		outcome := effects.ControlOutcome{Kind: effects.ControlWrite, Write: &effects.GuardReceipt{Operation: original.Operation, Code: "applied", EvidenceSHA256: proof.SHA256}}
+		if result.NotApplied != nil {
+			outcome = effects.ControlOutcome{Kind: effects.ControlRejected, Rejection: &effects.GuardReceipt{Operation: original.Operation, Code: controlrecord.WriteNotPreparedCode, EvidenceSHA256: proof.SHA256}}
+		}
 		return r.storeAndComplete(ctx, control, originalRef, outcome, result.Reply, proof)
 	}
 	switch original.Operation {

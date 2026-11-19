@@ -152,6 +152,9 @@ func (v *FactoryControlValidator) ValidateOutcome(ctx context.Context, id effect
 	case effects.ControlWrite:
 		return v.validateWriteOutcome(ctx, id, input, record)
 	case effects.ControlRejected:
+		if outcome.Rejection != nil && outcome.Rejection.Code == controlrecord.WriteNotPreparedCode {
+			return v.validateWriteOutcome(ctx, id, input, record)
+		}
 		if outcome.Rejection != nil && outcome.Rejection.Code == controlrecord.ControlEventNotAppendedCode {
 			return v.validateControlEventOutcome(ctx, originalRef, input, record, true)
 		}

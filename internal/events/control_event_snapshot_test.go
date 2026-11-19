@@ -31,6 +31,10 @@ func TestControlEventSnapshotAndFiniteSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	retained, err := ReadControlEventPrefixSnapshotLocal(context.Background(), name, prefix)
+	if err != nil || !reflect.DeepEqual(retained, snapshot) {
+		t.Fatalf("retained prefix changed after append: %+v %v", retained, err)
+	}
 	log, err = LockControlEventLog(context.Background(), name)
 	if err != nil {
 		t.Fatal(err)

@@ -20,7 +20,14 @@ import (
 
 // RecoverControlWriteResult reads domain completion only; it never dispatches a write.
 func RecoverControlWriteResult(ctx context.Context, brain string, control effects.ControlState, originalRef controlrecord.OriginalRequestRef) (controlrecord.ImmutableRef, controlrecord.WriteResult, error) {
+	return recoverControlWriteResult(ctx, brain, control, originalRef, nil, codex.Contract2AcceptanceAuthority)
+}
+
+func recoverControlWriteResult(ctx context.Context, brain string, control effects.ControlState, originalRef controlrecord.OriginalRequestRef, seal *effects.AttemptSeal, verify nativeAcceptance) (controlrecord.ImmutableRef, controlrecord.WriteResult, error) {
 	if ref, result, err := controlrecord.FindWriteResult(brain, originalRef); err == nil || !errors.Is(err, os.ErrNotExist) {
+		if err == nil && result.NotApplied != nil && seal == nil {
+			return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, issue.ErrOutcomeUnknown
+		}
 		return ref, result, err
 	}
 	source, err := controlrecord.FindWriteSource(brain, originalRef)
@@ -30,7 +37,7 @@ func RecoverControlWriteResult(ctx context.Context, brain string, control effect
 	if source.Input != control.Input {
 		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, effects.ErrEvidence
 	}
-	if err := ValidateRetainedOwnerAuthority(ctx, brain, source.Owner); err != nil {
+	if _, _, err := nativeAuthority(ctx, brain, source.Owner.EpicID, source.Owner.OwnerID, false, &source.Owner, verify); err != nil {
 		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
 	}
 	ix, err := store.ReadIndex(brain)
@@ -54,6 +61,9 @@ func RecoverControlWriteResult(ctx context.Context, brain string, control effect
 	if p, ok := decoded.(*toolcontract.IssueInput); ok {
 		domain, err = issue.CompletionEvidence(original.Operation, *p, log)
 		if err != nil {
+			if seal != nil && errors.Is(err, issue.ErrOutcomeUnknown) {
+				return storeControlWriteAbsence(ctx, brain, control, originalRef, source.Owner, decoded, seal, store.EventsPath(entry.Dir))
+			}
 			return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
 		}
 		switch original.Operation {
@@ -75,6 +85,9 @@ func RecoverControlWriteResult(ctx context.Context, brain string, control effect
 		}
 		binding, err := controlrecord.FindWriteBinding(brain, originalRef)
 		if err != nil {
+			if seal != nil && errors.Is(err, os.ErrNotExist) {
+				return storeControlWriteAbsence(ctx, brain, control, originalRef, source.Owner, decoded, seal, store.EventsPath(entry.Dir))
+			}
 			return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
 		}
 		for _, ev := range log {
@@ -109,6 +122,9 @@ func RecoverControlWriteResult(ctx context.Context, brain string, control effect
 		reply = map[string]bool{"done": true}
 	}
 	if len(domain) == 0 {
+		if seal != nil {
+			return storeControlWriteAbsence(ctx, brain, control, originalRef, source.Owner, decoded, seal, store.EventsPath(entry.Dir))
+		}
 		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, effects.ErrUnresolved
 	}
 	data, err := json.Marshal(reply)
@@ -120,6 +136,28 @@ func RecoverControlWriteResult(ctx context.Context, brain string, control effect
 		data, _ := json.Marshal(ev)
 		result.Domain = append(result.Domain, effects.EventRef{OwnerID: source.Owner.OwnerID, Sequence: ev.Seq, SHA256: sha256.Sum256(data)})
 	}
+	proof, err := controlrecord.StoreWriteResult(brain, result)
+	return proof, result, err
+}
+
+func storeControlWriteAbsence(ctx context.Context, brain string, control effects.ControlState, original controlrecord.OriginalRequestRef, owner controlrecord.OwnerAuthority, input toolcontract.Input, seal *effects.AttemptSeal, path string) (controlrecord.ImmutableRef, controlrecord.WriteResult, error) {
+	if err := codex.ValidateControlWriteStopped(ctx, brain, control.Receipt.Control, *seal); err != nil {
+		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
+	}
+	locked, err := events.LockControlEventLog(ctx, path)
+	if err != nil {
+		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
+	}
+	defer locked.Close()
+	log, prefix, err := locked.Snapshot()
+	if err != nil {
+		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
+	}
+	if err := codex.ValidateControlWriteNotPrepared(brain, original, control.Input.Operation, input, log); err != nil {
+		return controlrecord.ImmutableRef{}, controlrecord.WriteResult{}, err
+	}
+	reply := codex.ControlWriteNotAppliedReply()
+	result := controlrecord.WriteResult{Schema: 2, Original: original, Control: control.Receipt, Input: control.Input, Owner: owner, Reply: reply, ReplySHA256: sha256.Sum256(reply), NotApplied: &controlrecord.WriteAbsence{Seal: *seal, Prefix: prefix}}
 	proof, err := controlrecord.StoreWriteResult(brain, result)
 	return proof, result, err
 }

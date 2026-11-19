@@ -36,11 +36,11 @@ type definition struct {
 	example          string
 	input            func() Input
 	first, last      int
-	read             bool
+	read, write      bool
 }
 
 func contract(op, fields, required, example string, input func() Input) definition {
-	return definition{op, strings.Fields(fields), strings.Fields(required), example, input, 1, 2, false}
+	return definition{op, strings.Fields(fields), strings.Fields(required), example, input, 1, 2, false, false}
 }
 func emptyInput() Input    { return &Empty{} }
 func textInput() Input     { return &TextInput{} }
@@ -102,13 +102,13 @@ func allDefinitions(tool string) []definition {
 			contract("query", "repo base", "repo", `{"repo":"owner/repo"}`, issueInput),
 			readContract("issue_read", "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, issueInput),
 			readContract("issue_children", "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, issueInput),
-			legacyContract("issue_create", "repo base key title body parent", "repo key title body", `{"repo":"owner/repo","key":"producer-1","title":"Produce fixture","body":"Create the required fixture."}`, issueInput),
-			legacyContract("issue_update", "repo base number body", "repo number body", `{"repo":"owner/repo","number":1,"body":"Updated requirements."}`, issueInput),
-			legacyContract("issue_comment", "repo base number body", "repo number body", `{"repo":"owner/repo","number":1,"body":"Evidence recorded."}`, issueInput),
-			legacyContract("issue_close", "repo base number evidence body", "repo number evidence", `{"repo":"owner/repo","number":1,"evidence":"https://github.com/owner/repo/pull/2"}`, issueInput),
-			legacyContract("issue_assign", "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, issueInput),
-			legacyContract("pr_reply", "repo number kind thread_id comment_id body", "repo number kind comment_id body", `{"repo":"owner/repo","number":1,"kind":"thread","thread_id":"thread-1","comment_id":1,"body":"Fixed in commit."}`, prInput),
-			legacyContract("pr_resolve", "repo number thread_id", "repo number thread_id", `{"repo":"owner/repo","number":1,"thread_id":"thread-1"}`, prInput),
+			writeContract("issue_create", "repo base key title body parent", "repo key title body", `{"repo":"owner/repo","key":"producer-1","title":"Produce fixture","body":"Create the required fixture."}`, issueInput),
+			writeContract("issue_update", "repo base number body", "repo number body", `{"repo":"owner/repo","number":1,"body":"Updated requirements."}`, issueInput),
+			writeContract("issue_comment", "repo base number body", "repo number body", `{"repo":"owner/repo","number":1,"body":"Evidence recorded."}`, issueInput),
+			writeContract("issue_close", "repo base number evidence body", "repo number evidence", `{"repo":"owner/repo","number":1,"evidence":"https://github.com/owner/repo/pull/2"}`, issueInput),
+			writeContract("issue_assign", "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, issueInput),
+			writeContract("pr_reply", "repo number kind thread_id comment_id body", "repo number kind comment_id body", `{"repo":"owner/repo","number":1,"kind":"thread","thread_id":"thread-1","comment_id":1,"body":"Fixed in commit."}`, prInput),
+			writeContract("pr_resolve", "repo number thread_id", "repo number thread_id", `{"repo":"owner/repo","number":1,"thread_id":"thread-1"}`, prInput),
 		}
 		for _, op := range []string{"github_pr", "github_comments", "github_linked_prs", "github_threads", "github_reviews", "github_run", "github_job_log"} {
 			out = append(out, readContract(op, "repo base number", "repo number", `{"repo":"owner/repo","number":1}`, githubInput))
@@ -131,10 +131,14 @@ func readContract(op, fields, required, example string, input func() Input) defi
 	d.read = true
 	return d
 }
-func legacyContract(op, fields, required, example string, input func() Input) definition {
+func writeContract(op, fields, required, example string, input func() Input) definition {
 	d := contract(op, fields, required, example, input)
-	d.last = 1
+	d.write = true
 	return d
+}
+func IsWriteOperationForContract(tool, operation string, version int) bool {
+	d, ok := lookupForContract(tool, operation, version)
+	return ok && d.write
 }
 func definitionsForContract(tool string, version int) []definition {
 	if version != 1 && version != 2 {

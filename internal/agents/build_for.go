@@ -136,7 +136,7 @@ func BuildFor(brain, outDir string, b *blueprint.Blueprint, overrides map[string
 	if snapshot.SchemaVersion != 1 || snapshot.Components == nil || snapshot.Instructions == nil || (codex && snapshot.Bridge == "") {
 		return nil, nil, errors.New("invalid source snapshot")
 	}
-	if codex && (snapshot.Executor != "codex" || (snapshot.PromptProtocol != 3 && snapshot.PromptProtocol != CodexPromptProtocol) || snapshot.HelperTransport == "" || snapshot.SessionTransport == "") {
+	if codex && (snapshot.Executor != "codex" || (snapshot.PromptProtocol != 3 && snapshot.PromptProtocol != 4 && snapshot.PromptProtocol != CodexPromptProtocol) || snapshot.HelperTransport == "" || snapshot.SessionTransport == "") {
 		return nil, nil, errors.New("unsupported or incomplete Codex prompt transport snapshot")
 	}
 	if sourcesExist {

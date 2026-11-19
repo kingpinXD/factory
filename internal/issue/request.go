@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
@@ -156,7 +157,11 @@ func (w Writer) withJournal(run func(*writeJournal) (writeResult, error)) (write
 	if err := j.validate(); err != nil {
 		return writeResult{}, err
 	}
-	return run(j)
+	result, err := run(j)
+	if err != nil || w.Completed == nil {
+		return result, err
+	}
+	return result, w.Completed(j.events)
 }
 
 func (j *writeJournal) validate() error {
@@ -459,4 +464,114 @@ func validObservation(p preparedWrite, o observation) bool {
 		return o.ResourceID > 0 && o.ResourceNumber > 0 && o.Result == fmt.Sprintf("https://github.com/%s/issues/%d", p.Action.Repo, o.ResourceNumber)
 	}
 	return o.Result == p.Payload.Result
+}
+
+// ValidateControlCompletion checks the exact request and every completed domain step.
+func ValidateControlCompletion(op string, input toolcontract.IssueInput, proof []events.Event) error {
+	if len(proof) == 0 || len(proof)%4 != 0 {
+		return ErrOutcomeUnknown
+	}
+	j := &writeJournal{events: proof, prepared: map[string]preparedWrite{}}
+	var parent epic.Ref
+	if input.Parent != "" {
+		var err error
+		parent, err = epic.ParseRefIn(input.Parent, input.Repo)
+		if err != nil {
+			return err
+		}
+		parent.Repo = strings.ToLower(parent.Repo)
+	}
+	matched, attached := false, false
+	var created observation
+	var attachment preparedWrite
+	for i := 0; i < len(proof); i += 4 {
+		var p preparedWrite
+		if toolcontract.DecodeBroker([]byte(proof[i].Text), &p) != nil || !validPrepared(p) || p.Version != 2 || proof[i].Kind != events.KindRequest || proof[i].Recipient != journalRecipient || proof[i].Request != "issue-write" {
+			return ErrOutcomeUnknown
+		}
+		key := p.Action.Key
+		for n, prefix := range []string{"issue-request:", "intent:", "issue-proof:", "done:"} {
+			if proof[i+n].Key != prefix+key {
+				return ErrOutcomeUnknown
+			}
+		}
+		j.prepared[key] = p
+		a := p.Action
+		if a.Operation == "attach" {
+			attached = true
+			attachment = p
+			continue
+		}
+		if "issue_"+a.Operation != op || a.Repo != strings.ToLower(strings.TrimSpace(input.Repo)) {
+			continue
+		}
+		switch a.Operation {
+		case "create":
+			expectedParent := ""
+			if input.Parent != "" {
+				expectedParent = parent.String()
+			}
+			matched = a.Key == "issue-create:"+a.Repo+":"+input.Key && a.Title == input.Title && a.Body == input.Body && a.Parent == expectedParent
+			observed, ok, err := j.proof(p)
+			if err != nil || !ok {
+				return ErrOutcomeUnknown
+			}
+			created = observed
+		case "update", "comment":
+			matched = a.Number == input.Number && a.Body == strings.TrimSpace(input.Body)
+		case "assign":
+			matched = a.Number == input.Number
+		case "close":
+			matched = a.Number == input.Number && a.Evidence == input.Evidence && a.Comment == strings.TrimSpace(input.Body)
+		}
+	}
+	if !matched || op == "issue_create" && (input.Parent != "") != attached {
+		return ErrOutcomeUnknown
+	}
+	if attached {
+		a, p := attachment.Action, attachment.Payload
+		if op != "issue_create" || a.Key != "issue-attach:"+strings.ToLower(input.Repo)+":"+input.Key || a.Repo != parent.Repo || a.Number != parent.Number || a.Parent != created.Result || p.ChildID != created.ResourceID || p.ChildNumber != created.ResourceNumber {
+			return ErrOutcomeUnknown
+		}
+	}
+	return j.validate()
+}
+
+// CompletionEvidence finds only already proved writes. It never calls GitHub.
+func CompletionEvidence(op string, input toolcontract.IssueInput, log []events.Event) ([]events.Event, error) {
+	repo := strings.ToLower(strings.TrimSpace(input.Repo))
+	key := strings.TrimPrefix(op, "issue_")
+	var keys []string
+	switch key {
+	case "create":
+		keys = []string{"issue-create:" + repo + ":" + input.Key}
+		if input.Parent != "" {
+			keys = append(keys, "issue-attach:"+repo+":"+input.Key)
+		}
+	case "update", "comment":
+		keys = []string{"issue-" + key + ":" + target(repo, input.Number) + ":" + short(strings.TrimSpace(input.Body))}
+	case "assign":
+		keys = []string{"issue-assign:" + target(repo, input.Number)}
+	case "close":
+		keys = []string{"issue-close:" + target(repo, input.Number) + ":comment", "issue-close:" + target(repo, input.Number)}
+	default:
+		return nil, ErrOutcomeUnknown
+	}
+	var proof []events.Event
+	for _, key := range keys {
+		for _, prefix := range []string{"issue-request:", "intent:", "issue-proof:", "done:"} {
+			found := false
+			for _, ev := range log {
+				if ev.Key == prefix+key {
+					proof = append(proof, ev)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, ErrOutcomeUnknown
+			}
+		}
+	}
+	return proof, ValidateControlCompletion(op, input, proof)
 }

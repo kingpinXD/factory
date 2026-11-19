@@ -175,6 +175,7 @@ const (
 	ControlEvent    ControlOutcomeKind = "event"
 	ControlActions  ControlOutcomeKind = "actions"
 	ControlRead     ControlOutcomeKind = "read"
+	ControlWrite    ControlOutcomeKind = "write"
 	ControlRejected ControlOutcomeKind = "rejected"
 )
 
@@ -183,6 +184,7 @@ type ControlOutcome struct {
 	Broker     *BrokerAdmission             `json:"broker,omitempty"`
 	File       *FileReceipt                 `json:"file,omitempty"`
 	Event      *EventRef                    `json:"event,omitempty"`
+	Write      *GuardReceipt                `json:"write,omitempty"`
 	Read       *ReadReceipt                 `json:"read,omitempty"`
 	Rejection  *GuardReceipt                `json:"rejection,omitempty"`
 	Actions    []ActionReceiptRef           `json:"actions,omitempty"`
@@ -399,7 +401,7 @@ func validateOutcome(m *ledger, r controlReceipt, o ControlOutcome) error {
 		return ErrEvidence
 	}
 	count := 0
-	for _, p := range []bool{o.Broker != nil, o.File != nil, o.Event != nil, o.Read != nil, o.Rejection != nil, len(o.Actions) > 0} {
+	for _, p := range []bool{o.Broker != nil, o.File != nil, o.Event != nil, o.Read != nil, o.Write != nil, o.Rejection != nil, len(o.Actions) > 0} {
 		if p {
 			count++
 		}
@@ -422,6 +424,10 @@ func validateOutcome(m *ledger, r controlReceipt, o ControlOutcome) error {
 		}
 	case ControlRead:
 		if o.Read == nil || o.Read.Operation != r.Input.Operation || o.Read.RequestSHA256 != r.Input.PayloadSHA256 || o.Read.ResponseSHA256 == (Digest{}) {
+			return ErrEvidence
+		}
+	case ControlWrite:
+		if o.Write == nil || o.Write.Operation != r.Input.Operation || o.Write.Code != "applied" || o.Write.EvidenceSHA256 == (Digest{}) {
 			return ErrEvidence
 		}
 	case ControlRejected:

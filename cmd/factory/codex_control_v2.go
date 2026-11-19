@@ -168,6 +168,12 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 			}
 		}
 	}
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		witness, err = controlrecord.StoreWriteSource(brain, controlrecord.WriteSource{Schema: 2, Original: originalRef, Input: controlInput, Owner: ownerAuthority})
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
 	}
@@ -204,6 +210,11 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if err != nil {
 		return nil, err
 	}
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		if _, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput}); err != nil {
+			return nil, err
+		}
+	}
 	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
 		if !reflect.DeepEqual(record.Input, controlInput) {
 			return nil, effects.ErrEvidence
@@ -222,7 +233,22 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	var proof controlrecord.ImmutableRef
 	var outcome effects.ControlOutcome
 	var reply json.RawMessage
-	if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		release()
+		release = nil
+		var result controlrecord.WriteResult
+		proof, result, err = coordinatorProgramWrite(ctx, brain, spec, originalRef, original, control, controlInput, ownerAuthority)
+		release, lockErr := controlLock(ctx, brain)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer release()
+		if err != nil {
+			return nil, err
+		}
+		reply = result.Reply
+		outcome = effects.ControlOutcome{Kind: effects.ControlWrite, Write: &effects.GuardReceipt{Operation: original.Operation, Code: "applied", EvidenceSHA256: proof.SHA256}}
+	} else if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
 		admission, err := reconcile.BindCoordinatorReadSourceLocked(ctx, brain, witness, control)
 		if err != nil {
 			return nil, err
@@ -359,6 +385,24 @@ func localControlV2(op string, input toolcontract.Input) bool {
 }
 func localControlInputV2(ctx context.Context, brain string, spec session.Spec, original controlrecord.OriginalRequest, input toolcontract.Input) (effects.ControlInput, error) {
 	result := effects.ControlInput{Operation: original.Operation, PayloadSHA256: original.PayloadSHA256}
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, original.Operation, 2) {
+		ix, err := store.ReadIndex(brain)
+		if err != nil {
+			return result, err
+		}
+		owner, err := ix.Lookup(spec.Task)
+		if err != nil {
+			return result, err
+		}
+		if owner.Kind == blueprint.MachineWork {
+			result.Target.WorkID = spec.Task
+		}
+		if p, ok := input.(*toolcontract.IssueInput); ok {
+			if _, _, err := coordinatorRepo(brain, ix, spec, p.Repo, p.Base); err != nil {
+				return result, err
+			}
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}

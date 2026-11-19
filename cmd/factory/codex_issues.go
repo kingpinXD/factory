@@ -15,6 +15,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/epic"
+	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/issue"
 	"github.com/kingpinXD/factory/internal/proc"
@@ -22,6 +23,7 @@ import (
 	"github.com/kingpinXD/factory/internal/repos"
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
 var coordinatorGitHub = func() gh.Client { return gh.Client{Runner: proc.Exec{}} }
@@ -125,8 +127,19 @@ func coordinatorIssueControl(ctx context.Context, brain string, ix store.Index, 
 		return nil, fmt.Errorf("issue payload exceeds limit")
 	}
 	cl := coordinatorGitHub()
+	write, _ := ctx.Value(coordinatorWriteKey{}).(*coordinatorWriteContext)
+	if write != nil {
+		cl.Runner = coordinatorWriteRunner{cl.Runner, write}
+	}
 	owner, _ := ix.Lookup(spec.Task)
 	w := issue.Writer{GitHub: cl, Brain: brain, Log: store.EventsPath(owner.Dir), Sender: spec.Task, Epic: spec.EpicID, Now: time.Now}
+	if write != nil {
+		w.Completed = func(journal []events.Event) error {
+			proof, err := issue.CompletionEvidence(req.Op, toolcontract.IssueInput(p), journal)
+			write.completed = proof
+			return err
+		}
+	}
 	switch req.Op {
 	case "issue_read":
 		return cl.Issue(ctx, p.Repo, p.Number)

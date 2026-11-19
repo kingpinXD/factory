@@ -87,6 +87,7 @@ func NewProgramEffects(brain, factoryBin string) (ProgramEffects, error) {
 	}
 	controls.ReadEvidence = NativeAuthority{Brain: root}
 	controls.EventEvidence = NativeAuthority{Brain: root}
+	controls.WriteEvidence = NativeAuthority{Brain: root}
 	gate, err := codex.NewAttemptJournalGate(root)
 	if err != nil {
 		return ProgramEffects{}, err
@@ -315,4 +316,8 @@ func (a factoryEffectAuthority) ValidateCancellation(ctx context.Context, p effe
 		return effects.ErrAuthority
 	}
 	return nil
+}
+
+func (a NativeAuthority) ValidateControlWriteOwnerLocal(ctx context.Context, owner controlrecord.OwnerAuthority) error {
+	return ValidateRetainedOwnerAuthority(ctx, a.Brain, owner)
 }

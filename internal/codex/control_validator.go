@@ -25,10 +25,15 @@ type ControlEventEvidenceAuthority interface {
 	ValidateControlEventSourceLocal(context.Context, controlrecord.OriginalRequestRef, effects.ControlInput, controlrecord.ImmutableRef) error
 }
 
+type ControlWriteEvidenceAuthority interface {
+	ValidateControlWriteOwnerLocal(context.Context, controlrecord.OwnerAuthority) error
+}
+
 type FactoryControlValidator struct {
 	brain         string
 	ReadEvidence  ControlReadEvidenceAuthority
 	EventEvidence ControlEventEvidenceAuthority
+	WriteEvidence ControlWriteEvidenceAuthority
 }
 
 func NewFactoryControlValidator(brain string) (*FactoryControlValidator, error) {
@@ -142,7 +147,10 @@ func (v *FactoryControlValidator) ValidateOutcome(ctx context.Context, id effect
 	if !reflect.DeepEqual(record.Input, input) || !reflect.DeepEqual(record.Outcome, outcome) {
 		return effects.ErrEvidence
 	}
+	ctx = controlrecord.WithOutcomeValidation(ctx, id)
 	switch outcome.Kind {
+	case effects.ControlWrite:
+		return v.validateWriteOutcome(ctx, id, input, record)
 	case effects.ControlRejected:
 		if outcome.Rejection != nil && outcome.Rejection.Code == controlrecord.ControlEventNotAppendedCode {
 			return v.validateControlEventOutcome(ctx, originalRef, input, record, true)

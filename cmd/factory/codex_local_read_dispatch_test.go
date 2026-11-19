@@ -215,7 +215,7 @@ func dispatchActivate(t *testing.T, brain string, record codex.Record) {
 		}
 		var refs []effects.EventRef
 		for _, ev := range log {
-			if ev.Sender == events.SenderProgram && (ev.Kind == events.KindTransition && ev.From == "" || ev.Kind == events.KindHeartbeat && strings.HasPrefix(ev.Key, "lease:")) {
+			if ev.Sender == events.SenderProgram && (ev.Kind == events.KindTransition && ev.From == "" || ev.Kind == events.KindHeartbeat && strings.HasPrefix(ev.Key, "lease:") || ev.Kind == events.KindHandover || ev.Kind == events.KindHandback) {
 				encoded, _ := json.Marshal(ev)
 				refs = append(refs, effects.EventRef{OwnerID: id, Sequence: ev.Seq, SHA256: sha256.Sum256(encoded)})
 			}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/proc"
@@ -44,6 +45,14 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 	owner, err := ix.Lookup(spec.Task)
 	if err != nil || owner.Kind != blueprint.MachineWork || owner.Epic != spec.EpicID {
 		return nil, fmt.Errorf("PR actions require the owning babysitter")
+	}
+	write, _ := ctx.Value(coordinatorWriteKey{}).(*coordinatorWriteContext)
+	if write != nil {
+		release, err := store.Lock(owner.Dir, "codex-pr-write")
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 	}
 	matched := false
 	for _, entry := range ix {
@@ -96,6 +105,9 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 		return nil, fmt.Errorf("babysitter handover is not current")
 	}
 	cl := coordinatorGitHub()
+	if write != nil {
+		cl.Runner = coordinatorWriteRunner{cl.Runner, write}
+	}
 	cl.Runner = coordinatorReadRunner{cl.Runner}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -194,10 +206,24 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 	}{spec.Task, req.Op, p, resolvedComment, replyComment})
 	sum := sha256.Sum256(encoded)
 	key := "codex-pr:" + hex.EncodeToString(sum[:])
+	if write != nil {
+		if err := write.bind(key, encoded); err != nil {
+			return nil, err
+		}
+		if err := appendCoordinatorPRReceipt(log, spec.Task, events.KindRequest, key, string(encoded)); err != nil {
+			return nil, err
+		}
+	}
 	if slices.ContainsFunc(evs, func(ev events.Event) bool { return ev.Key == "done:"+key }) {
+		if write != nil {
+			if err := coordinatorPRCompleted(brain, spec, write, key); err != nil {
+				return nil, err
+			}
+		}
 		return map[string]bool{"done": true}, nil
 	}
 	description := fmt.Sprintf("%s %s#%d thread %s comment %d generation %s selection %s", req.Op, p.Repo, p.Number, p.ThreadID, p.CommentID, spec.Generation, spec.SelectionHash)
+	uncertain := write != nil && slices.ContainsFunc(evs, func(ev events.Event) bool { return ev.Key == "intent:"+key })
 	if err = appendCoordinatorPRReceipt(log, spec.Task, events.KindIntent, key, description); err != nil {
 		return nil, err
 	}
@@ -205,6 +231,9 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 	if req.Op == "pr_reply" {
 		if p.Kind == "thread" {
 			if !slices.ContainsFunc(thread.Comments.Nodes, func(c codexReviewComment) bool { return c.Author.Login == me && strings.Contains(c.Body, marker) }) {
+				if uncertain {
+					return nil, effects.ErrUnresolved
+				}
 				_, err = cl.Runner.Run(ctx, proc.Cmd{Name: "gh", Args: []string{"api", "-X", "POST", fmt.Sprintf("repos/%s/pulls/%d/comments/%d/replies", p.Repo, p.Number, p.CommentID), "-f", "body=" + p.Body + "\n\n" + marker}})
 			}
 
@@ -214,10 +243,16 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 				return nil, err
 			}
 			if !slices.ContainsFunc(comments, func(c gh.Comment) bool { return c.Author == me && strings.Contains(c.Body, marker) }) {
+				if uncertain {
+					return nil, effects.ErrUnresolved
+				}
 				err = cl.AddComment(ctx, p.Repo, p.Number, p.Body+"\n\n"+marker)
 			}
 		}
 	} else if !thread.IsResolved {
+		if uncertain {
+			return nil, effects.ErrUnresolved
+		}
 		var raw []byte
 		raw, err = cl.Runner.Run(ctx, proc.Cmd{Name: "gh", Args: []string{"api", "graphql", "-f", "query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}", "-f", "id=" + p.ThreadID}})
 		if err == nil {
@@ -242,6 +277,11 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 	}
 	if err = appendCoordinatorPRReceipt(log, spec.Task, events.KindDone, key, description); err != nil {
 		return nil, err
+	}
+	if write != nil {
+		if err := coordinatorPRCompleted(brain, spec, write, key); err != nil {
+			return nil, err
+		}
 	}
 	return map[string]bool{"done": true}, nil
 }

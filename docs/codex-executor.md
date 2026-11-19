@@ -128,6 +128,16 @@ retry or answer permits a new delivery. Legacy records without the input text
 have an unknown outcome. One held or conflicting session record does not stop
 other Codex sessions from working.
 
+A new contract-2 verification can replace the receipt used by an existing epic
+planner. That epic enters `needs_you` and status names `factory retry <epic>`.
+Retry permits Factory to stop the old planner using its recorded activation and
+a freshly verified receipt for the same configuration. It grants no new work to
+the old turn. Factory renews authority only after the exact old attempt has a
+validated closure, helpers have stopped and settled publication, and the saved
+inputs and ownership basis still match. Missing attempt evidence or unconfirmed
+closure keeps the epic waiting on the user. Receipt renewal preserves the old
+activation and links a new one to it.
+
 Codex quota reads use the subscription account's own API. Unknown account binding,
 permission, spend control or window values remain unknown. Included usage must be
 explicitly allowed. New inference stops at the existing hold threshold; running
@@ -251,6 +261,19 @@ The stored contract version selects one shared tool catalogue, decoder and runti
 instruction supplement. Request payloads cannot select a different catalogue.
 Existing prompt snapshots remain immutable. Claude keeps its existing publication
 path.
+
+Contract 2 retains the named `issue_create`, `issue_update`, `issue_comment`,
+`issue_assign`, `issue_close`, `pr_reply` and `pr_resolve` coordinator operations.
+Factory validates the stored caller and repository scope, then enrolls the write
+before dispatch. Issue writes use the existing frozen request journal and epic
+markers. PR replies retain their exact action, marker and current babysitter
+scope. An uncertain dispatch permits observation only. A completed write records
+its original call, owner authority and domain journal evidence in the effects
+control ledger. Recovery can rebuild a missing result from exact completed journal
+steps; incomplete evidence holds the control without repeating a write.
+The removed generic `effect_prepare` and `effect_result` operations remain
+unavailable. New helper prompt snapshots omit coordinator-only operations; existing
+snapshots retain their immutable bytes.
 
 Version 2 gives GitHub credentials and writes to Factory. Repository helpers make
 local changes and commits. After verification passes, Factory records the exact

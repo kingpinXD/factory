@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestContractTwoUsesOneCatalogueWithoutDirectMutations(t *testing.T) {
+func TestContractTwoUsesOneCatalogueWithProgramOwnedWrites(t *testing.T) {
 	for _, tool := range []string{FactoryControl, FactoryHelper, ManagedFiles, ManagedTerminal} {
 		if !reflect.DeepEqual(Operations(tool), OperationsForContract(tool, 1)) || !reflect.DeepEqual(Schema(tool), SchemaForContract(tool, 1)) || Help(tool) != HelpForContract(tool, 1) {
 			t.Fatal("legacy catalogue changed")
@@ -21,11 +21,11 @@ func TestContractTwoUsesOneCatalogueWithoutDirectMutations(t *testing.T) {
 	}
 	v2 := OperationsForContract(FactoryControl, 2)
 	for _, op := range []string{"issue_create", "issue_update", "issue_comment", "issue_assign", "issue_close", "pr_reply", "pr_resolve"} {
-		if slices.Contains(v2, op) || strings.Contains(HelpForContract(FactoryControl, 2), `op="`+op+`"`) {
-			t.Fatalf("direct v2 mutation advertised: %s", op)
+		if !slices.Contains(v2, op) || !strings.Contains(HelpForContract(FactoryControl, 2), `op="`+op+`"`) {
+			t.Fatalf("program-owned v2 write unavailable: %s", op)
 		}
 		if _, err := DecodeInputForContract(FactoryControl, op, 2, json.RawMessage(`{}`)); err == nil {
-			t.Fatalf("direct v2 mutation decoded: %s", op)
+			t.Fatalf("empty v2 write decoded: %s", op)
 		}
 		if !slices.Contains(Operations(FactoryControl), op) {
 			t.Fatalf("legacy operation removed: %s", op)

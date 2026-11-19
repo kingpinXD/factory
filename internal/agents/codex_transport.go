@@ -9,7 +9,7 @@ import (
 	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
-const CodexPromptProtocol = 4
+const CodexPromptProtocol = 5
 
 func CodexControlInstructions(version int, helper bool) string {
 	if version != 2 {
@@ -57,6 +57,9 @@ func codexControlText(text string) string {
 
 func codexPrompt(name, body string, snapshot sourceSnapshot, helper bool) string {
 	if helper {
+		if snapshot.PromptProtocol >= 5 {
+			snapshot.Bridge = codexHelperBridge(snapshot.Bridge)
+		}
 		return managedToolText(transformHelper(body)) + "\n\n" + managedToolText(transformHelperRules(snapshot.Rules)) + "\n\n" + snapshot.HelperTransport + "\n\n" + snapshot.Bridge
 	}
 	if name == "babysitter" {
@@ -261,4 +264,17 @@ func SessionText(provider, text string) string {
 		return text + codexRecoveryContract + "\nUse factory_control payload objects for these manager instructions. Read task inputs through file_read{path:\"inputs.yaml\"}, checkpoints and declared outputs through file_read{path:basename}, history through events{}, and inbox messages through inbox{target,ack}. Absolute paths identify the bound task only. Delegate repository commands, tests and pushes to the scoped helpers. Never use a host shell or Slack.\n"
 	}
 	return text
+}
+
+func codexHelperBridge(bridge string) string {
+	recovery := codexRecoveryContract
+	start := strings.Index(recovery, "file_write returns filename")
+	end := strings.Index(recovery, "For a cancelled helper")
+	recovery = recovery[:start] + recovery[end:]
+	start = strings.Index(recovery, "A busy refusal names")
+	end = strings.Index(recovery, "github_base requires")
+	recovery = recovery[:start] + recovery[end:]
+	start = strings.Index(recovery, "Before new verifier")
+	recovery = recovery[:start]
+	return strings.Replace(bridge, codexRecoveryContract, recovery, 1)
 }

@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,8 +205,20 @@ func TestCodexRecoveryContractsReachPinnedConversations(t *testing.T) {
 	}
 	sources := filepath.Join(out, "sources.json")
 	before := read(t, sources)
-	for _, text := range []string{SessionText("codex", "Resume from your newest event."), read(t, PromptPathFor(out, "orchestrator")), read(t, PromptPathFor(out, "implementor"))} {
-		for _, required := range []string{"reply-only reviewers", "omitted output_path", "path:filename", "descendants_stopped=true", "publication_settled=true", "fresh request key"} {
+	for _, conversation := range []struct {
+		text   string
+		helper bool
+	}{
+		{SessionText("codex", "Resume from your newest event."), false},
+		{read(t, PromptPathFor(out, "orchestrator")), false},
+		{read(t, PromptPathFor(out, "implementor")), true},
+	} {
+		text := conversation.text
+		requiredTerms := []string{"reply-only reviewers", "omitted output_path", "descendants_stopped=true", "publication_settled=true", "fresh request key"}
+		if !conversation.helper {
+			requiredTerms = append(requiredTerms, "path:filename")
+		}
+		for _, required := range requiredTerms {
 			if !strings.Contains(text, required) {
 				t.Fatalf("missing current contract %q", required)
 			}
@@ -216,6 +229,37 @@ func TestCodexRecoveryContractsReachPinnedConversations(t *testing.T) {
 	}
 	if read(t, sources) != before {
 		t.Fatal("runtime correction rewrote pinned sources")
+	}
+
+	for _, version := range []int{3, 4} {
+		t.Run(fmt.Sprintf("immutable-protocol-%d", version), func(t *testing.T) {
+			legacyBrain, legacyBlueprint, legacyOut := codexBrain(t)
+			var snapshot sourceSnapshot
+			if err := json.Unmarshal([]byte(before), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			snapshot.PromptProtocol = version
+			raw, err := json.MarshalIndent(snapshot, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			put(t, filepath.Join(legacyOut, "sources.json"), string(raw))
+			if _, _, err := BuildFor(legacyBrain, legacyOut, legacyBlueprint, nil); err != nil {
+				t.Fatal(err)
+			}
+			pinnedHelper := read(t, PromptPathFor(legacyOut, "implementor"))
+			for _, term := range []string{"path:filename", "RESPONSE read_only:true"} {
+				if !strings.Contains(pinnedHelper, term) {
+					t.Fatalf("protocol %d rewrote pinned helper bridge %q", version, term)
+				}
+			}
+			if _, _, err := BuildFor(legacyBrain, legacyOut, legacyBlueprint, nil); err != nil {
+				t.Fatal(err)
+			}
+			if read(t, filepath.Join(legacyOut, "sources.json")) != string(raw) || read(t, PromptPathFor(legacyOut, "implementor")) != pinnedHelper {
+				t.Fatal("legacy pinned bytes changed")
+			}
+		})
 	}
 	for _, provider := range []string{"claude"} {
 		if SessionText(provider, "resume") != "resume" {
@@ -254,12 +298,26 @@ func TestCodexControlRecoveryGuidanceReachesImmutableConversations(t *testing.T)
 	}
 	sources := filepath.Join(out, "sources.json")
 	before := read(t, sources)
-	for _, text := range []string{SessionText("codex", "Resume."), read(t, PromptPathFor(out, "orchestrator")), read(t, PromptPathFor(out, "implementor"))} {
+	for _, text := range []string{SessionText("codex", "Resume."), read(t, PromptPathFor(out, "orchestrator"))} {
 		text = strings.Join(strings.Fields(text), " ")
 		for _, term := range []string{"memory/tone_guide.md", "RESPONSE read_only:true", "metadata and recovery facts only", "does not grant Continue/Cancel", "program-owned phase transition", "query{repo}", "match the work id", "fresh truthful", "even when no code changes", "exact"} {
 			if !strings.Contains(text, term) {
 				t.Fatalf("missing recovery instruction %q", term)
 			}
+		}
+	}
+	helper := read(t, PromptPathFor(out, "implementor"))
+	for _, term := range []string{"memory/tone_guide.md", "github_base requires", "failed read is unknown evidence", "CURRENT stored helper round", "stopped=true"} {
+		if !strings.Contains(helper, term) {
+			t.Fatalf("missing helper recovery instruction %q", term)
+		}
+	}
+	if err := CheckCodexContractOperations(helper, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, term := range []string{"path:filename", "RESPONSE read_only:true", "query{repo}"} {
+		if strings.Contains(helper, term) {
+			t.Fatalf("helper retained coordinator-only recovery advice %q", term)
 		}
 	}
 	if read(t, sources) != before {

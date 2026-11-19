@@ -23,7 +23,7 @@ func TestControlTransportV2UsesOnlyTrustedCatalogue(t *testing.T) {
 			}
 		}
 	}
-	for _, op := range []string{"issue_create", "pr_create", "pr_ready"} {
+	for _, op := range []string{"pr_create", "pr_ready"} {
 		if strings.Contains(toolcontract.HelpForContract(toolcontract.FactoryControl, 2), "op=\""+op+"\"") {
 			t.Fatalf("advertised legacy write %s", op)
 		}

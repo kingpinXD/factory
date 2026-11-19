@@ -20,13 +20,15 @@ import (
 
 // Writer writes issues for one caller. Empty Log denotes an explicit user call.
 type Writer struct {
-	GitHub  gh.Client
-	Brain   string
-	Log     string
-	Sender  string
-	Epic    string
-	Now     func() time.Time
-	syncLog func(string) error
+	GitHub gh.Client
+	Brain  string
+	Log    string
+	Sender string
+	Epic   string
+	Now    func() time.Time
+	// Completed receives the frozen request and proved journal completion.
+	Completed func([]events.Event) error
+	syncLog   func(string) error
 }
 
 func short(text string) string {

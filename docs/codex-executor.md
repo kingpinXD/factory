@@ -128,18 +128,25 @@ retry or answer permits a new delivery. Legacy records without the input text
 have an unknown outcome. One held or conflicting session record does not stop
 other Codex sessions from working.
 
-A new contract-2 verification can replace the receipt used by an existing epic
-planner. That epic enters `needs_you` and status names `factory retry <epic>`.
-Retry permits Factory to stop the old planner using its recorded activation and
-a freshly verified receipt for the same configuration, including after a factory
-binary upgrade changes the receipt binding. The old program-owned activation
-records the receipt verified before admission; retirement does not requalify the
-old binary. It grants no new work to the old turn. Factory renews authority only
-after the exact old attempt has a validated closure, helpers have stopped and
-settled publication, and the saved inputs and ownership basis still match.
-Missing attempt evidence or unconfirmed closure keeps the epic waiting on the
-user. Receipt renewal preserves the old
-activation and links a new one to it.
+A new contract-2 verification can replace the receipt used by an existing Codex
+coordinator. Its owner enters `needs_you` and status names its exact retry command:
+`factory retry <epic>` for a planner, `factory retry <set>` for an orchestrator,
+or `factory retry <work>` for a retained work-owned babysitter. Each owner needs
+its own retry; retrying an epic does not authorize stopping another owner's turn.
+The normal manager still requires a settled transfer before first activating a
+work-owned babysitter.
+
+Retry permits Factory to stop the old coordinator using its recorded activation
+and a freshly verified receipt for the same configuration, including after a
+factory binary upgrade changes the receipt binding. Retirement grants no new
+work to the old turn. Factory renews authority only after the exact old attempt
+has a validated closure, helpers have stopped and settled publication, and the
+saved inputs and ownership basis still match. Missing attempt evidence or
+unconfirmed closure keeps the owner waiting on the user. Renewal links the new
+activation to the old one. A set's existing work activations renew under that
+same closure, preserving their ownership and generation and linking them to the
+new set activation. An interrupted dependent renewal resumes before a successor
+can launch.
 
 Codex quota reads use the subscription account's own API. Unknown account binding,
 permission, spend control or window values remain unknown. Included usage must be

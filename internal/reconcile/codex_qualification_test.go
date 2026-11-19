@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/fsm"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/toolcontract"
 )
@@ -67,6 +69,65 @@ func TestCodexQualificationChangeWaitsForExplicitRetry(t *testing.T) {
 	}
 }
 
+// Retained work-owned activations can need renewal even though the normal
+// manager still requires an explicit transfer producer for their first admission.
+func TestCodexHandedOverWorkQualificationRequiresItsOwnRetry(t *testing.T) {
+	w, r, req := b2World(t)
+	owner := r.ents[req.WorkID]
+	if _, err := r.append(owner, events.Event{Kind: events.KindHandover, Sender: events.SenderProgram}); err != nil {
+		t.Fatal(err)
+	}
+	req.OwnerID, req.SetID, req.Lease = owner.id, "", 0
+	scope, err := (NativeAuthority{w.brain}).resolveBase(r.ctx, req, false, false, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	basis, err := nativeBasis(r.ix, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := NativeSelection(w.brain, "e1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptance, _ := b2Qualification(r.ctx, w.brain, selected)
+	activation := nativeActivation{Version: 2, EpicID: "e1", OwnerID: owner.id, Kind: owner.entry.Kind, SelectionHash: selectionHash(selected), Basis: basis, WorkGeneration: scope.Generation, Acceptance: acceptance, AfterSeq: len(owner.evs)}
+	data, _ := json.Marshal(activation)
+	if _, err := r.append(owner, events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: codexAuthorityRecipient, Request: "activate", Text: string(data), Key: "retained-work-owner"}); err != nil {
+		t.Fatal(err)
+	}
+	authority, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, b2Qualification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.verificationQualifier = renewedQualification
+	r.tickEntity(owner)
+	if owner.cur.State != stateNeedsYou {
+		t.Fatal("handed-over work did not hold its babysitter", owner.cur.State)
+	}
+	if why := r.needsYouWhy(owner, owner.enteredBy); !strings.Contains(why, "factory retry "+owner.id) || !strings.Contains(why, babysitterComponent) {
+		t.Fatal("babysitter wait does not name its work retry", why)
+	}
+	if err := Retry(r.ctx, w.deps(), owner.id); err != nil {
+		t.Fatal(err)
+	}
+	owner.evs = w.log(owner.id)
+	r.applyRequests(owner)
+	next, _ := renewedQualification(r.ctx, w.brain, selected)
+	retry, ok := qualificationRetry(owner, qualificationRef(activation, next))
+	if !ok {
+		t.Fatal("applied work retry did not release its qualification hold")
+	}
+	request := CoordinatorCloseRequest{Version: 2, Authority: authority, Cause: nativeEventRef(owner.id, retry), Mode: "qualification_refresh", Reason: "shutdown"}
+	if err := validateQualificationClose(r.ctx, w.brain, request, renewedQualification); err != nil {
+		t.Fatal("retained babysitter cannot authorize its own qualification close", err)
+	}
+	request.Cause.OwnerID = "e1"
+	if err := validateQualificationClose(r.ctx, w.brain, request, renewedQualification); err == nil {
+		t.Fatal("epic cause authorized a babysitter qualification close")
+	}
+}
+
 func TestCodexQualificationRetirementCannotAuthorizeChangedInputsOrEmptyBinding(t *testing.T) {
 	for _, changed := range []string{"inputs", "binding"} {
 		t.Run(changed, func(t *testing.T) {
@@ -109,11 +170,15 @@ func (a qualificationEventAuthority) ValidateControlEventSourceLocal(ctx context
 	return a.validateControlEventSourceLocal(ctx, original, input, source, a.verify)
 }
 
-func qualificationCompletedEvent(t *testing.T, r *run, runtime *codex.Runtime, attempt codex.AttemptRef) (effects.ControlID, effects.ControlInput, ControlEventResult) {
+func qualificationCompletedEvent(t *testing.T, r *run, runtime *codex.Runtime, attempt codex.AttemptRef, target ...string) (effects.ControlID, effects.ControlInput, ControlEventResult) {
 	t.Helper()
 	record := settlementAttemptRecord(t, r.d.Brain, attempt)
 	id := effects.ControlID{Attempt: effects.AttemptKey{SessionID: attempt.SessionID, AttemptID: attempt.AttemptID}, ThreadID: record.ThreadID, TurnID: record.TurnID, CallID: "completed-before-reverification"}
-	payload, _ := json.Marshal(map[string]any{"op": "event", "payload": map[string]any{"kind": "message", "text": "retained completed planner event"}})
+	input := map[string]any{"kind": "message", "text": "retained completed planner event"}
+	if len(target) != 0 {
+		input["target"] = target[0]
+	}
+	payload, _ := json.Marshal(map[string]any{"op": "event", "payload": input})
 	original, err := controlrecord.NewOriginal(toolcontract.FactoryControl, payload, &id, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -272,27 +337,59 @@ func (c *qualificationUnconfirmedContainment) Fence(ctx context.Context, owner c
 	return c.Containment.Fence(ctx, owner)
 }
 
+func TestCodexSetRetryAfterBinaryUpgradeRenewsDependentWork(t *testing.T) {
+	testCodexCoordinatorRetryClosesActiveAttempt(t, func(ctx context.Context, brain string, selected executor.Selection) (codex.Contract2AcceptanceRef, error) {
+		ref, err := renewedQualification(ctx, brain, selected)
+		ref.Binding = strings.Repeat("d", 64)
+		return ref, err
+	}, componentOrchestrator)
+}
+
 func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAcceptance, delayed ...string) {
+	t.Helper()
+	testCodexCoordinatorRetryClosesActiveAttempt(t, qualify, componentPlanner, delayed...)
+}
+
+func testCodexCoordinatorRetryClosesActiveAttempt(t *testing.T, qualify nativeAcceptance, component string, delayed ...string) {
 	t.Helper()
 	if isolatedParallelTest(t) {
 		return
 	}
-	w, r, runtime, _ := ordinaryManagerFixture(t)
-	owner := r.ents["e1"]
-	// Start from the real planner entry rather than the generic world's planned epic.
-	history := w.log(owner.id)
-	history[0].To = epicChecking
-	var raw []byte
-	for _, event := range history {
-		line, _ := json.Marshal(event)
-		raw = append(raw, append(line, '\n')...)
-	}
-	put(t, store.EventsPath(owner.entry.Dir), string(raw))
-	owner.evs, owner.cur.State = history, epicChecking
-	owner.enteredBy = history[0]
-	id, name := r.sessionSlot(owner, componentPlanner)
-	if err := managerTickCall(t, w.brain, func() error { return r.startSession(owner, componentPlanner, id, name) }); err != nil {
-		t.Fatal(err)
+	var w *world
+	var r *run
+	var runtime *codex.Runtime
+	var owner, item *entity
+	var id, name string
+	if component == componentOrchestrator {
+		w, r, runtime, owner, item, id, name = normalManagerWorkFixture(t)
+		b2Activate(t, r, "e1")
+		r.ents["e1"].evs = w.log("e1")
+		if _, err := r.move(item, fsm.Cur{State: stateStarting}, "tick", "startable"); err != nil {
+			t.Fatal(err)
+		}
+		runtime.AttemptCapabilities = b2AttemptCaps{}
+		r.codexLaunched = nil
+		if err := managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, r.ents[id]) }); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		w, r, runtime, _ = ordinaryManagerFixture(t)
+		owner = r.ents["e1"]
+		// Start from the real planner entry rather than the generic world's planned epic.
+		history := w.log(owner.id)
+		history[0].To = epicChecking
+		var raw []byte
+		for _, event := range history {
+			line, _ := json.Marshal(event)
+			raw = append(raw, append(line, '\n')...)
+		}
+		put(t, store.EventsPath(owner.entry.Dir), string(raw))
+		owner.evs, owner.cur.State = history, epicChecking
+		owner.enteredBy = history[0]
+		id, name = r.sessionSlot(owner, component)
+		if err := managerTickCall(t, w.brain, func() error { return r.startSession(owner, component, id, name) }); err != nil {
+			t.Fatal(err)
+		}
 	}
 	sess := r.ents[id]
 	before, err := runtime.InspectCoordinatorAttemptByName(r.ctx, name)
@@ -310,7 +407,11 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	completedID, completedInput, completedEvent := qualificationCompletedEvent(t, r, runtime, before.Ref)
+	var eventTarget []string
+	if item != nil {
+		eventTarget = []string{item.id}
+	}
+	completedID, completedInput, completedEvent := qualificationCompletedEvent(t, r, runtime, before.Ref, eventTarget...)
 	if len(delayed) != 0 {
 		if strings.HasPrefix(delayed[0], "issue_") {
 			qualificationFailedIssue(t, r, runtime, before.Ref, delayed[0])
@@ -341,10 +442,46 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	if err := validator.ValidateOutcome(r.ctx, completedID, completedInput, completedEvent.Outcome); err == nil || !strings.Contains(err.Error(), "qualification changed") {
 		t.Fatal("completed old event accepted changed proof outside sealed retirement", err)
 	}
+	if item != nil {
+		if err := managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, sess) }); err == nil || !strings.Contains(err.Error(), "qualification changed") {
+			t.Fatal("qualification error disappeared before visible hold", err)
+		}
+		epic := r.ents["e1"]
+		r.tickEntity(epic)
+		if epic.cur.State != stateNeedsYou {
+			t.Fatal("planner activation did not hold after binary upgrade", epic.cur.State)
+		}
+		if err := Retry(r.ctx, w.deps(), epic.id); err != nil {
+			t.Fatal(err)
+		}
+		epic.evs = w.log(epic.id)
+		r.applyRequests(epic)
+	}
 	owner.evs = w.log(owner.id)
 	r.tickEntity(owner)
 	if owner.cur.State != stateNeedsYou {
-		t.Fatalf("active planner receipt change stayed %s", owner.cur.State)
+		t.Fatalf("active coordinator receipt change stayed %s", owner.cur.State)
+	}
+	if item != nil {
+		if why := r.needsYouWhy(owner, owner.enteredBy); !strings.Contains(why, "factory retry "+owner.id) || !strings.Contains(why, componentOrchestrator) {
+			t.Fatal("set wait does not name its own retry and role", why)
+		}
+		if _, held := r.codexQualificationChanged(item); held {
+			t.Fatal("set-owned work was held as a babysitter")
+		}
+		report, err := Status(r.ctx, w.deps())
+		if err != nil {
+			t.Fatal(err)
+		}
+		visible := false
+		for _, waiting := range report.Waiting {
+			if strings.Contains(waiting.Why, "factory retry "+owner.id) {
+				visible = true
+			}
+		}
+		if !visible {
+			t.Fatal("waiting_on_user omits the set qualification retry", report.Waiting)
+		}
 	}
 	if err := managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, sess) }); err != nil {
 		t.Fatal(err)
@@ -519,13 +656,54 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	}
 	r.d.Runtimes["codex"] = runtime
 	eventCount := 0
-	for _, event := range w.log(owner.id) {
+	eventOwner := owner.id
+	if item != nil {
+		eventOwner = item.id
+	}
+	for _, event := range w.log(eventOwner) {
 		if event.Kind == events.KindMessage && event.Text == "retained completed planner event" {
 			eventCount++
 		}
 	}
 	if eventCount != 1 {
 		t.Fatalf("retirement replayed completed control: %d messages", eventCount)
+	}
+	var oldWork nativeActivation
+	var oldWorkEvent events.Event
+	if item != nil {
+		item.evs = w.log(item.id)
+		oldWork, oldWorkEvent, _, err = nativeReadActivation(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		workLog, err := os.ReadFile(store.EventsPath(item.entry.Dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A foreign parent must stop dependent renewal, even after the new parent
+		// activation is durable. Restoring the exact work history must resume it.
+		wrong := oldWork
+		foreign, _, _, err := nativeReadActivation(r.ents["e1"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreignRef := effects.EventRef{OwnerID: foreign.OwnerID, Sequence: 1}
+		wrong.OwnerActivation = &foreignRef
+		prior := nativeEventRef(item.id, oldWorkEvent)
+		wrong.Previous, wrong.AfterSeq = &prior, len(item.evs)
+		data, _ := json.Marshal(wrong)
+		if _, err := r.append(item, events.Event{Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: codexAuthorityRecipient, Request: "activate", Text: string(data), Key: "foreign-parent-fixture"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, sess) }); !errors.Is(err, effects.ErrAuthority) {
+			t.Fatal("renewal accepted work linked to a foreign parent", err)
+		}
+		parent, _, _, err := nativeReadActivation(owner)
+		if err != nil || parent.Acceptance == oldWork.Acceptance {
+			t.Fatal("fixture did not interrupt after parent activation", err)
+		}
+		put(t, store.EventsPath(item.entry.Dir), string(workLog))
+		item.evs = w.log(item.id)
 	}
 	// Stop at preparation: the child fixture pins the original test receipt.
 	runtime.AttemptCapabilities = managerDenyCapabilities{}
@@ -546,6 +724,30 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	if err != nil || activation.Acceptance != expectedAcceptance {
 		t.Fatal("successor did not activate under the newly verified binding", activation.Acceptance, err)
 	}
+	if item != nil {
+		item.evs = w.log(item.id)
+		work, _, _, err := nativeReadActivation(item)
+		if err != nil || work.Acceptance != expectedAcceptance || work.Previous == nil || *work.Previous != nativeEventRef(item.id, oldWorkEvent) || work.OwnerActivation == nil || *work.OwnerActivation != nativeEventRef(owner.id, owner.evs[activation.AfterSeq]) || work.WorkGeneration != oldWork.WorkGeneration || !reflect.DeepEqual(work.Basis, oldWork.Basis) {
+			t.Fatal("dependent work renewal lost its exact parent, generation or chain", work, err)
+		}
+		if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", item.id, true, nil, qualify); err != nil {
+			t.Fatal("renewed dependent authority unusable", err)
+		}
+
+		scope, err := (NativeAuthority{w.brain}).resolveQualified(r.ctx, helper.Request{WorkID: item.id, OwnerID: owner.id, SetID: owner.id, Lease: owner.st.Lease, Component: "implementor"}, false, false, true, false, qualify)
+		if err != nil || scope.CodexContract != 2 || scope.Generation != oldWork.WorkGeneration {
+			t.Fatal("renewed work could not resolve its contract-2 helper scope", scope, err)
+		}
+		// The provider fixture pins X. A synthetic start event exercises only
+		// the regular receiving transition after proving the Y helper scope.
+		if _, err := r.append(item, events.Event{Kind: events.KindStart, Sender: owner.id, Text: "explore"}); err != nil {
+			t.Fatal(err)
+		}
+		r.tickEntity(item)
+		if item.cur.State != "exploring" {
+			t.Fatal("renewed work did not advance from starting to exploring", item.cur.State)
+		}
+	}
 	r.tickEntity(owner)
 	if owner.cur.State == stateNeedsYou {
 		t.Fatal("retry returned the renewed epic to needs_you", owner.enteredBy.TriggerRef)
@@ -563,5 +765,21 @@ func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAccept
 	}
 	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, &oldAuthority, qualify); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatal("old authority accepted after renewal", err)
+	}
+	if item != nil {
+		// Use a genuine offline prelaunch closure, as the manager accounting
+		// fixtures do. It has no qualification close cause and needs no renewal.
+		closing := *runtime
+		closing.AttemptAuthority = b2AttemptAuthority{w.brain}
+		if err := closing.CloseAttempt(r.ctx, next.Ref, "prelaunch_failure"); err != nil {
+			t.Fatal("close renewed prepared successor", err)
+		}
+		later, err := runtime.InspectCoordinatorAttemptByName(r.ctx, name)
+		if err != nil || later.Stage != "closed" || later.CloseCause != nil {
+			t.Fatal("later same-binary closure fixture invalid", later, err)
+		}
+		if handled, err := r.refreshCodexQualification(owner, sess, runtime, qualify); handled || err != nil {
+			t.Fatal("qualification renewal blocked later same-binary replacement", handled, err)
+		}
 	}
 }

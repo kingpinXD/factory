@@ -129,7 +129,7 @@ func coordinatorIssueControl(ctx context.Context, brain string, ix store.Index, 
 	cl := coordinatorGitHub()
 	write, _ := ctx.Value(coordinatorWriteKey{}).(*coordinatorWriteContext)
 	if write != nil {
-		cl.Runner = coordinatorWriteRunner{cl.Runner, write}
+		cl.Runner = coordinatorWriteRunner{runner: cl.Runner, write: write, brain: brain}
 	}
 	owner, _ := ix.Lookup(spec.Task)
 	w := issue.Writer{GitHub: cl, Brain: brain, Log: store.EventsPath(owner.Dir), Sender: spec.Task, Epic: spec.EpicID, Now: time.Now}

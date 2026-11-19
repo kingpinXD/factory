@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/kingpinXD/factory/internal/controlrecord"
 	"github.com/kingpinXD/factory/internal/effects"
@@ -26,11 +27,23 @@ type coordinatorWriteKey struct{}
 type coordinatorWriteRunner struct {
 	runner proc.Runner
 	write  *coordinatorWriteContext
+	brain  string
 }
 
 func (r coordinatorWriteRunner) Run(ctx context.Context, cmd proc.Cmd) ([]byte, error) {
 	if err := r.write.check(ctx); err != nil {
 		return nil, err
+	}
+	config, err := os.MkdirTemp(filepath.Join(r.brain, "factory"), "control-gh-config-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(config)
+	cmd.Env = append(cmd.Env, "GH_CONFIG_DIR="+config)
+	if data, err := readSecretsFile(filepath.Join(r.brain, "connectors", "secrets.env")); err == nil {
+		if token := tokenIn(string(data)); token != "" {
+			cmd.Env = append(cmd.Env, "GH_TOKEN="+token)
+		}
 	}
 	return r.runner.Run(ctx, cmd)
 }

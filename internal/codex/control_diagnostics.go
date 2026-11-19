@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/kingpinXD/factory/internal/controlrecord"
@@ -19,6 +20,7 @@ type controlFailure struct {
 	Operation     string    `json:"operation"`
 	Stage         string    `json:"stage"`
 	Reason        string    `json:"reason"`
+	Cause         string    `json:"cause,omitempty"`
 }
 
 // Retain the failure stage and a known reason, never request data or subprocess stderr.
@@ -82,5 +84,36 @@ func RecordControlFailure(brain string, attempt AttemptRef, request []byte, stag
 	case stage == "tool_scope":
 		reason = "the model requested an unscoped tool"
 	}
-	return writeJSON(name, controlFailure{Schema: 1, At: time.Now().UTC(), RequestSHA256: hash(request), Operation: operation, Stage: stage, Reason: reason})
+	classification := ""
+	if reason == "the scoped control operation failed" {
+		classification = controlFailureCause(cause)
+	}
+	return writeJSON(name, controlFailure{Cause: classification, Schema: 1, At: time.Now().UTC(), RequestSHA256: hash(request), Operation: operation, Stage: stage, Reason: reason})
+}
+
+// Names identify failures without retaining error text, paths or subprocess output.
+func controlFailureCause(cause error) string {
+	for _, known := range []struct {
+		err  error
+		name string
+	}{
+		{effects.ErrConflict, "effects.ErrConflict"},
+		{effects.ErrNotFound, "effects.ErrNotFound"},
+		{effects.ErrBusy, "effects.ErrBusy"},
+		{effects.ErrStale, "effects.ErrStale"},
+		{effects.ErrUnresolved, "effects.ErrUnresolved"},
+		{effects.ErrCorrupt, "effects.ErrCorrupt"},
+	} {
+		if errors.Is(cause, known.err) {
+			return known.name
+		}
+	}
+	for range 32 {
+		next := errors.Unwrap(cause)
+		if next == nil {
+			break
+		}
+		cause = next
+	}
+	return reflect.TypeOf(cause).String()
 }

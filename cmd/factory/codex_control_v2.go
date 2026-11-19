@@ -211,6 +211,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		return nil, err
 	}
 	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		stage = "control_enrollment_snapshot"
 		if _, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput}); err != nil {
 			return nil, err
 		}
@@ -236,6 +237,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
 		release()
 		release = nil
+		stage = "program_write"
 		var result controlrecord.WriteResult
 		proof, result, err = coordinatorProgramWrite(ctx, brain, spec, originalRef, original, control, controlInput, ownerAuthority)
 		release, lockErr := controlLock(ctx, brain)

@@ -106,7 +106,7 @@ func coordinatorPRControl(ctx context.Context, brain string, ix store.Index, spe
 	}
 	cl := coordinatorGitHub()
 	if write != nil {
-		cl.Runner = coordinatorWriteRunner{cl.Runner, write}
+		cl.Runner = coordinatorWriteRunner{runner: cl.Runner, write: write, brain: brain}
 	}
 	cl.Runner = coordinatorReadRunner{cl.Runner}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)

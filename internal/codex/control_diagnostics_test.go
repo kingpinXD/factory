@@ -3,6 +3,11 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/kingpinXD/factory/internal/effects"
+	"github.com/kingpinXD/factory/internal/store"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,5 +167,45 @@ func TestDynamicControlUnscopedToolFailureIsVisible(t *testing.T) {
 	}
 	if failure.Stage != "tool_scope" || failure.Reason != "the model requested an unscoped tool" {
 		t.Fatalf("wrong unscoped-tool reason: %+v", failure)
+	}
+}
+
+func TestControlEnrollmentFailureClassifiesCauseWithoutSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"sentinel", fmt.Errorf("private-token: %w", effects.ErrCorrupt), "effects.ErrCorrupt"},
+		{"wrapped_type", fmt.Errorf("private-prompt: %w", &store.LockedError{Name: "private-token", PID: 123}), "*store.LockedError"},
+		{"opaque", errors.New("private-token private-prompt"), "*errors.errorString"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, spec, _, _ := attemptWorld(t)
+			ref := preparedAttempt(t, r, spec)
+			request := []byte(`{"arguments":{"op":"issue_create","payload":{"repo":"o/r","key":"epic","title":"private-prompt","body":"private-token"}},"callId":"call","threadId":"thread","turnId":"turn","tool":"factory_control"}`)
+			if err := RecordControlFailure(r.Brain, ref, request, "control_enrollment", tc.cause); err != nil {
+				t.Fatal(err)
+			}
+			directory, err := r.attemptDirectory(ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(filepath.Join(directory, "control-failures", hash(request)+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var failure struct{ Stage, Reason, Cause string }
+			if err := json.Unmarshal(data, &failure); err != nil {
+				t.Fatal(err)
+			}
+			if failure.Stage != "control_enrollment" || failure.Reason != "the scoped control operation failed" || failure.Cause != tc.want {
+				t.Fatalf("failure has no safe cause: %s", data)
+			}
+			if strings.Contains(string(data), "private-") || strings.Contains(string(data), "payload") {
+				t.Fatalf("failure leaked secrets: %s", data)
+			}
+			t.Logf("retained %s without error text or request data", failure.Cause)
+		})
 	}
 }

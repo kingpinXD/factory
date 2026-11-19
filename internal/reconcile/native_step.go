@@ -104,10 +104,10 @@ func nativeStepFromHistoryWithVerification(id string, evs []events.Event, b *blu
 			}
 		}
 		if !allowed {
-			return out, fmt.Errorf("work step transition/cause unsupported: %s to %s", ev.From, ev.To)
+			return out, fmt.Errorf("%w: work step transition/cause unsupported: %s to %s", effects.ErrEvidence, ev.From, ev.To)
 		}
 		if !nativeStepCause(evs, ev, history, epic) {
-			return out, fmt.Errorf("work step cause missing or unsupported: %s", ev.TriggerRef)
+			return out, fmt.Errorf("%w: work step cause missing or unsupported: %s", effects.ErrEvidence, ev.TriggerRef)
 		}
 		cur = fsm.Cur{State: ev.To, Prev: ev.Prev, Attempt: ev.Attempt}
 		if back {
@@ -303,6 +303,10 @@ func nativeStepCause(local []events.Event, transition events.Event, history map[
 	ref := transition.TriggerRef
 	if strings.HasPrefix(ref, timeoutRef) {
 		return true
+	}
+	if number, tick := strings.CutPrefix(ref, "tick:"); tick {
+		n, err := strconv.Atoi(number)
+		return transition.Trigger == "tick" && err == nil && n > 0 && strconv.Itoa(n) == number
 	}
 	evs := local
 	expected := ""

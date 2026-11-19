@@ -18,6 +18,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/controlrecord"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/reconcile"
@@ -224,7 +225,7 @@ func scopedCoordinatorControl(ctx context.Context, brain string, spec session.Sp
 	}
 	owner, err := ix.Lookup(spec.Task)
 	if err != nil || owner.Epic != spec.EpicID {
-		return nil, fmt.Errorf("coordinator owner changed")
+		return nil, fmt.Errorf("%w: coordinator owner changed", effects.ErrAuthority)
 	}
 	if req.Op == "plan_input" {
 		if owner.Kind != blueprint.MachineEpic || !strings.HasSuffix(spec.Name, ":planner") {
@@ -249,9 +250,15 @@ func scopedCoordinatorControl(ctx context.Context, brain string, spec session.Sp
 		}
 		ep, err := ix.Lookup(spec.EpicID)
 		if err != nil || ep.Kind != blueprint.MachineEpic {
-			return nil, fmt.Errorf("epic reference unavailable")
+			return nil, fmt.Errorf("%w: epic reference unavailable", effects.ErrAuthority)
 		}
 		data, err := readCoordinatorFile(filepath.Join(ep.Dir, p.Path), controlLimit)
+		if errors.Is(err, os.ErrNotExist) {
+			if _, statErr := os.Stat(ep.Dir); statErr != nil {
+				return nil, statErr
+			}
+			return nil, &codex.ToolInputError{Message: "epic reference does not exist yet; use plan_input or an existing epic reference"}
+		}
 		return map[string]string{"text": string(data)}, err
 	}
 	if strings.HasPrefix(req.Op, "pr_") {
@@ -495,6 +502,9 @@ func readCoordinatorFile(full string, limit int) ([]byte, error) {
 }
 
 func codexHelperInputError(err error) error {
+	if errors.Is(err, helper.ErrOutputPath) {
+		return &codex.ToolInputError{Message: "file output requires a canonical absolute output_path under the work directory; this request was not admitted"}
+	}
 	var reply *helper.ReplyOutputError
 	if errors.As(err, &reply) {
 		return &codex.ToolInputError{Message: "reply-only component requires omitted output_path; this request was not admitted"}

@@ -19,6 +19,8 @@ import (
 	"github.com/kingpinXD/factory/internal/store"
 )
 
+var ErrOutputPath = errors.New("file output requires canonical absolute path")
+
 func validToken(v string) bool {
 	if v == "" || v == "." || v == ".." {
 		return false
@@ -302,21 +304,30 @@ func newRound(j Job, prompt, output string) *roundRecord {
 	}
 	return round
 }
-func reserve(db *ledger, j Job, c blueprint.Component, path string, round int, artifactSet string) error {
-	if path != "" {
-		if err := checkPendingOutput(db, path, ""); err != nil {
-			return err
-		}
-	}
-	reply := len(c.Outputs) == 1 && c.Outputs[0].Path == blueprint.OutputReply
-	if reply {
+func validateOutputPath(c blueprint.Component, path string) error {
+	if len(c.Outputs) == 1 && c.Outputs[0].Path == blueprint.OutputReply {
 		if path != "" {
 			return &ReplyOutputError{}
 		}
 		return nil
 	}
 	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return fmt.Errorf("file output requires canonical absolute path")
+		return ErrOutputPath
+	}
+	return nil
+}
+
+func reserve(db *ledger, j Job, c blueprint.Component, path string, round int, artifactSet string) error {
+	if path != "" {
+		if err := checkPendingOutput(db, path, ""); err != nil {
+			return err
+		}
+	}
+	if err := validateOutputPath(c, path); err != nil {
+		return err
+	}
+	if len(c.Outputs) == 1 && c.Outputs[0].Path == blueprint.OutputReply {
+		return nil
 	}
 	if _, err := canonicalDir(j.Scope.OutputRoot); err != nil {
 		return err

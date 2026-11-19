@@ -52,7 +52,7 @@ func resolveCoordinatorEvent(brain string, spec session.Spec, operation string, 
 	}
 	policy.Owner, err = index.Lookup(spec.Task)
 	if err != nil || policy.Owner.Epic != spec.EpicID {
-		return policy, event, fmt.Errorf("coordinator owner changed")
+		return policy, event, fmt.Errorf("%w: coordinator owner changed", effects.ErrAuthority)
 	}
 	policy.TargetID = input.Target
 	if policy.TargetID == "" {
@@ -61,8 +61,11 @@ func resolveCoordinatorEvent(brain string, spec session.Spec, operation string, 
 	plannerInstruction := operation == "event" && input.Kind == events.KindInstruction && policy.Owner.Kind == blueprint.MachineEpic && strings.HasSuffix(spec.Name, ":planner")
 	if plannerInstruction {
 		policy.Target, err = index.Lookup(policy.TargetID)
+		if err != nil {
+			err = &codex.ToolInputError{Message: "unknown event target; use the complete set id from the current epic plan; no event was appended"}
+		}
 		if err == nil && (policy.Target.Epic != spec.EpicID || policy.Target.Kind != blueprint.MachineSet || input.Path != "") {
-			err = fmt.Errorf("planner instructions require a set in the same epic")
+			err = &codex.ToolInputError{Message: "planner instructions require a set in the same epic and no path; no event was appended"}
 		}
 	} else {
 		policy.Target, err = ResolveCoordinatorTarget(index, spec, policy.TargetID)
@@ -83,25 +86,25 @@ func resolveCoordinatorEvent(brain string, spec session.Spec, operation string, 
 	switch operation {
 	case "heartbeat":
 		if policy.Target.Kind != blueprint.MachineSet || policy.TargetID != spec.Task {
-			return policy, event, fmt.Errorf("heartbeat requires the owning set")
+			return policy, event, &codex.ToolInputError{Message: "heartbeat requires the owning set; no event was appended"}
 		}
 		policy.Lease, err = Lease(policy.Target.Dir)
 		if err != nil {
 			return policy, event, err
 		}
 		if !strings.Contains(spec.Generation, ":"+strconv.Itoa(policy.Lease)+":") {
-			return policy, event, fmt.Errorf("coordinator lease changed")
+			return policy, event, fmt.Errorf("%w: coordinator lease changed", effects.ErrAuthority)
 		}
 		event = events.Event{Kind: events.KindHeartbeat, Sender: spec.Task, Lease: policy.Lease}
 	case "event":
 		if !slices.Contains(events.AgentEventKinds(), input.Kind) || input.Kind == events.KindInstruction && !plannerInstruction || input.Kind == events.KindIssueStale {
-			return policy, event, fmt.Errorf("unsupported coordinator event")
+			return policy, event, &codex.ToolInputError{Message: "unsupported coordinator event; no event was appended"}
 		}
 		if input.To != "" && input.To != events.RecipientUser {
-			return policy, event, fmt.Errorf("unsupported event recipient")
+			return policy, event, &codex.ToolInputError{Message: "unsupported event recipient; no event was appended"}
 		}
 		if err := events.ValidateAgentEvent(input.Kind, input.Path, input.Text, input.To); err != nil {
-			return policy, event, err
+			return policy, event, &codex.ToolInputError{Message: err.Error() + "; no event was appended"}
 		}
 		event = events.Event{Kind: input.Kind, Sender: spec.Task, Text: input.Text, Key: input.Key, Recipient: input.To}
 		if input.Kind == events.KindCheckpoint && filepath.IsAbs(input.Path) && filepath.Clean(input.Path) == input.Path && input.Path == filepath.Join(policy.Target.Dir, filepath.Base(input.Path)) {
@@ -134,10 +137,10 @@ func resolveCoordinatorEvent(brain string, spec session.Spec, operation string, 
 		}
 	case "inbox":
 		if input.Ack < 1 {
-			return policy, event, fmt.Errorf("positive acknowledgement sequence required")
+			return policy, event, &codex.ToolInputError{Message: "positive acknowledgement sequence required; no event was appended"}
 		}
 	default:
-		return policy, event, fmt.Errorf("unsupported coordinator operation")
+		return policy, event, fmt.Errorf("%w: unsupported coordinator operation", effects.ErrEvidence)
 	}
 	return policy, event, nil
 }

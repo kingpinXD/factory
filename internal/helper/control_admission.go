@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/controlrecord"
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/session"
@@ -170,6 +171,13 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 			w.Submit = &req
 			w.Step, err = s.resolveStep(ctx, scope, req.Component)
 			if err != nil {
+				return err
+			}
+			b, err := blueprint.Load(blueprint.Path(s.Brain))
+			if err != nil {
+				return err
+			}
+			if err := validateOutputPath(b.Components[req.Component], req.OutputPath); err != nil {
 				return err
 			}
 		case "helper_continue", "helper_cancel":

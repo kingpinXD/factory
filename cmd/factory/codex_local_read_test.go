@@ -15,6 +15,7 @@ import (
 	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/executor"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
 	"github.com/kingpinXD/factory/internal/workspace"
@@ -22,10 +23,28 @@ import (
 
 func localReadAttempt(t *testing.T, planner bool) (string, codex.Record, string) {
 	t.Helper()
+	brain, record, jobID, _ := localReadAttemptSetup(t, planner, true)
+	return brain, record, jobID
+}
+
+func localReadAttemptSetup(t *testing.T, planner, seedHelper bool) (string, codex.Record, string, helper.Scope) {
+	t.Helper()
 	service, request, record, _ := recoveryCoordinator(t)
-	accepted, err := service.Submit(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
+	jobID := ""
+	var scope helper.Scope
+	if !seedHelper {
+		var err error
+		scope, err = service.Authority.Resolve(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if seedHelper {
+		accepted, err := service.Submit(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		jobID = accepted.JobID
 	}
 	if planner {
 		record.Spec.Name = "factory:epic1:planner"
@@ -102,5 +121,5 @@ func localReadAttempt(t *testing.T, planner bool) (string, codex.Record, string)
 	if err := programme.Service().BeginAttempt(context.Background(), effects.AttemptKey{SessionID: record.ID, AttemptID: record.AttemptID}); err != nil {
 		t.Fatal(err)
 	}
-	return service.Brain, record, accepted.JobID
+	return service.Brain, record, jobID, scope
 }

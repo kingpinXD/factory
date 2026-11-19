@@ -1,12 +1,14 @@
 package reconcile
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
 )
@@ -57,6 +59,36 @@ func (l *b2PhaseLog) end(step string, n int) events.Event {
 	l.add(events.Event{Kind: events.KindStart, Sender: events.SenderProgram, File: file, Key: key + "start"})
 	return l.add(events.Event{Kind: events.KindEnd, Sender: events.SenderProgram, File: file, SHA256: strings.Repeat("a", 64), Key: key + "end"})
 }
+func TestB2SchedulerStepCause(t *testing.T) {
+	for _, tc := range []struct {
+		name, from, to, trigger, ref string
+		valid                        bool
+	}{
+		{name: "start", from: "queued", to: "starting", trigger: "tick", ref: "tick:3762", valid: true},
+		{name: "missing_number", from: "queued", to: "starting", trigger: "tick", ref: "tick:"},
+		{name: "invalid_number", from: "queued", to: "starting", trigger: "tick", ref: "tick:unknown"},
+		{name: "zero", from: "queued", to: "starting", trigger: "tick", ref: "tick:0"},
+		{name: "negative", from: "queued", to: "starting", trigger: "tick", ref: "tick:-1"},
+		{name: "extra_suffix", from: "queued", to: "starting", trigger: "tick", ref: "tick:3762:1"},
+		{name: "noncanonical", from: "queued", to: "starting", trigger: "tick", ref: "tick:03762"},
+		{name: "file_transition", from: "starting", to: "exploring", trigger: "file", ref: "tick:3762"},
+		{name: "invalid_transition", from: "queued", to: "exploring", trigger: "tick", ref: "tick:3762"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := b2Log(t, tc.from)
+			l.add(events.Event{Kind: events.KindTransition, Sender: events.SenderProgram, From: tc.from, To: tc.to, Trigger: tc.trigger, TriggerRef: tc.ref})
+			basis, err := nativeStepBasis("w", l.evs, l.b, "explorer", 2)
+			if tc.valid {
+				if err != nil || basis.EntryRef != "w#2" {
+					t.Fatalf("scheduler start lost explorer step: %+v %v", basis, err)
+				}
+			} else if !errors.Is(err, effects.ErrEvidence) {
+				t.Fatalf("invalid scheduler cause did not fail with evidence error: %+v %v", basis, err)
+			}
+		})
+	}
+}
+
 func TestB2ExplorerAndWrapperEntriesRemainStable(t *testing.T) {
 	l := b2Log(t, "queued")
 	l.move("starting", "tick", l.cause())

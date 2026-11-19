@@ -559,34 +559,37 @@ func (a NativeAuthority) validateCoordinatorOutput(ctx context.Context, c helper
 func ResolveCoordinatorTarget(ix store.Index, spec session.Spec, id string) (store.Entry, error) {
 	target, err := ix.Lookup(id)
 	if err != nil {
-		return target, err
+		if id == spec.Task {
+			return target, effects.ErrAuthority
+		}
+		return target, &codex.ToolInputError{Message: "unknown target; use the complete id from your task or epic plan"}
 	}
 	if target.Epic != spec.EpicID {
-		return target, fmt.Errorf("target belongs to another epic")
+		return target, &codex.ToolInputError{Message: "target belongs to another epic; use a target owned by this coordinator"}
 	}
 	if id == spec.Task {
 		return target, nil
 	}
 	owner, err := ix.Lookup(spec.Task)
 	if err != nil {
-		return target, err
+		return target, effects.ErrAuthority
 	}
 	if owner.Kind != blueprint.MachineSet || target.Kind != blueprint.MachineWork {
-		return target, fmt.Errorf("target belongs to another coordinator")
+		return target, &codex.ToolInputError{Message: "target belongs to another coordinator; use a target owned by this coordinator"}
 	}
 	var work WorkInputs
 	if err := store.ReadInputs(target.Dir, &work); err != nil {
 		return target, err
 	}
 	if work.Set != spec.Task {
-		return target, fmt.Errorf("work belongs to another set")
+		return target, &codex.ToolInputError{Message: "work belongs to another set; use a target owned by this coordinator"}
 	}
 	lease, err := Lease(owner.Dir)
 	if err != nil {
 		return target, err
 	}
 	if !strings.Contains(spec.Generation, ":"+strconv.Itoa(lease)+":") {
-		return target, fmt.Errorf("coordinator lease changed")
+		return target, fmt.Errorf("%w: coordinator lease changed", effects.ErrAuthority)
 	}
 	evs, err := events.Read(store.EventsPath(target.Dir))
 	if err != nil {
@@ -602,7 +605,7 @@ func ResolveCoordinatorTarget(ix store.Index, spec session.Spec, id string) (sto
 		}
 	}
 	if handed {
-		return target, fmt.Errorf("work handed over")
+		return target, fmt.Errorf("%w: work handed over", effects.ErrAuthority)
 	}
 	return target, nil
 }

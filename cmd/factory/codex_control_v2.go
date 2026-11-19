@@ -45,31 +45,38 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if err := reconcile.CoordinatorAuthority(brain, spec); err != nil {
 		return nil, err
 	}
+	stage = "tool_arguments"
 	payload, err := codex.ToolArguments(invocation)
 	if err != nil {
 		return nil, err
 	}
+	stage = "payload_decode"
 	envelope, input, err := toolcontract.DecodeRequestForContract(toolcontract.FactoryControl, 2, payload)
 	if err != nil {
 		return correctedControlReply(err)
 	}
 	id := effects.ControlID{Attempt: effects.AttemptKey{SessionID: attempt.SessionID, AttemptID: attempt.AttemptID}, ThreadID: invocation.ThreadID, TurnID: invocation.TurnID, CallID: invocation.CallID}
+	stage = "original_build"
 	original, err := controlrecord.NewOriginal(invocation.Tool, payload, &id, nil)
 	if err != nil {
 		return nil, err
 	}
+	stage = "writer_capture"
 	writer, err := (reconcile.NativeAuthority{Brain: brain}).CaptureControlOutputWriter()
 	if err != nil {
 		return nil, err
 	}
+	stage = "executable_lookup"
 	binary, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
+	stage = "program_effects"
 	programme, err := reconcile.NewProgramEffects(brain, binary)
 	if err != nil {
 		return nil, err
 	}
+	stage = "control_lock"
 	release, err := controlLock(ctx, brain)
 	if err != nil {
 		return nil, err
@@ -79,6 +86,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 			release()
 		}
 	}()
+	stage = "control_authority_recheck"
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
 	}
@@ -95,6 +103,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	service := helperService(brain)
 	stage = "outcome_recovery"
 	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
+		stage = "outcome_binding_validation"
 		if record.Input.Operation != original.Operation || record.Input.PayloadSHA256 != original.PayloadSHA256 {
 			return nil, effects.ErrEvidence
 		}
@@ -102,6 +111,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		if err := programme.Service().Controls.ValidateOutcome(ctx, id, record.Input, record.Outcome); err != nil {
 			return nil, err
 		}
+		stage = "outcome_completion"
 		if _, err := programme.Service().CompleteControl(ctx, id, record.Outcome); err != nil {
 			return nil, err
 		}
@@ -114,27 +124,32 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	var witness controlrecord.ImmutableRef
 	switch envelope.Op {
 	case "helper_submit", "helper_continue", "helper_cancel":
+		stage = "helper_ingress_build"
 		source, err := reconcile.BuildControlIngressLocked(ctx, brain, originalRef, writer)
 		if err != nil {
 			return nil, err
 		}
+		stage = "helper_admission_capture"
 		witness, err = service.CaptureControlAdmission(ctx, originalRef, source)
 		if err != nil {
-			return nil, err
+			return correctedControlReply(codexHelperInputError(err))
 		}
 		controlInput = source.Input
 	case "event", "heartbeat", "inbox":
 		if envelope.Op == "inbox" && localControlV2(envelope.Op, input) {
+			stage = "local_input"
 			controlInput, err = localControlInputV2(ctx, brain, spec, original, input)
 			if err != nil {
-				return nil, err
+				return correctedControlReply(err)
 			}
 			break
 		}
+		stage = "event_source_capture"
 		witness, err = reconcile.CaptureControlEventSourceLocked(ctx, brain, originalRef, writer)
 		if err != nil {
 			return correctedControlReply(err)
 		}
+		stage = "event_source_read"
 		source, err := reconcile.ReadControlEventSourceLocal(ctx, brain, witness)
 		if err != nil {
 			return nil, err
@@ -142,6 +157,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		controlInput = source.Input
 	case "file_write":
 		var source helper.ControlIngressSource
+		stage = "output_ingress_capture"
 		witness, source, err = reconcile.CaptureControlOutputIngressLocked(ctx, brain, originalRef, writer)
 		if err != nil {
 			return nil, err
@@ -149,10 +165,12 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		controlInput = source.Input
 	default:
 		if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
+			stage = "read_source_capture"
 			witness, err = reconcile.CaptureCoordinatorReadSourceLocked(ctx, brain, originalRef, reconcile.ControlReadDirect, writer)
 			if err != nil {
 				return nil, err
 			}
+			stage = "read_source_read"
 			pre, err := reconcile.ReadControlReadPreSourceLocal(ctx, brain, witness)
 			if err != nil {
 				return nil, err
@@ -162,21 +180,25 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 			}
 			controlInput = pre.Coordinator.Ingress.Input
 		} else {
+			stage = "local_input"
 			controlInput, err = localControlInputV2(ctx, brain, spec, original, input)
 			if err != nil {
-				return nil, err
+				return correctedControlReply(err)
 			}
 		}
 	}
 	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		stage = "write_source_store"
 		witness, err = controlrecord.StoreWriteSource(brain, controlrecord.WriteSource{Schema: 2, Original: originalRef, Input: controlInput, Owner: ownerAuthority})
 		if err != nil {
 			return nil, err
 		}
 	}
+	stage = "control_authority_recheck"
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
 	}
+	stage = "work_admission_check"
 	if err := service.CheckWorkControlAdmission(ctx, controlInput.Target.WorkID); err != nil {
 		return nil, err
 	}
@@ -196,12 +218,15 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		}
 
 	}
+	stage = "control_authority_recheck"
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
 	}
+	stage = "work_admission_check"
 	if err := service.CheckWorkControlAdmission(ctx, controlInput.Target.WorkID); err != nil {
 		return nil, err
 	}
+	stage = "owner_authority_validation"
 	if err := reconcile.ValidateAdmittedOwnerAuthority(ctx, brain, ownerAuthority); err != nil {
 		return nil, err
 	}
@@ -216,7 +241,9 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 			return nil, err
 		}
 	}
+	stage = "outcome_lookup"
 	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
+		stage = "outcome_binding_validation"
 		if !reflect.DeepEqual(record.Input, controlInput) {
 			return nil, effects.ErrEvidence
 		}
@@ -224,6 +251,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		if err := programme.Service().Controls.ValidateOutcome(ctx, id, record.Input, record.Outcome); err != nil {
 			return nil, err
 		}
+		stage = "outcome_completion"
 		if _, err := programme.Service().CompleteControl(ctx, id, record.Outcome); err != nil {
 			return nil, err
 		}
@@ -240,46 +268,57 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		stage = "program_write"
 		var result controlrecord.WriteResult
 		proof, result, err = coordinatorProgramWrite(ctx, brain, spec, originalRef, original, control, controlInput, ownerAuthority)
+		stage = "program_write_lock_reentry"
 		release, lockErr := controlLock(ctx, brain)
 		if lockErr != nil {
 			return nil, lockErr
 		}
 		defer release()
 		if err != nil {
+			stage = "program_write"
 			return nil, err
 		}
 		reply = result.Reply
 		outcome = effects.ControlOutcome{Kind: effects.ControlWrite, Write: &effects.GuardReceipt{Operation: original.Operation, Code: "applied", EvidenceSHA256: proof.SHA256}}
 	} else if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
+		stage = "read_source_bind"
 		admission, err := reconcile.BindCoordinatorReadSourceLocked(ctx, brain, witness, control)
 		if err != nil {
 			return nil, err
 		}
+		stage = "program_read_prepare"
 		read, err := reconcile.PrepareProgramReadLocked(ctx, brain, admission)
 		if err != nil {
 			return nil, err
 		}
 		release()
 		release = nil
+		stage = "program_read_execute"
 		result, readErr := reconcile.RunProgramRead(ctx, brain, binary, read)
+		stage = "program_read_lock_reentry"
 		release, err = controlLock(ctx, brain)
 		if err != nil {
 			return nil, err
 		}
+		stage = "read_admission_lookup"
 		retained, err := reconcile.FindControlReadAdmissionLocal(ctx, brain, originalRef, reconcile.ControlReadDirect)
 		if err != nil {
 			return nil, err
 		}
+		stage = "read_admission_validation"
 		if !reflect.DeepEqual(retained, admission) {
 			return nil, effects.ErrEvidence
 		}
 		var noAction *reconcile.ProgramReadNoActionError
 		var unavailable *gh.ProgramReadUnavailable
 		if errors.As(readErr, &noAction) {
+			stage = "read_no_action_proof"
 			proof, reply, err = codex.StoreControlReadNoActionProof(ctx, brain, originalRef, noAction.Reference)
 		} else if readErr == nil || errors.As(readErr, &unavailable) && result != (codex.ProgramReadResultRef{}) {
+			stage = "read_proof"
 			proof, reply, err = codex.StoreControlReadProof(ctx, brain, originalRef, result)
 		} else {
+			stage = "program_read_execute"
 			return nil, readErr
 		}
 		if err != nil {
@@ -287,25 +326,31 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		}
 		outcome = effects.ControlOutcome{Kind: effects.ControlRead, Read: &effects.ReadReceipt{Operation: original.Operation, RequestSHA256: original.PayloadSHA256, ResponseSHA256: sha256.Sum256(reply)}}
 	} else if envelope.Op == "file_write" {
+		stage = "output_build"
 		request, err := reconcile.BuildControlOutputLocked(ctx, brain, originalRef, &control)
 		if err != nil {
 			return nil, err
 		}
+		stage = "output_writer_validation"
 		if request.Writer != writer {
 			return nil, effects.ErrEvidence
 		}
+		stage = "output_prepare"
 		prepared, err := service.PrepareControlOutputLocked(ctx, request)
 		if err != nil {
 			return nil, err
 		}
+		stage = "output_commit"
 		proof, err = service.CommitControlOutputLocked(ctx, prepared)
 		if err != nil {
 			return nil, err
 		}
+		stage = "output_read"
 		final, _, err := service.ReadControlOutput(ctx, prepared)
 		if err != nil {
 			return nil, err
 		}
+		stage = "output_reply"
 		reply, err = json.Marshal(map[string]string{"path": final.Path, "filename": final.Caller.Coordinator.OutputName})
 		if err != nil {
 			return nil, err
@@ -313,36 +358,44 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		outcome = effects.ControlOutcome{Kind: effects.ControlFile, File: &effects.FileReceipt{Path: final.Path, SHA256: final.FinalSHA256, PublicationSHA256: proof.SHA256}}
 
 	} else if envelope.Op == "event" || envelope.Op == "heartbeat" || envelope.Op == "inbox" && !localControlV2(envelope.Op, input) {
+		stage = "event_enrollment_snapshot"
 		enrollment, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput})
 		if err != nil {
 			return nil, err
 		}
+		stage = "event_execution"
 		result, err := reconcile.ApplyControlEventLocked(ctx, brain, witness, enrollment, writer)
 		if err != nil {
 			return nil, err
 		}
 		proof, outcome, reply = result.Proof, result.Outcome, result.Reply
 	} else if envelope.Op == "helper_submit" || envelope.Op == "helper_continue" || envelope.Op == "helper_cancel" {
+		stage = "helper_enrollment_snapshot"
 		enrollment, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput})
 		if err != nil {
 			return nil, err
 		}
 		switch envelope.Op {
 		case "helper_submit":
+			stage = "helper_submit"
 			_, err = service.SubmitControl(ctx, witness, enrollment)
 		case "helper_continue":
+			stage = "helper_continue"
 			_, err = service.ContinueControl(ctx, witness, enrollment)
 		case "helper_cancel":
+			stage = "helper_cancel"
 			_, _, err = service.AdmitControlCancellation(ctx, witness)
 		}
 		if err != nil {
 			return nil, err
 		}
 		var admission helper.ControlAdmissionReceipt
+		stage = "helper_admission_lookup"
 		proof, admission, err = service.LookupControlAdmission(ctx, witness)
 		if err != nil {
 			return nil, err
 		}
+		stage = "helper_admission_reply"
 		reply, err = codex.ControlAdmissionReply(admission)
 		if err != nil {
 			return nil, err
@@ -359,7 +412,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 	if _, err := controlrecord.StoreOutcome(brain, record); err != nil {
 		return nil, err
 	}
-	stage = "outcome_validation"
+	stage = "outcome_completion"
 	if _, err := programme.Service().CompleteControl(ctx, id, outcome); err != nil {
 		return nil, err
 	}

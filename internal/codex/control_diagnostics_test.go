@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/kingpinXD/factory/internal/effects"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/store"
 	"os"
 	"path/filepath"
@@ -176,6 +177,8 @@ func TestControlEnrollmentFailureClassifiesCauseWithoutSecrets(t *testing.T) {
 		cause error
 		want  string
 	}{
+		{"helper_path", fmt.Errorf("private-token: %w", helper.ErrOutputPath), "helper.ErrOutputPath"},
+		{"helper_conflict", fmt.Errorf("private-token: %w", helper.ErrConflict), "helper.ErrConflict"},
 		{"sentinel", fmt.Errorf("private-token: %w", effects.ErrCorrupt), "effects.ErrCorrupt"},
 		{"wrapped_type", fmt.Errorf("private-prompt: %w", &store.LockedError{Name: "private-token", PID: 123}), "*store.LockedError"},
 		{"opaque", errors.New("private-token private-prompt"), "*errors.errorString"},

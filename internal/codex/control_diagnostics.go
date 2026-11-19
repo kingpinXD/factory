@@ -10,6 +10,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/controlrecord"
 	"github.com/kingpinXD/factory/internal/effects"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
@@ -97,6 +98,13 @@ func controlFailureCause(cause error) string {
 		err  error
 		name string
 	}{
+		{helper.ErrOutputPath, "helper.ErrOutputPath"},
+		{helper.ErrConflict, "helper.ErrConflict"},
+		{helper.ErrNotFound, "helper.ErrNotFound"},
+		{helper.ErrAuthority, "helper.ErrAuthority"},
+		{helper.ErrControlAdmissionClosed, "helper.ErrControlAdmissionClosed"},
+		{helper.ErrControlAlreadyAdmitted, "helper.ErrControlAlreadyAdmitted"},
+		{helper.ErrControlFenceUnstopped, "helper.ErrControlFenceUnstopped"},
 		{effects.ErrConflict, "effects.ErrConflict"},
 		{effects.ErrNotFound, "effects.ErrNotFound"},
 		{effects.ErrBusy, "effects.ErrBusy"},

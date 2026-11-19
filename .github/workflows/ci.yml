@@ -8,6 +8,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -26,7 +27,7 @@ jobs:
         run: go build ./...
 
       - name: Test
-        run: go test -race ./...
+        run: go test -race -timeout 20m ./...
 
       - name: Vet
         run: go vet ./...

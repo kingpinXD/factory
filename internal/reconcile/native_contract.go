@@ -320,7 +320,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 	if acceptance != rec.Acceptance && policy == nativeAdmissionBasis && !current && expected != nil && qualificationSettlementAllowed(ctx, brain, *expected, verify) {
 		policy = nativeQualificationRetirementBasis
 	}
-	if acceptance != rec.Acceptance && (policy != nativeQualificationRetirementBasis || acceptance.Binding != rec.Acceptance.Binding || acceptance.ReceiptSHA256 == "") {
+	if acceptance != rec.Acceptance && (policy != nativeQualificationRetirementBasis || acceptance.Binding == "" || acceptance.ReceiptSHA256 == "") {
 		return out, empty, fmt.Errorf("authority qualification changed")
 	}
 	if err := nativeValidateBasis(ix, rec.Basis); err != nil {

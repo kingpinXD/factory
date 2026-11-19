@@ -65,7 +65,7 @@ func TestCodexQualificationChangeWaitsForExplicitRetry(t *testing.T) {
 	}
 }
 
-func TestCodexQualificationRetirementCannotAuthorizeChangedInputsOrBinding(t *testing.T) {
+func TestCodexQualificationRetirementCannotAuthorizeChangedInputsOrEmptyBinding(t *testing.T) {
 	for _, changed := range []string{"inputs", "binding"} {
 		t.Run(changed, func(t *testing.T) {
 			w, r, _ := b2World(t)
@@ -87,7 +87,7 @@ func TestCodexQualificationRetirementCannotAuthorizeChangedInputsOrBinding(t *te
 			} else {
 				verify = func(ctx context.Context, brain string, selected executor.Selection) (codex.Contract2AcceptanceRef, error) {
 					ref, err := renewedQualification(ctx, brain, selected)
-					ref.Binding = strings.Repeat("d", 64)
+					ref.Binding = ""
 					return ref, err
 				}
 			}
@@ -161,6 +161,19 @@ func qualificationCompletedEvent(t *testing.T, r *run, runtime *codex.Runtime, a
 }
 
 func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) {
+	testCodexPlannerRetryClosesActiveAttempt(t, renewedQualification)
+}
+
+func TestCodexPlannerRetryAfterBinaryUpgradeRetiresOldBinding(t *testing.T) {
+	testCodexPlannerRetryClosesActiveAttempt(t, func(ctx context.Context, brain string, selected executor.Selection) (codex.Contract2AcceptanceRef, error) {
+		ref, err := renewedQualification(ctx, brain, selected)
+		ref.Binding = strings.Repeat("d", 64)
+		return ref, err
+	})
+}
+
+func testCodexPlannerRetryClosesActiveAttempt(t *testing.T, qualify nativeAcceptance) {
+	t.Helper()
 	if isolatedParallelTest(t) {
 		return
 	}
@@ -202,10 +215,20 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.verificationQualifier = renewedQualification
-	runtime.AttemptAuthority.(*factoryAttemptAuthority).verify = renewedQualification
+	r.verificationQualifier = qualify
+	runtime.AttemptAuthority.(*factoryAttemptAuthority).verify = qualify
 	validator := runtime.Effects.Controls.(*codex.FactoryControlValidator)
-	validator.EventEvidence = qualificationEventAuthority{NativeAuthority{w.brain}, renewedQualification}
+	validator.EventEvidence = qualificationEventAuthority{NativeAuthority{w.brain}, qualify}
+	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, false, &oldAuthority, qualify); err == nil || !strings.Contains(err.Error(), "qualification changed") {
+		t.Fatal("changed proof accepted retained authority outside sealed retirement", err)
+	}
+	spec, err := codex.AttemptControlAuthority(w.brain, before.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.AttemptAuthority.(*factoryAttemptAuthority).ValidatePrepare(r.ctx, spec); err == nil || !strings.Contains(err.Error(), "qualification changed") {
+		t.Fatal("changed proof authorized old coordinator preparation", err)
+	}
 	if err := validator.ValidateOutcome(r.ctx, completedID, completedInput, completedEvent.Outcome); err == nil || !strings.Contains(err.Error(), "qualification changed") {
 		t.Fatal("completed old event accepted changed proof outside sealed retirement", err)
 	}
@@ -221,7 +244,7 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 	if err != nil || still.Ref != before.Ref || still.Stage != "claimed" {
 		t.Fatal("hold adopted or replaced active attempt", still, err)
 	}
-	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, &oldAuthority, renewedQualification); err == nil {
+	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, &oldAuthority, qualify); err == nil {
 		t.Fatal("old active-turn authority accepted new receipt")
 	}
 	if err := Retry(r.ctx, w.deps(), owner.id); err != nil {
@@ -235,14 +258,14 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 	if ref, held := r.codexQualificationChanged(owner); !held || !strings.HasSuffix(ref, ":closure-unconfirmed") {
 		t.Fatal("missing earlier attempt metadata did not retain a user hold", ref)
 	}
-	if _, err := r.refreshCodexQualification(owner, sess, &missing, renewedQualification); err == nil {
+	if _, err := r.refreshCodexQualification(owner, sess, &missing, qualify); err == nil {
 		t.Fatal("missing attempt metadata permitted renewal")
 	}
 	r.d.Runtimes["codex"] = runtime
 	if err := managerTickCall(t, w.brain, func() error { return r.manageCodexCoordinator(owner, sess) }); err != nil {
 		t.Fatal("queue qualification stop", err)
 	}
-	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, renewedQualification); err == nil {
+	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, qualify); err == nil {
 		t.Fatal("receipt renewed before actual closure")
 	}
 	var stop events.Event
@@ -260,7 +283,7 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 		t.Fatal("retirement context accepted an unsealed active control")
 	}
 	annotated := controlrecord.WithOutcomeValidation(retiring, completedID)
-	if _, _, err := nativeAuthority(annotated, w.brain, "e1", owner.id, true, &oldAuthority, renewedQualification); err == nil {
+	if _, _, err := nativeAuthority(annotated, w.brain, "e1", owner.id, true, &oldAuthority, qualify); err == nil {
 		t.Fatal("retirement context admitted new work on active turn")
 	}
 	recoverOnce := func() error { return recoverRequestedCoordinators(r.ctx, w.brain, runtime) }
@@ -295,7 +318,7 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 			other.CallID = "not-enrolled-in-sealed-attempt"
 		}
 		wrong := controlrecord.WithOutcomeValidation(retiring, other)
-		if _, _, err := nativeAuthority(wrong, w.brain, "e1", owner.id, false, &oldAuthority, renewedQualification); err == nil {
+		if _, _, err := nativeAuthority(wrong, w.brain, "e1", owner.id, false, &oldAuthority, qualify); err == nil {
 			t.Fatal("retirement accepted unrelated " + changed)
 		}
 	}
@@ -334,7 +357,15 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 	if err != nil || activation.Previous == nil || *activation.Previous != oldAuthority.Activation {
 		t.Fatal("renewal did not chain old activation", err)
 	}
-	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, renewedQualification); err != nil {
+	expectedAcceptance, err := qualify(r.ctx, w.brain, executor.Selection{})
+	if err != nil || activation.Acceptance != expectedAcceptance {
+		t.Fatal("successor did not activate under the newly verified binding", activation.Acceptance, err)
+	}
+	r.tickEntity(owner)
+	if owner.cur.State == stateNeedsYou {
+		t.Fatal("retry returned the renewed epic to needs_you", owner.enteredBy.TriggerRef)
+	}
+	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, nil, qualify); err != nil {
 		t.Fatal("renewed planner authority unusable", err)
 	}
 	count := len(owner.evs)
@@ -342,7 +373,7 @@ func TestCodexPlannerRetryClosesActiveAttemptBeforeReceiptRenewal(t *testing.T) 
 	if len(w.log(owner.id)) != count {
 		t.Fatal("repeated tick duplicated qualification activation")
 	}
-	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, &oldAuthority, renewedQualification); err == nil || errors.Is(err, os.ErrNotExist) {
+	if _, _, err := nativeAuthority(r.ctx, w.brain, "e1", owner.id, true, &oldAuthority, qualify); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatal("old authority accepted after renewal", err)
 	}
 }

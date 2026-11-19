@@ -70,8 +70,10 @@ func (r *run) codexQualificationChanged(owner *entity) (string, bool) {
 	return ref, !released
 }
 
-// Retirement can revoke the exact historical owner after a same-binding proof is
-// replaced. It cannot authorize a control, helper, process claim or GitHub write.
+// Retirement can revoke the exact historical owner after qualification changes.
+// Its program-owned activation records the receipt verified before admission;
+// revocation does not require that old binary to qualify again. It cannot
+// authorize a control, helper, process claim or GitHub write.
 func qualificationRetirementAuthority(ctx context.Context, brain string, expected OwnerAuthority, verify nativeAcceptance) (nativeActivation, error) {
 	_, old, err := nativeAuthorityUsing(ctx, brain, expected.EpicID, expected.OwnerID, false, &expected, verify, nativeQualificationRetirementBasis)
 	return old, err

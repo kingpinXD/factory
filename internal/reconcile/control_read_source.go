@@ -536,7 +536,7 @@ func readControlReadPreSourceLocal(ctx context.Context, brain string, ref contro
 		}
 		authority, actual = source.Authority, source.Input
 	}
-	if strings.ToLower(strings.TrimSpace(read.Repo)) != actual.Repo || read.Base != "" && read.Base != actual.Base || actual.Base == "" || read.Number != actual.Number || read.Path != actual.Path || read.SHA != actual.SHA || !read.Since.Equal(actual.Since) {
+	if !strings.EqualFold(strings.TrimSpace(read.Repo), actual.Repo) || read.Base != "" && read.Base != actual.Base || actual.Base == "" || read.Number != actual.Number || read.Path != actual.Path || read.SHA != actual.SHA || !read.Since.Equal(actual.Since) {
 		return pre, original, effects.ErrEvidence
 	}
 	if _, _, err := nativeAuthority(ctx, brain, authority.EpicID, authority.OwnerID, false, &authority, verify); err != nil {

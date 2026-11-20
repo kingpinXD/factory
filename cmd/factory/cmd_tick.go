@@ -12,11 +12,16 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
+	"github.com/kingpinXD/factory/internal/codex"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/gh"
 	"github.com/kingpinXD/factory/internal/git"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/notify"
 	"github.com/kingpinXD/factory/internal/proc"
 	"github.com/kingpinXD/factory/internal/reconcile"
+	"github.com/kingpinXD/factory/internal/session"
+	"github.com/kingpinXD/factory/internal/store"
 )
 
 // Deadlines: one adapter call, the account step, the whole tick (under the
@@ -35,10 +40,16 @@ var newDeps = func(out io.Writer) (reconcile.Deps, error) {
 	return depsForBrain(blueprint.Brain(), out)
 }
 
+var newFactoryCodexRuntime = reconcile.NewFactoryCodexRuntime
+
 func depsForBrain(brain string, out io.Writer) (reconcile.Deps, error) {
 	cl, err := claude.New(brain)
 	if err != nil {
-		return reconcile.Deps{}, err
+		home, e := os.UserHomeDir()
+		if e != nil {
+			return reconcile.Deps{}, e
+		}
+		cl = claude.Client{Runner: proc.Exec{}, Bin: "claude", Home: home, Brain: brain, SocketDir: "/tmp/cc-socks", PollEvery: time.Second}
 	}
 	if cl.FactoryBin, err = os.Executable(); err != nil {
 		return reconcile.Deps{}, err
@@ -55,6 +66,68 @@ func depsForBrain(brain string, out io.Writer) (reconcile.Deps, error) {
 		AccountTimeout: accountTimeout,
 		TickTimeout:    tickTimeout,
 		Out:            out,
+	}
+	if os.Getenv("FACTORY_NO_SLACK") == "1" {
+		local := localNotifications{out: out}
+		d.Notify, d.Post = local, local
+	}
+	d.ExecutorAdmission = func(ctx context.Context, s executor.Selection) error {
+		if s.Executor == "codex" {
+			return codex.CheckCapabilities(ctx, brain, s)
+		}
+		return nil
+	}
+	d.ConfigureCodex = func(d *reconcile.Deps) error {
+		if d.Runtimes["codex"] != nil {
+			return nil
+		}
+		if d.CodexSetupError != nil {
+			return d.CodexSetupError
+		}
+		runtime, err := newFactoryCodexRuntime(brain, cl.FactoryBin)
+		if err != nil {
+			d.CodexSetupError = fmt.Errorf("Codex setup: %w", err)
+			return d.CodexSetupError
+		}
+		if d.Runtimes == nil {
+			d.Runtimes = map[string]session.Runtime{}
+		}
+		d.Runtimes["codex"] = runtime
+		d.QuotaForSelection = func(s executor.Selection) helper.UsageReader {
+			if s.Executor == "codex" {
+				return codex.UsageForSelection(s)
+			}
+			return nil
+		}
+		service := helperService(brain)
+		d.Helpers = &service
+		d.StartHelpers = func(ctx context.Context) error {
+			jobs, err := service.Jobs()
+			if err != nil {
+				return err
+			}
+			if len(jobs) == 0 {
+				return nil
+			}
+			return helper.StartRunner(ctx, cl.FactoryBin, brain)
+		}
+
+		return nil
+	}
+	ix, err := store.ReadIndex(brain)
+	if err != nil {
+		return reconcile.Deps{}, err
+	}
+	for _, entry := range ix {
+		if entry.Epic == "" {
+			continue
+		}
+		selection, err := reconcile.NativeSelection(brain, entry.Epic)
+		// Selection errors stay attached to their epic during reconcile.
+		if err == nil && selection.Executor == "codex" {
+			_ = d.ConfigureCodex(&d)
+			break
+		}
 	}
 	d.Account = reconcile.PlanAccount{Deps: d, Probe: reconcile.Probe{Runner: proc.Exec{}, Claude: cl.Bin, Home: cl.Home}}
 	return d, nil
@@ -87,7 +160,7 @@ func runRepoWorker(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	g := git.Client{Runner: proc.Exec{}}
-	if err := reconcile.RepoWorker(context.Background(), blueprint.Brain(), g, repoJobTimeout, stdout); err != nil {
+	if err := reconcile.RepoWorker(context.Background(), blueprint.Brain(), g, repoJobTimeout, stdout, reconcile.PublicationWorker{GitHub: gh.Client{Runner: proc.Exec{}}, Token: os.Getenv("GH_TOKEN")}); err != nil {
 		fmt.Fprintf(stderr, "factory repo-worker: %v\n", err)
 		return 1
 	}
@@ -103,6 +176,8 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Var(pairs(ov.Tier), "set", "step=tier: the tier a step runs on for this input")
 	fs.Var(pairs(ov.Effort), "effort", "step=level: the effort a step runs at for this input")
+	executorName := fs.String("executor", "claude", "claude or codex")
+	profile := fs.String("executor-profile", "", "selected executor profile")
 	var input string
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		input, args = args[0], args[1:]
@@ -117,6 +192,10 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, usage)
 		return 2
 	}
+	if *executorName != "" && *executorName != "claude" && *executorName != "codex" {
+		fmt.Fprintf(stderr, "factory add: %v\n", executor.ErrUnsupportedExecutor)
+		return 1
+	}
 	d, err := newDeps(stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "factory add: %v\n", err)
@@ -124,7 +203,7 @@ func runAdd(args []string, stdout, stderr io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	id, err := reconcile.Add(ctx, d, input, ov)
+	id, err := reconcile.AddWithOptions(ctx, d, input, ov, executor.Options{Executor: *executorName, ProfilePath: *profile})
 	if id != "" {
 		fmt.Fprintf(stdout, "added %s\n", id)
 	}

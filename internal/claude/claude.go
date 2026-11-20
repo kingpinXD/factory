@@ -102,13 +102,14 @@ type Session struct {
 	// sessions have none.
 	ID string `json:"id"`
 	// SessionID names the session's transcript.
-	SessionID string `json:"sessionId"`
-	Name      string `json:"name"`
-	Cwd       string `json:"cwd"`
-	Kind      string `json:"kind"`      // background | interactive
-	Status    string `json:"status"`    // busy | idle; live sessions only
-	State     string `json:"state"`     // working | done | stopped; background sessions only
-	StartedAt int64  `json:"startedAt"` // Unix milliseconds
+	SessionID  string `json:"sessionId"`
+	Name       string `json:"name"`
+	Cwd        string `json:"cwd"`
+	Kind       string `json:"kind"`   // background | interactive
+	Status     string `json:"status"` // busy | idle | waiting; live sessions only
+	WaitingFor string `json:"waitingFor,omitempty"`
+	State      string `json:"state"`     // working | done | stopped; background sessions only
+	StartedAt  int64  `json:"startedAt"` // Unix milliseconds
 }
 
 // Live reports whether the session has a process.
@@ -165,7 +166,7 @@ type Spec struct {
 	Effort string
 	// PromptFile is the joined component prompt.
 	PromptFile string
-	// Agents is the factory personas as inline JSON.
+	// Agents is the factory personas as JSON, also written as project agents.
 	Agents string
 	// Task is the session's FACTORY_TASK.
 	Task string
@@ -197,6 +198,10 @@ func (c Client) RunDir(name string) (string, error) {
 // Start writes the session's run folder and settings, then starts it in the
 // background from that folder.
 func (c Client) Start(ctx context.Context, s Spec) error {
+	return c.start(ctx, s, "")
+}
+
+func (c Client) start(ctx context.Context, s Spec, conversation string) error {
 	dir, err := c.RunDir(s.Name)
 	if err != nil {
 		return err
@@ -205,14 +210,20 @@ func (c Client) Start(ctx context.Context, s Spec) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"--bg",
-		"--model", s.Model,
+	if err := writeProjectAgents(dir, s.Agents); err != nil {
+		return err
+	}
+	args := []string{"--bg"}
+	if conversation != "" {
+		args = append(args, "--resume", conversation)
+	}
+	args = append(args, "--model", s.Model,
 		"--effort", s.Effort,
 		"--append-system-prompt-file", s.PromptFile,
 		"--settings", settings,
 		"--agents", s.Agents,
 		"--permission-mode", "bypassPermissions",
-		"-n", s.Name, s.Prompt}
+		"-n", s.Name, s.Prompt)
 	_, err = c.run(ctx, dir, args...)
 	return err
 }
@@ -244,6 +255,7 @@ func (c Client) writeSettings(dir string, s Spec) (string, error) {
 		env["GH_TOKEN"] = s.GHToken
 	}
 	settings["env"] = env
+	settings["crossSessionInbound"] = "accept"
 	return WriteSettings(dir, settings)
 }
 
@@ -287,18 +299,26 @@ var ErrRestarting = errors.New("the session crashed and Claude Code is restartin
 // Resume wakes a stopped session with prompt. It passes no flags: with flags,
 // Claude Code starts a copy that keeps none of the session's settings.
 func (c Client) Resume(ctx context.Context, id, prompt string) error {
-	s, err := c.find(ctx, id)
+	s, err := c.resumableSession(ctx, id)
 	if err != nil {
 		return err
 	}
-	switch {
-	case s.Live():
-		return fmt.Errorf("resume %s: %w", id, ErrLive)
-	case s.State == "working":
-		return fmt.Errorf("resume %s: %w", id, ErrRestarting)
-	}
 	_, err = c.run(ctx, s.Cwd, "--bg", "--resume", s.SessionID, prompt)
 	return err
+}
+
+func (c Client) resumableSession(ctx context.Context, id string) (Session, error) {
+	s, err := c.find(ctx, id)
+	if err != nil {
+		return Session{}, err
+	}
+	switch {
+	case s.Live():
+		return Session{}, fmt.Errorf("resume %s: %w", id, ErrLive)
+	case s.State == "working":
+		return Session{}, fmt.Errorf("resume %s: %w", id, ErrRestarting)
+	}
+	return s, nil
 }
 
 // Stop stops a session and keeps its conversation. Stopping a stopped

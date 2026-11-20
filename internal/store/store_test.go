@@ -1,6 +1,8 @@
 package store
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -100,8 +102,60 @@ func TestOverallWritesLastTickInUTC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "{\n  \"last_tick\": \"2026-10-09T12:30:00Z\"\n}\n"; string(data) != want {
+	if want := "{\n  \"last_tick\": \"2026-10-09T12:30:00Z\",\n  \"provider_listings\": null\n}\n"; string(data) != want {
 		t.Errorf("status.json = %q, want %q", data, want)
+	}
+}
+
+func TestOverallPreservesProviderObservationCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		providers map[string]bool
+		wire      string
+	}{
+		{"legacy_nil", nil, "null"},
+		{"fresh_empty", map[string]bool{}, "{}"},
+		{"fresh_known", map[string]bool{"claude": true, "codex": false}, `{"claude":true,"codex":false}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			brain := t.TempDir()
+			if err := os.MkdirAll(Factory(brain), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteOverall(brain, Overall{ProviderListings: tc.providers}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(OverallPath(brain))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err = json.Unmarshal(data, &fields); err != nil {
+				t.Fatal(err)
+			}
+			var compact bytes.Buffer
+			if err = json.Compact(&compact, fields["provider_listings"]); err != nil {
+				t.Fatalf("coverage field absent or invalid: %v", err)
+			}
+			if compact.String() != tc.wire {
+				t.Fatalf("coverage wire = %s, want %s", compact.String(), tc.wire)
+			}
+			got, err := ReadOverall(brain)
+			if err != nil || !reflect.DeepEqual(got.ProviderListings, tc.providers) {
+				t.Fatalf("coverage lost nil/empty distinction: %+v %v", got.ProviderListings, err)
+			}
+		})
+	}
+	brain := t.TempDir()
+	if err := os.MkdirAll(Factory(brain), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(OverallPath(brain), []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadOverall(brain)
+	if err != nil || got.ProviderListings != nil {
+		t.Fatalf("legacy absent field was relabeled fresh: %+v %v", got.ProviderListings, err)
 	}
 }
 

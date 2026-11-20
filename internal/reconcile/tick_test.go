@@ -376,7 +376,7 @@ func TestEarlyMergeWhileImplementing(t *testing.T) {
 	if st := w.status("e1-w3"); st.PR != 5 || st.HeadSHA != "abc" || st.State != "merged" {
 		t.Errorf("status = %+v", st)
 	}
-	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out, PublicationWorker{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := w.called("git -C " + filepath.Join(w.home, "src", "r") + " branch"); len(got) != 0 {
@@ -431,7 +431,7 @@ func TestTheCleanupAfterAMergeDeletesTheFactoryBranchOnOrigin(t *testing.T) {
 			if st := w.status("e1-w3").State; st != stateMerged {
 				t.Fatalf("e1-w3 is %s, want merged", st)
 			}
-			if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+			if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out, PublicationWorker{}); err != nil {
 				t.Fatal(err)
 			}
 			var want []string
@@ -665,7 +665,7 @@ func TestRepoWorkerMakesTheWorktreeOnlyWhileStarting(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(w.home, "src", "r", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+	if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out, PublicationWorker{}); err != nil {
 		t.Fatal(err)
 	}
 	ready := w.kinds("e1-w1", events.KindWorktreeReady)

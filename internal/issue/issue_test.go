@@ -3,6 +3,7 @@ package issue
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,9 +73,16 @@ func (h *fakeHub) respond(c proc.Cmd) ([]byte, error) {
 		i.Title = field(a, "title=")
 		return json.Marshal(i)
 	case a[0] == "api" && a[1] == "--paginate" && strings.HasPrefix(a[2], "repos/o/r/issues?"):
-		var all []gh.Issue
+		var all []map[string]any
 		for _, i := range h.issues {
-			all = append(all, *i)
+			data, _ := json.Marshal(i)
+			var item map[string]any
+			_ = json.Unmarshal(data, &item)
+			item["user"] = map[string]string{"login": "me"}
+			all = append(all, item)
+		}
+		if all == nil {
+			all = []map[string]any{}
 		}
 		return json.Marshal(all)
 	case a[0] == "api" && strings.HasSuffix(line, "/sub_issues") && a[1] == "--paginate":
@@ -94,17 +102,29 @@ func (h *fakeHub) respond(c proc.Cmd) ([]byte, error) {
 		return nil, nil
 	case a[0] == "api" && strings.HasSuffix(line, "/comments") && a[1] == "--paginate":
 		var out []map[string]any
-		for _, b := range h.comments[num(strings.Split(a[2], "/")[4])] {
-			out = append(out, map[string]any{"user": map[string]string{"login": "me"}, "body": b})
+		for index, b := range h.comments[num(strings.Split(a[2], "/")[4])] {
+			out = append(out, map[string]any{"id": index + 1, "user": map[string]string{"login": "me"}, "body": b})
+		}
+		if out == nil {
+			out = []map[string]any{}
 		}
 		return json.Marshal(out)
 	case a[0] == "api" && a[1] == "-X" && a[2] == "POST" && strings.HasSuffix(a[3], "/comments"):
 		n := num(strings.Split(a[3], "/")[4])
 		h.comments[n] = append(h.comments[n], field(a, "body="))
 		return nil, nil
+	case a[0] == "api" && a[1] == "-X" && a[2] == "POST" && strings.HasSuffix(a[3], "/assignees"):
+		i := h.issues[num(strings.Split(a[3], "/")[4])]
+		i.Assignees = append(i.Assignees, gh.User{Login: field(a, "assignees[]=")})
+		return nil, nil
 	case a[0] == "api" && a[1] == "-X" && a[2] == "PATCH":
 		i := h.issues[num(strings.Split(a[3], "/")[4])]
-		i.Body = field(a, "body=")
+		if field(a, "state=") != "" {
+			i.State = field(a, "state=")
+			i.StateReason = field(a, "state_reason=")
+		} else {
+			i.Body = field(a, "body=")
+		}
 		i.UpdatedAt = i.UpdatedAt.Add(time.Minute)
 		return nil, nil
 	case a[0] == "api" && strings.HasPrefix(a[1], "repos/o/r/compare/"):
@@ -188,42 +208,28 @@ func TestCreateWritesTheMarkerAndRetriesFindIt(t *testing.T) {
 	}
 }
 
-func TestACrashBetweenCreateAndDoneOpensNoSecondIssue(t *testing.T) {
-	h := newHub()
-	w := writer(t, h)
-	// What a crash after the create call and before its done leaves: the
-	// intent, and the issue on GitHub with its marker.
-	h.add(55, "body\n\n"+gh.Marker("e1", "text"), "open")
-	if _, err := events.Append(w.Log, events.Event{Kind: events.KindIntent, Sender: "e1", Key: "intent:issue-create:o/r:text"}); err != nil {
-		t.Fatal(err)
-	}
-	url, err := w.Create(context.Background(), "o/r", "text", "Do it", "body", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if url != "https://github.com/o/r/issues/55" {
-		t.Errorf("url = %s, want the issue the first try opened", url)
-	}
-	if got := h.called("api -X POST repos/o/r/issues -f"); len(got) != 0 {
-		t.Fatalf("opened a second issue: %v", got)
-	}
-	evs, _ := events.Read(w.Log)
-	if last := evs[len(evs)-1]; last.Kind != events.KindDone || last.Text != url {
-		t.Errorf("last event = %+v, want the done with the URL", last)
-	}
-}
-
-func TestACrashBeforeTheCreateCallCreatesOnce(t *testing.T) {
-	h := newHub()
-	w := writer(t, h)
-	if _, err := events.Append(w.Log, events.Event{Kind: events.KindIntent, Sender: "e1", Key: "intent:issue-create:o/r:text"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Create(context.Background(), "o/r", "text", "Do it", "body", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got := h.called("api -X POST repos/o/r/issues -f"); len(got) != 1 {
-		t.Fatalf("creates = %v, want exactly one", got)
+func TestLegacyCreateIntentCannotProveOriginalBinding(t *testing.T) {
+	for _, visible := range []bool{false, true} {
+		t.Run(fmt.Sprint(visible), func(t *testing.T) {
+			h := newHub()
+			w := writer(t, h)
+			if visible {
+				h.add(55, "body\n\n"+gh.Marker("e1", "text"), "open")
+			}
+			if _, err := events.Append(w.Log, events.Event{Kind: events.KindIntent, Sender: "e1", Key: "intent:issue-create:o/r:text"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.Create(context.Background(), "o/r", "text", "Do it", "body", ""); !errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("err=%v", err)
+			}
+			if got := h.called("api -X"); len(got) != 0 {
+				t.Fatalf("legacy ambiguity dispatched: %v", got)
+			}
+			evs, _ := events.Read(w.Log)
+			if len(evs) != 1 {
+				t.Fatalf("legacy input was retroactively bound: %v", evs)
+			}
+		})
 	}
 }
 
@@ -297,7 +303,7 @@ func TestCloseChecksItsEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			err := w.Close(context.Background(), "o/r", 5, tt.evidence, "")
-			closes := h.called("issue close")
+			closes := h.called("api -X PATCH")
 			if tt.want != "" {
 				if err == nil || err.Error() != tt.want {
 					t.Fatalf("err = %v\nwant %s", err, tt.want)
@@ -312,9 +318,9 @@ func TestCloseChecksItsEvidence(t *testing.T) {
 			}
 			reason := "completed"
 			if strings.HasPrefix(tt.evidence, "duplicate") {
-				reason = "not planned"
+				reason = "not_planned"
 			}
-			if !strings.Contains(closes[0], "--reason "+reason+" --comment Closed by the factory: ") {
+			if !strings.Contains(closes[0], "state_reason="+reason) || len(h.comments[5]) != 1 || !strings.HasPrefix(h.comments[5][0], "Closed by the factory: ") {
 				t.Errorf("close = %q", closes[0])
 			}
 		})
@@ -333,15 +339,15 @@ func TestCommentAndAssignRunOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(h.comments[5]) != 1 || len(h.called("issue edit")) != 1 {
+	if len(h.comments[5]) != 1 || len(h.called("api -X POST repos/o/r/issues/5/assignees")) != 1 {
 		t.Fatalf("comments %v, assigns %v", h.comments[5], h.called("issue edit"))
 	}
-	// A crash after the comment and before its done: the retry finds it.
+	// Legacy input does not prove the historical body or actor, even if text matches.
 	if _, err := events.Append(w.Log, events.Event{Kind: events.KindIntent, Key: "intent:issue-comment:o/r#5:" + short("Second.")}); err != nil {
 		t.Fatal(err)
 	}
 	h.comments[5] = append(h.comments[5], "Second.")
-	if err := w.Comment(context.Background(), "o/r", 5, "Second."); err != nil {
+	if err := w.Comment(context.Background(), "o/r", 5, "Second."); !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatal(err)
 	}
 	if len(h.comments[5]) != 2 {

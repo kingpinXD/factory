@@ -23,11 +23,18 @@ func (r *run) reconcileGitHub() {
 // started, is ever recorded: an older one is an earlier item's under the
 // same id. gh leaves out PRs from forks.
 func (r *run) readPR(e *entity) error {
+	// First Codex publication is recorded only from the worker's ready receipt.
+	if e.work.PR == 0 && e.st.PR == 0 && r.providerForEpic(e.entry.Epic) == "codex" {
+		return nil
+	}
 	ctx, cancel := r.call()
 	defer cancel()
 	if n := max(e.st.PR, e.work.PR); n != 0 {
 		pr, err := r.d.GitHub.PR(ctx, e.work.Repo, n)
 		if err == nil {
+			if r.providerForEpic(e.entry.Epic) == "codex" && publicationRevisionPending(e) {
+				pr.HeadRefOid = e.st.HeadSHA
+			}
 			r.record(e, pr)
 		}
 		return err

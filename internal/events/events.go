@@ -29,6 +29,7 @@ const (
 	KindError         = "error"
 	KindNudge         = "nudge"
 	KindRestart       = "restart"
+	KindRecovery      = "recovery"
 	KindIssueStale    = "issue_stale"
 	KindBlockedBy     = "blocked_by"
 	KindInstruction   = "instruction"
@@ -45,7 +46,7 @@ const (
 // Kinds lists every kind an event log accepts.
 var Kinds = []string{
 	KindTransition, KindRefused, KindRequest, KindIntent, KindDone, KindHeartbeat,
-	KindStart, KindEnd, KindError, KindNudge, KindRestart, KindIssueStale,
+	KindStart, KindEnd, KindError, KindNudge, KindRestart, KindRecovery, KindIssueStale,
 	KindBlockedBy, KindInstruction, KindHandover, KindHandback, KindMessage, KindAck,
 	KindWorktreeReady, KindCheckpointDue, KindCheckpoint, KindCompacted,
 }
@@ -110,8 +111,8 @@ func Key(entity, from, to, triggerRef string, attempt int) string {
 // newline, which a crash or a full disk leaves, is cut first and logged as
 // an error event that quotes it.
 func Append(path string, ev Event) (Event, error) {
-	if !slices.Contains(Kinds, ev.Kind) {
-		return Event{}, fmt.Errorf("unknown event kind: %s", ev.Kind)
+	if err := validateEventKind(ev); err != nil {
+		return Event{}, err
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
@@ -120,6 +121,26 @@ func Append(path string, ev Event) (Event, error) {
 	defer f.Close()
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return Event{}, fmt.Errorf("lock %s: %w", path, err)
+	}
+	return appendLocked(path, f, ev)
+}
+
+func validateEventKind(ev Event) error {
+	if !slices.Contains(Kinds, ev.Kind) {
+		return fmt.Errorf("unknown event kind: %s", ev.Kind)
+	}
+	if ev.Kind == KindRecovery && ev.Sender != SenderProgram {
+		return fmt.Errorf("recovery events require programme sender")
+	}
+	return nil
+}
+
+func appendLocked(path string, f *os.File, ev Event) (Event, error) {
+	if err := validateEventKind(ev); err != nil {
+		return Event{}, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return Event{}, err
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {

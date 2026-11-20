@@ -116,6 +116,9 @@ func TestAnEscalationWhoseChecksTurnedGreenIsReleased(t *testing.T) {
 }
 
 func TestARedAfterPassIsReleasedOnlyOnceItsCauseIsGone(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name   string
 		change func(*world)
@@ -193,6 +196,9 @@ func TestAPROpenTimeoutIsReleasedOnceItsPRIsRecorded(t *testing.T) {
 }
 
 func TestEscalationsTheProgramCannotReTestStay(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, tc := range []struct{ name, from, ref string }{
 		{name: "closed", from: workClosed, ref: "tick:3"},
 		{name: "dead-letter", from: workInReview, ref: deadLetterRef + "4"},
@@ -424,6 +430,9 @@ func TestAnInReviewItemIsNotJudged(t *testing.T) {
 }
 
 func TestOnlyQueuedBlockedAndRecheckingWorkIsJudged(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, state := range []string{workImplementing, workPROpen, workInReview, workMerging, stateWaitingUser, stateNeedsYou} {
 		t.Run("work "+state, func(t *testing.T) {
 			w := newWorld(t)
@@ -486,6 +495,9 @@ func moverRun(t *testing.T, w *world, adjust func(*run)) *run {
 }
 
 func TestEachMoverKeepsAnItemOut(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	readPR := func(r *run) { pr := gh.PR{Number: 5, State: "OPEN"}; r.ents[item].pr = &pr }
 	setStatus := func(w *world, id string, change func(*store.Status)) {
 		st := w.status(id)
@@ -620,7 +632,7 @@ func TestFindingStallsCallsNothing(t *testing.T) {
 	w.planned("e2", oneItem("\n  - {from: o/r#99, to: w1, gate: start, when: merged, rollback: none}"))
 	w.moveTo("e2-s1", setRunning)
 	w.now = w.now.Add(31 * time.Minute)
-	r := moverRun(t, w, func(r *run) { r.listing() })
+	r := moverRun(t, w, func(r *run) { r.inventory("claude") })
 	before := len(w.fake.Calls())
 	r.findStalls()
 	if got := w.calls()[before:]; len(got) != 0 {
@@ -648,6 +660,9 @@ func TestAStallWhoseDMFailedIsRetriedWithItsSignal(t *testing.T) {
 }
 
 func TestStallsAreCappedThenTheItemWaitsForYou(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := stuckBlocked(t)
 	for n := 1; n <= 3; n++ {
 		w.fullTick(31 * time.Minute)
@@ -771,8 +786,8 @@ func threeWaiting(t *testing.T) *world {
 	w.registry()
 	w.planned("e1", threeItemsWith("[]"))
 	w.at(0)
-	w.toNeedsYou("e1-w1", workQueued, deadLetterRef+"1")
-	w.toNeedsYou("e1-w2", workQueued, deadLetterRef+"1")
+	w.toNeedsYou("e1-w1", workQueued, "user:1")
+	w.toNeedsYou("e1-w2", workQueued, "user:1")
 	w.tick(false)
 	return w
 }
@@ -785,7 +800,7 @@ func (w *world) digests() []string { return w.dmsWith("factory: long waits:") }
 func TestLongWaitsGoInADigestAtMostSixHoursApartThenDaily(t *testing.T) {
 	w := threeWaiting(t)
 	w.at(3 * time.Hour)
-	w.toNeedsYou("e1-w3", workQueued, deadLetterRef+"1")
+	w.toNeedsYou("e1-w3", workQueued, "user:1")
 	w.fullTickAt(23*time.Hour + 59*time.Minute)
 	if got := w.digests(); len(got) != 0 {
 		t.Fatalf("digests before 24h = %q, want none", got)
@@ -857,6 +872,9 @@ func TestADigestLeavesOutWaitsSomeoneMoves(t *testing.T) {
 }
 
 func TestNoDigestWithoutAWaitOverADay(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := threeWaiting(t)
 	for _, id := range []string{"e1-w1", "e1-w2", "e1-w3"} {
 		w.moveTo(id, workCancelled)

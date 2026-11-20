@@ -12,6 +12,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -21,70 +22,74 @@ import (
 type guard func(r *run, e *entity) (ok bool, ref string, err error)
 
 // guards are the guards this package implements, by blueprint name.
-var guards = map[string]guard{
-	// work
-	"adopted_pr":           (*run).adoptedPR,
-	"startable":            (*run).startable,
-	"step_started":         (*run).stepStarted,
-	"step_ended":           (*run).stepEnded,
-	"verify_passed":        func(r *run, e *entity) (bool, string, error) { return r.verdict(e, "pass") },
-	"verify_failed":        func(r *run, e *entity) (bool, string, error) { return r.verdict(e, "fail") },
-	"question_asked":       (*run).questionAsked,
-	"answered":             requested(RequestAnswer),
-	"retry_requested":      requested(RequestRetry),
-	"retry_allowed":        (*run).retryAllowed,
-	"cancel_requested":     requested(RequestStop),
-	"instruction_received": (*run).instructionReceived,
-	"blocked_reported":     (*run).blockedReported,
-	"blockers_released":    (*run).blockersReleased,
-	"pr_recorded":          (*run).prRecorded,
-	"pr_merged":            func(r *run, e *entity) (bool, string, error) { return prState(e, prMerged) },
-	"pr_closed_unmerged":   func(r *run, e *entity) (bool, string, error) { return prState(e, prClosed) },
-	"cleaned_up":           (*run).cleanedUp,
-	// set and epic
-	"lease_taken":       (*run).leaseTaken,
-	"session_started":   (*run).sessionStarted,
-	"items_finished":    (*run).itemsFinished,
-	"item_startable":    (*run).itemStartable,
-	"nothing_startable": (*run).nothingStartable,
-	"handed_back":       (*run).handedBack,
-	"item_released":     (*run).itemReleased,
-	// session
-	"listed_working":  (*run).listedWorking,
-	"turn_ended":      (*run).sessionTurnEnded,
-	"no_pid":          (*run).noPID,
-	"factory_stopped": (*run).factoryStopped,
-	"work_finished":   (*run).workFinished,
-	"resume_allowed":  (*run).resumeAllowed,
-	// supervision, context and the account
-	"restarts_exhausted":      (*run).restartsExhausted,
-	"needs_user":              (*run).needsUser,
-	"checkpoint_ready":        (*run).checkpointReady,
-	"compaction_recorded":     (*run).compactionRecorded,
-	"usage_near_limit":        (*run).usageNearLimit,
-	"usage_under_limit":       (*run).usageUnderLimit,
-	"usage_pause":             (*run).usagePause,
-	"usage_stale":             (*run).usageStale,
-	"reset_passed":            (*run).resetPassed,
-	"reset_passed_near_limit": (*run).resetPassedNearLimit,
-	"all_resumed":             (*run).allResumed,
-	// the planner flow and re-checks
-	"state_check_ended":  (*run).stateCheckEnded,
-	"epic_plan_ended":    (*run).epicPlanEnded,
-	"work_started":       (*run).workStarted,
-	"epic_idle":          (*run).epicIdle,
-	"all_in_review":      (*run).allInReview,
-	"uat_passed":         (*run).uatPassed,
-	"recheck_signal":     (*run).recheckSignal,
-	"recheck_ended":      (*run).recheckEnded,
-	"recheck_started":    (*run).recheckStarted,
-	"recheck_kept":       recheckKept,
-	"recheck_dropped":    recheckDropped,
-	"recheck_needs_user": recheckNeedsUser,
-	"scope_changed":      (*run).scopeChanged,
-	// merging
-	"merge_ready":  (*run).mergeReady,
-	"merge_failed": (*run).mergeFailed,
+var guards map[string]guard
+
+func init() {
+	guards = map[string]guard{
+		// work
+		"adopted_pr":           (*run).adoptedPR,
+		"startable":            (*run).startable,
+		"step_started":         (*run).stepStarted,
+		"step_ended":           (*run).stepEnded,
+		"verify_passed":        func(r *run, e *entity) (bool, string, error) { return r.verdict(e, "pass") },
+		"verify_failed":        func(r *run, e *entity) (bool, string, error) { return r.verdict(e, "fail") },
+		"question_asked":       (*run).questionAsked,
+		"answered":             requested(RequestAnswer),
+		"retry_requested":      requested(RequestRetry),
+		"retry_allowed":        (*run).retryAllowed,
+		"cancel_requested":     requested(RequestStop),
+		"instruction_received": (*run).instructionReceived,
+		"blocked_reported":     (*run).blockedReported,
+		"blockers_released":    (*run).blockersReleased,
+		"pr_recorded":          (*run).prRecorded,
+		"pr_merged":            func(r *run, e *entity) (bool, string, error) { return prState(e, prMerged) },
+		"pr_closed_unmerged":   func(r *run, e *entity) (bool, string, error) { return prState(e, prClosed) },
+		"cleaned_up":           (*run).cleanedUp,
+		// set and epic
+		"lease_taken":       (*run).leaseTaken,
+		"session_started":   (*run).sessionStarted,
+		"items_finished":    (*run).itemsFinished,
+		"item_startable":    (*run).itemStartable,
+		"nothing_startable": (*run).nothingStartable,
+		"handed_back":       (*run).handedBack,
+		"item_released":     (*run).itemReleased,
+		// session
+		"listed_working":  (*run).listedWorking,
+		"turn_ended":      (*run).sessionTurnEnded,
+		"no_pid":          (*run).noPID,
+		"factory_stopped": (*run).factoryStopped,
+		"work_finished":   (*run).workFinished,
+		"resume_allowed":  (*run).resumeAllowed,
+		// supervision, context and the account
+		"restarts_exhausted":      (*run).restartsExhausted,
+		"needs_user":              (*run).needsUser,
+		"checkpoint_ready":        (*run).checkpointReady,
+		"compaction_recorded":     (*run).compactionRecorded,
+		"usage_near_limit":        (*run).usageNearLimit,
+		"usage_under_limit":       (*run).usageUnderLimit,
+		"usage_pause":             (*run).usagePause,
+		"usage_stale":             (*run).usageStale,
+		"reset_passed":            (*run).resetPassed,
+		"reset_passed_near_limit": (*run).resetPassedNearLimit,
+		"all_resumed":             (*run).allResumed,
+		// the planner flow and re-checks
+		"state_check_ended":  (*run).stateCheckEnded,
+		"epic_plan_ended":    (*run).epicPlanEnded,
+		"work_started":       (*run).workStarted,
+		"epic_idle":          (*run).epicIdle,
+		"all_in_review":      (*run).allInReview,
+		"uat_passed":         (*run).uatPassed,
+		"recheck_signal":     (*run).recheckSignal,
+		"recheck_ended":      (*run).recheckEnded,
+		"recheck_started":    (*run).recheckStarted,
+		"recheck_kept":       recheckKept,
+		"recheck_dropped":    recheckDropped,
+		"recheck_needs_user": recheckNeedsUser,
+		"scope_changed":      (*run).scopeChanged,
+		// merging
+		"merge_ready":  (*run).mergeReady,
+		"merge_failed": (*run).mergeFailed,
+	}
 }
 
 // guardFuncs adapts the guards to fsm for entity e. The guard that holds
@@ -325,6 +330,13 @@ func (r *run) verdict(e *entity, want string) (bool, string, error) {
 	if !ok || err != nil {
 		return false, "", err
 	}
+	modern, err := r.modernVerificationWork(e)
+	if err != nil {
+		return false, "", err
+	}
+	if modern {
+		return r.contract2Verdict(e, end, want)
+	}
 	ok, err = says(end.File, verdictHeading, want)
 	return ok, seqRef(end), err
 }
@@ -506,8 +518,8 @@ func (r *run) leaseTaken(e *entity) (bool, string, error) {
 
 // sessionStarted: the session the entity's work needs is listed.
 func (r *run) sessionStarted(e *entity) (bool, string, error) {
-	_, ok := r.findSession(sessionName(e.id, sessionComponent(e)))
-	return ok, "", nil
+	lookup := r.lookupSession(e.entry.Epic, sessionName(e.id, sessionComponent(e)))
+	return lookup.Presence == session.Present, "", nil
 }
 
 // itemsFinished: every item of the set or epic is merged or cancelled. An
@@ -525,13 +537,21 @@ func (r *run) itemsFinished(e *entity) (bool, string, error) {
 	return true, "", nil
 }
 
-// itemStartable: an item of the set or epic can start now.
+// itemStartable: an item can start, or an idle-blocked set still has a PR to open.
 func (r *run) itemStartable(e *entity) (bool, string, error) {
 	items, err := r.itemsOf(e)
 	if err != nil {
 		return false, "", err
 	}
 	for _, it := range items {
+		if r.claudePermissionRetried(e, it) {
+			return true, "", nil
+		}
+		// Only nothing_startable blocks a running set on a file trigger.
+		// A set blocked by its restart budget still needs the planner.
+		if e.set != nil && e.cur.State == stateBlocked && e.enteredBy.From == setRunning && e.enteredBy.Trigger == blueprint.TriggerFile && r.openingPR(it) {
+			return true, "", nil
+		}
 		if ok, err := r.canStart(it); ok || err != nil {
 			return ok, "", err
 		}
@@ -539,13 +559,13 @@ func (r *run) itemStartable(e *entity) (bool, string, error) {
 	return false, "", nil
 }
 
-// nothingStartable: no item of the set is being worked and none can start.
+// nothingStartable: no orchestrator work remains and no item can start.
 func (r *run) nothingStartable(e *entity) (bool, string, error) {
 	items, err := r.itemsOf(e)
 	if err != nil {
 		return false, "", err
 	}
-	if slices.ContainsFunc(items, active) {
+	if slices.ContainsFunc(items, r.orchestratorWorking) {
 		return false, "", nil
 	}
 	ok, _, err := r.itemStartable(e)
@@ -571,8 +591,9 @@ func (r *run) handedBack(e *entity) (bool, string, error) {
 // listedWorking: the session is listed with a pid and working, and neither
 // its listing nor its transcript shows its turn ended.
 func (r *run) listedWorking(e *entity) (bool, string, error) {
-	s, ok := r.findSession(e.session.Name)
-	return ok && s.Live() && s.State == listedWorking && !turnEndedInListing(s) && e.turnEndedAt.IsZero(), "", nil
+	lookup := r.lookupSession(e.entry.Epic, e.session.Name)
+	s := lookup.Session
+	return lookup.Presence == session.Present && s.Live() && s.State == listedWorking && !turnEndedInListing(s) && e.turnEndedAt.IsZero(), "", nil
 }
 
 // transcriptRef starts the ref of a turn_ended move that only the session's
@@ -594,9 +615,20 @@ func (r *run) sessionTurnEnded(e *entity) (bool, string, error) {
 // noPID: the session has been listed with no pid, or not at all, for
 // supervision.dead_after.
 func (r *run) noPID(e *entity) (bool, string, error) {
+	if _, pending := claudePermissionRepair(e); pending {
+		return false, "", nil
+	}
+	lookup := r.lookupSession(e.entry.Epic, e.session.Name)
+	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+		return false, "", nil
+	}
 	since := e.st.NoPIDSince
 	dead := time.Duration(r.b.Values.Supervision.DeadAfter)
-	return !since.IsZero() && r.now.Sub(since) >= dead, "", nil
+	elapsed := r.now.Sub(since)
+	if r.managedClock(e) {
+		elapsed = r.eligibleElapsed(e, since).Eligible
+	}
+	return !since.IsZero() && (!r.managedClock(e) || !r.clockHeld(e)) && elapsed >= dead, "", nil
 }
 
 // factoryStopped: the program logged a stop of the session in its current
@@ -606,8 +638,8 @@ func (r *run) factoryStopped(e *entity) (bool, string, error) {
 	if !ok {
 		return false, "", nil
 	}
-	s, listed := r.findSession(e.session.Name)
-	return listed && !s.Live(), seqRef(done), nil
+	lookup := r.lookupSession(e.entry.Epic, e.session.Name)
+	return lookup.Presence == session.Present && !lookup.Session.Live(), seqRef(done), nil
 }
 
 // workFinished: the session's owner is over, so nothing will wake it.

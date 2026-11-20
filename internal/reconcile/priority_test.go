@@ -168,7 +168,17 @@ func TestNearLimitARepairSessionWithNoProgressIsNudgedAndItsLeaseExpiresOnTime(t
 		w.at(45 * time.Minute)
 		w.tick(false)
 		got := posted()
-		if nudged := len(got) == 1 && strings.Contains(got[0], "no progress on e1-w1 (implementing) for 45m"); nudged != repair {
+		nudges := 0
+		for _, text := range got {
+			if strings.Contains(text, "Nudge: no progress on e1-w1 (implementing) for 45m") {
+				nudges++
+			}
+		}
+		wantNudges := 0
+		if repair {
+			wantNudges = 1
+		}
+		if nudges != wantNudges {
 			t.Errorf("posted %q at 45m, want one no-progress nudge only for a repair", got)
 		}
 	})

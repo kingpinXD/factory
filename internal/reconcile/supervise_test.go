@@ -20,6 +20,12 @@ import (
 
 func TestNoProgressIsNudgedThenRestarted(t *testing.T) {
 	w := newWorld(t)
+	data, err := os.ReadFile(blueprint.Path(w.brain))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep lease-notice receipt deadlines separate from the no-progress deadline.
+	put(t, blueprint.Path(w.brain), strings.Replace(string(data), "unacked: 15m", "unacked: 2h", 1))
 	w.working("implementing")
 	s := w.orchestrator("e1-s1", "running", 4201, "working")
 	posted := w.listen(s.PID)
@@ -27,14 +33,17 @@ func TestNoProgressIsNudgedThenRestarted(t *testing.T) {
 
 	w.at(44 * time.Minute)
 	w.tick(false)
-	if got := posted(); len(got) != 0 {
-		t.Fatalf("nudged before no_progress: %q", got)
+	if got := posted(); len(got) != 1 || !strings.Contains(got[0], "set: e1-s1\nlease: 2\nThe program renewed your lease.") || strings.Contains(got[0], "Nudge:") {
+		t.Fatalf("posted %q before no_progress, want only the renewed lease", got)
+	}
+	if n := w.kinds("e1-w1", events.KindNudge); len(n) != 0 {
+		t.Fatalf("nudges = %+v before no_progress, want none", n)
 	}
 	w.at(45 * time.Minute)
 	w.tick(false)
 	got := posted()
-	if len(got) != 1 || !strings.Contains(got[0], "Nudge: no progress on e1-w1 (implementing) for 45m") || !strings.Contains(got[0], "factory inbox e1-s1") {
-		t.Fatalf("posted %q, want one nudge", got)
+	if len(got) != 2 || !strings.Contains(got[1], "Nudge: no progress on e1-w1 (implementing) for 45m") || !strings.Contains(got[1], "factory inbox e1-s1") {
+		t.Fatalf("posted %q, want the renewed lease followed by one nudge", got)
 	}
 	if n := w.kinds("e1-w1", events.KindNudge); len(n) != 1 {
 		t.Errorf("nudges = %+v, want one counted on the item", n)
@@ -107,6 +116,9 @@ func TestInReviewForDaysIsNeverRestarted(t *testing.T) {
 }
 
 func TestAnUnacknowledgedMessage(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	message := func(w *world) events.Event {
 		return w.append(w.dir("e1-s1"), events.Event{At: w.now, Kind: events.KindInstruction, Sender: "e1", Text: "use the v2 API"})
 	}
@@ -506,6 +518,9 @@ func TestAHelperOnADeniedModelStopsItsSession(t *testing.T) {
 }
 
 func TestADyingBabysitterWaitsForTheUser(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := watching(t)
 	w.pulls.threads[5] = []gh.Thread{thread("T1", 11, "alice")}
 	w.babysitter(1, sessionDead, 0, "stopped")
@@ -530,6 +545,9 @@ func TestADyingBabysitterWaitsForTheUser(t *testing.T) {
 }
 
 func TestAPlannerTimingOutThreeTimesWaitsForTheUser(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := newWorld(t)
 	w.epic("e1", "planning")
 	w.planner("e1", "running", 4101, "working")
@@ -539,7 +557,14 @@ func TestAPlannerTimingOutThreeTimesWaitsForTheUser(t *testing.T) {
 			w.append(w.dir("e1"), events.Event{At: w.now, Kind: events.KindIntent, Sender: "e1", Text: "comment on o/r#12"})
 			w.append(w.dir("e1"), events.Event{At: w.now, Kind: events.KindDone, Sender: "e1", Text: "comment on o/r#12"})
 		}
-		w.tick(false)
+		// Keep the full activity history, and observe each timeout and its recovery.
+		if m == 0 || m%120 >= 119 || m%120 <= 2 || m == 419 {
+			w.tick(false)
+			wantStops := min(m/120, 3)
+			if got := len(w.called("claude stop")); got != wantStops {
+				t.Fatalf("at %dm stops = %d, want %d", m, got, wantStops)
+			}
+		}
 		w.now = w.now.Add(time.Minute)
 	}
 	if got := w.called("claude stop"); len(got) != 3 {

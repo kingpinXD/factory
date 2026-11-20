@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/git"
+	"github.com/kingpinXD/factory/internal/publication"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -23,15 +25,36 @@ import (
 // It runs as its own process under its own lock, so a hung clone never
 // delays a tick, and answers each request with a worktree_ready, done or
 // error event in the item's log. It works until nothing is left.
-func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Duration, out io.Writer) error {
+func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Duration, out io.Writer, publisher PublicationWorker) error {
 	unlock, err := store.Lock(brain, "repo-worker")
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	if err := runEffectJobs(ctx, brain, out); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		fmt.Fprintf(out, "effects pass held: %v\n", err)
+	}
+	if err := runVerificationObservationJobs(ctx, brain, out); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		fmt.Fprintf(out, "verification observation pass held: %v\n", err)
+	}
+	if err := runProgramReadJobs(ctx, brain, out); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		fmt.Fprintf(out, "programme read pass held: %v\n", err)
+	}
 	tried := map[string]bool{}
 	for {
-		jobs, err := repoJobs(brain)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		jobs, err := repoJobs(brain, out)
 		if err != nil {
 			return err
 		}
@@ -40,10 +63,55 @@ func RepoWorker(ctx context.Context, brain string, g git.Client, timeout time.Du
 			return nil
 		}
 		for _, j := range jobs {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			tried[j.key()] = true
+			if j.req.Request == cleanupRequest {
+				// This independent worker can recover a request queued before a crash.
+				// Admission remains durably closed before any Git deletion starts.
+				if err := fenceCleanup(ctx, brain, j.id); err != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					fmt.Fprintf(out, "%s: cleanup held: %v\n", j.id, err)
+					continue
+				}
+			}
+			if j.req.Request == verifiedWorktreeRequest || j.req.Request == publishRequest || j.req.Request == publishRevisionRequest {
+				jobCtx, cancel := context.WithTimeout(ctx, timeout)
+				var result any
+				var jobErr error
+				if j.req.Request == verifiedWorktreeRequest {
+					result, jobErr = j.adoptVerified(jobCtx, brain, g, publisher)
+				} else if j.req.Request == publishRevisionRequest {
+					result, jobErr = j.publishRevision(jobCtx, brain, g, publisher)
+				} else {
+					result, jobErr = j.publish(jobCtx, brain, g, publisher)
+				}
+				cancel()
+				if jobErr != nil {
+					fmt.Fprintf(out, "%s: %s held: %v\n", j.id, j.req.Request, jobErr)
+					if (j.req.Request == publishRequest || j.req.Request == publishRevisionRequest) && errors.Is(jobErr, publication.ErrHeld) {
+						if _, err := events.Append(store.EventsPath(j.dir), events.Event{Kind: events.KindError, Sender: events.SenderProgram, Recipient: "publication-worker", Request: "held", Key: "repo:publish-held:" + seqRef(j.req), Text: jobErr.Error()}); err != nil {
+							fmt.Fprintf(out, "%s: publish hold note failed: %v\n", j.id, err)
+						}
+					}
+					continue
+				}
+				raw, err := json.Marshal(result)
+				if err != nil {
+					return err
+				}
+				if _, err = events.Append(store.EventsPath(j.dir), events.Event{Kind: events.KindDone, Sender: events.SenderProgram, TriggerRef: seqRef(j.req), Key: repoResultKey(j.req), Text: string(raw)}); err != nil {
+					fmt.Fprintf(out, "%s: %s result held: %v\n", j.id, j.req.Request, err)
+				}
+				continue
+			}
 			res := j.do(ctx, g, timeout)
 			if _, err := events.Append(store.EventsPath(j.dir), res); err != nil {
-				return err
+				fmt.Fprintf(out, "%s: %s result held: %v\n", j.id, j.req.Request, err)
+				continue
 			}
 			fmt.Fprintf(out, "%s: %s: %s %s\n", j.id, j.req.Request, res.Kind, res.Text)
 		}
@@ -61,7 +129,7 @@ type repoJob struct {
 func (j repoJob) key() string { return eventRef(j.id, j.req) }
 
 // repoJobs returns every unanswered repo request, by item id.
-func repoJobs(brain string) ([]repoJob, error) {
+func repoJobs(brain string, out io.Writer) ([]repoJob, error) {
 	ix, err := store.ReadIndex(brain)
 	if err != nil {
 		return nil, err
@@ -74,11 +142,12 @@ func repoJobs(brain string) ([]repoJob, error) {
 		}
 		evs, err := events.Read(store.EventsPath(entry.Dir))
 		if err != nil {
-			return nil, err
+			fmt.Fprintf(out, "%s: repo requests held: %v\n", id, err)
+			continue
 		}
 		it := &entity{id: id, entry: entry, evs: evs}
 		for _, ev := range evs {
-			if ev.Kind != events.KindRequest || ev.Recipient != events.RecipientRepoWorker {
+			if ev.Kind != events.KindRequest || ev.Recipient != events.RecipientRepoWorker || (ev.Request != worktreeRequest && ev.Request != cleanupRequest && ev.Request != publishRequest && ev.Request != publishRevisionRequest && ev.Request != verifiedWorktreeRequest) {
 				continue
 			}
 			if _, answered := repoResult(it, ev); answered {
@@ -86,7 +155,8 @@ func repoJobs(brain string) ([]repoJob, error) {
 			}
 			j := repoJob{id: id, dir: entry.Dir, req: ev, evs: evs}
 			if err := store.ReadInputs(entry.Dir, &j.in); err != nil {
-				return nil, err
+				fmt.Fprintf(out, "%s: %s held: %v\n", id, ev.Request, err)
+				continue
 			}
 			jobs = append(jobs, j)
 		}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/session"
 )
 
 // cancelledCleanup, as a cleanup request's text, removes the worktree and
@@ -23,6 +24,15 @@ func (r *run) cancelItem(it *entity) error {
 	k := "cancel:" + strconv.Itoa(it.entered)
 	if it.cur.State != workCancelled || it.has(k) {
 		return nil
+	}
+	if r.providerForEpic(it.entry.Epic) == "codex" {
+		lookup := r.babysitterLookup(it)
+		if !handedOver(it) && !skipsOrchestrator(it) {
+			lookup = r.lookupSession(it.entry.Epic, sessionName(it.work.Set, componentOrchestrator))
+		}
+		if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+			return fmt.Errorf("%s: cancellation waits for writer observation", it.id)
+		}
 	}
 	why := r.cancelReason(it)
 	for _, step := range []func() error{
@@ -57,6 +67,20 @@ func (r *run) cancelUnder(e *entity) error {
 	if e.work != nil || e.cur.State != workCancelled || e.has(k) {
 		return nil
 	}
+	if captured, err := r.cancelCapturedCoordinatorTerminal(e); captured || err != nil {
+		return err
+	}
+	if r.providerForEpic(e.entry.Epic) == "codex" {
+		inventory := r.inventory("codex")
+		if !inventory.Complete {
+			return fmt.Errorf("%s: cancellation inventory is unknown", e.id)
+		}
+		for _, q := range inventory.Quarantined {
+			if q.OwnerID == e.id {
+				return fmt.Errorf("%s: cancellation waits for writer observation", e.id)
+			}
+		}
+	}
 	items, err := r.itemsOf(e)
 	if err != nil {
 		return err
@@ -81,7 +105,12 @@ func (r *run) cancelUnder(e *entity) error {
 		if sess.session == nil || sess.session.Task != e.id {
 			continue
 		}
-		if s, ok := r.findSession(sess.session.Name); ok && s.Live() {
+		lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+		if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
+			return fmt.Errorf("%s: cancellation waits for stopped-writer evidence", sess.session.Name)
+		}
+		s := lookup.Session
+		if lookup.Presence == session.Present && s.Live() {
 			if err := r.stopSession(sess, s, k, fmt.Sprintf("stop %s: %s is cancelled", s.Name, e.id)); err != nil {
 				return err
 			}
@@ -146,6 +175,9 @@ func (r *run) closePR(it *entity, k, why string) error {
 // branch, if it ever had one: whatever they hold, except for an adopted PR,
 // whose work not in its PR is kept.
 func (r *run) queueCleanup(it *entity, k string) error {
+	if err := r.fenceHelpers(it, "cancel cleanup"); err != nil {
+		return err
+	}
 	if _, ok := lastRepoRequest(it, worktreeRequest); !ok {
 		return nil
 	}

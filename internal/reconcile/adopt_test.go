@@ -39,6 +39,9 @@ func (w *world) fixPR(change func(*gh.PR)) {
 }
 
 func TestARepairAdoptsTheUsersOwnOpenPRWithoutAnAnswer(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	for _, tc := range []struct {
 		name     string
 		repair   bool
@@ -141,7 +144,7 @@ func TestAnAdoptedPRGoesStraightToItsBabysitter(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(clone, ".git"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out); err != nil {
+			if err := RepoWorker(context.Background(), w.brain, git.Client{Runner: w.fake}, time.Second, &w.out, PublicationWorker{}); err != nil {
 				t.Fatal(err)
 			}
 			path := git.WorktreePath(clone, item)

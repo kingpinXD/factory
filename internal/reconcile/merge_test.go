@@ -245,6 +245,9 @@ func TestAReadyPRIsMergedAtTheHeadItChecked(t *testing.T) {
 }
 
 func TestTheMergeCheckHoldsThePR(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	alice := gh.User{Login: "alice"}
 	for _, tc := range []struct {
 		name  string
@@ -466,6 +469,9 @@ func TestARecheckWhileMergingTakesTheMergeBackThenChecksItAgain(t *testing.T) {
 // What changed during a re-check of an item it took out of merging holds
 // the merge: a link the new plan adds, a change request.
 func TestAMergeTakenBackByARecheckWaitsForTheMergeCheck(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	changes := func(w *world) {
 		w.pr(func(pr *gh.PR) {
 			pr.Reviews = []gh.Review{{Author: gh.User{Login: "alice"}, AuthorAssociation: "MEMBER", State: "CHANGES_REQUESTED", SubmittedAt: t0}}

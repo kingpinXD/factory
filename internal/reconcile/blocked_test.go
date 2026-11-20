@@ -379,6 +379,9 @@ func TestBlockedByFromAnotherSessionIsIgnored(t *testing.T) {
 // Two blocked_by moves on one item, each answered by an instruction; the
 // third goes to the user, with one DM, and starts no re-check.
 func TestAThirdBlockedByGoesToTheUser(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := newWorld(t)
 	w.blockW1(twoItems("[]"), workImplementing)
 	for v := 2; v <= 3; v++ {

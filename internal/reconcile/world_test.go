@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -111,8 +112,15 @@ func put(t *testing.T, path, content string) {
 // settings, and a world around it with no sessions and no PRs.
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldWithBrainEnv(t, true)
+}
+
+func newWorldWithBrainEnv(t *testing.T, setBrainEnv bool) *world {
+	t.Helper()
 	brain := t.TempDir()
-	t.Setenv("FACTORY_BRAIN", brain)
+	if setBrainEnv {
+		t.Setenv("FACTORY_BRAIN", brain)
+	}
 	data, err := os.ReadFile(shippedBlueprint)
 	if err != nil {
 		t.Fatal(err)
@@ -296,14 +304,42 @@ func (w *world) listen(pid int) func() []string {
 		w.t.Fatal(err)
 	}
 	w.t.Cleanup(func() { ln.Close() })
+	raw, err := ln.SyscallConn()
+	if err != nil {
+		w.t.Fatal(err)
+	}
 	var got []string
 	return func() []string {
 		for {
-			// The deadline only ends the wait on an empty queue.
-			ln.SetDeadline(time.Now().Add(100 * time.Millisecond))
-			conn, err := ln.Accept()
+			var socket int
+			var acceptErr error
+			err := raw.Control(func(fd uintptr) {
+				syscall.ForkLock.RLock()
+				defer syscall.ForkLock.RUnlock()
+				for {
+					socket, _, acceptErr = syscall.Accept(int(fd))
+					if acceptErr != syscall.EINTR {
+						break
+					}
+				}
+				if acceptErr == nil {
+					syscall.CloseOnExec(socket)
+				}
+			})
 			if err != nil {
+				w.t.Fatal(err)
+			}
+			if acceptErr == syscall.EAGAIN || acceptErr == syscall.EWOULDBLOCK {
 				return slices.Clone(got)
+			}
+			if acceptErr != nil {
+				w.t.Fatal(acceptErr)
+			}
+			file := os.NewFile(uintptr(socket), "fixture-inbox")
+			conn, err := net.FileConn(file)
+			file.Close()
+			if err != nil {
+				w.t.Fatal(err)
 			}
 			var m struct {
 				Message struct{ Content string }

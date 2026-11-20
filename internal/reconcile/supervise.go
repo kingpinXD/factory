@@ -15,7 +15,10 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
+	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -31,7 +34,8 @@ import (
 // supervision is what one tick learns for supervising.
 type supervision struct {
 	// prev is the overall status.json as the last tick left it.
-	prev store.Overall
+	prev             store.Overall
+	coordinatorHolds []store.CoordinatorHold
 	// holds are the account's holds, this tick's included.
 	holds        []store.Hold
 	unknown      int
@@ -64,6 +68,8 @@ const (
 // overlap any clock that matters.
 const maxHolds = 20
 
+var errBabysitterRecoveryHeld = errors.New("babysitter recovery waits for account eligibility")
+
 // updateHolds opens a hold on the first tick the account holds work back,
 // and closes it on the first tick it does not. A hold is in one account
 // state: a change of state closes it and opens the next.
@@ -85,26 +91,40 @@ func (r *run) updateHolds() {
 
 // elapsed returns how long e's clock started at since has run by now,
 // without the time the account held e's work back.
+
 func (r *run) elapsed(e *entity, since time.Time) time.Duration {
+	if r.managedClock(e) {
+		return r.eligibleElapsed(e, since).Eligible
+	}
+	return r.legacyElapsed(e, since)
+}
+
+func (r *run) legacyElapsed(e *entity, since time.Time) time.Duration {
+	holds := r.claudeHeldIntervals(e)
 	repair := r.isRepair(e)
-	d := r.now.Sub(since)
 	for _, h := range r.sup.holds {
 		if repair && h.State == stateNearLimit {
 			continue
 		}
-		to := h.To
-		if to.IsZero() {
-			to = r.now
-		}
-		if from := later(h.From, since); to.After(from) {
-			d -= to.Sub(from)
-		}
+		holds = append(holds, h)
 	}
-	return d
+	return store.EligibleElapsed(since, r.now, holds, nil, since).Eligible
 }
 
 // supervised adds what supervision keeps to the overall status.
 func (r *run) supervised(o *store.Overall) {
+	o.CoordinatorHolds = r.coordinatorHolds()
+	if r.availability != nil {
+		o.AvailabilityHolds = r.availability.holds
+		o.AvailabilityCoverage = r.availability.coverage
+	} else {
+		o.AvailabilityHolds = r.sup.prev.AvailabilityHolds
+		o.AvailabilityCoverage = r.sup.prev.AvailabilityCoverage
+	}
+	o.ProviderListings = make(map[string]bool, len(r.inventories))
+	for provider, inventory := range r.inventories {
+		o.ProviderListings[provider] = inventory.Complete
+	}
 	o.Holds, o.UnknownListings, o.AutoContinue = r.sup.holds, r.sup.unknown, r.sup.autoContinue
 	for _, k := range slices.Sorted(maps.Keys(r.bases)) {
 		if read := r.bases[k]; read.err == nil && read.res.Red() && r.queuedOn(k) {
@@ -130,15 +150,14 @@ func (r *run) supervise() {
 	if !r.anySession() {
 		return
 	}
-	if _, known := r.listing(); !known {
-		return
-	}
 	for _, id := range r.order() {
 		e := r.ents[id]
 		switch {
-		case !r.workAllowed(e):
+		case !r.workAllowed(e) || r.claudeCoordinatorHeld(e) || r.managedClock(e) && r.clockHeld(e):
 		case e.session != nil:
 			r.superviseSession(e)
+		case e.work != nil:
+			r.superviseBabysitter(e)
 		case e.epic != nil && slices.Contains(plannerStates, e.cur.State), e.set != nil && e.cur.State == setRunning:
 			r.superviseOwner(e)
 		}
@@ -152,10 +171,15 @@ func (r *run) anySession() bool {
 
 // expectsLiveSession reports whether a session record expects a process:
 // then an empty listing is a failed one.
-func (r *run) expectsLiveSession() bool {
+func (r *run) expectsLiveSession(provider string) bool {
 	return slices.ContainsFunc(r.order(), func(id string) bool {
 		e := r.ents[id]
-		return e.session != nil && slices.Contains([]string{sessionStarting, sessionRunning, sessionTurnEnded, sessionCompacting}, e.cur.State)
+		if e.session != nil {
+			if repair, pending := claudePermissionRepair(e); pending && permissionRepairStopped(e, repair) {
+				return false
+			}
+		}
+		return e.session != nil && r.providerForEpic(e.entry.Epic) == provider && slices.Contains([]string{sessionStarting, sessionRunning, sessionTurnEnded, sessionCompacting}, e.cur.State)
 	})
 }
 
@@ -166,7 +190,7 @@ func (r *run) countListing() {
 	if !r.listed {
 		return
 	}
-	if r.sessionsKnown {
+	if r.inventoriesComplete() {
 		r.sup.unknown = 0
 		return
 	}
@@ -175,6 +199,17 @@ func (r *run) countListing() {
 		return
 	}
 	text := fmt.Sprintf("factory: `claude agents` failed or came back empty %d ticks in a row; no session starts or moves until it answers.", r.sup.unknown)
+	providers := []string{}
+	for provider, inventory := range r.inventories {
+		if !inventory.Complete {
+			providers = append(providers, provider)
+		}
+	}
+	slices.Sort(providers)
+	if len(providers) != 1 || providers[0] != "claude" {
+		text = fmt.Sprintf("factory: %s agent inventory was unavailable %d ticks in a row; affected providers wait for known execution evidence.", strings.Join(providers, ", "), r.sup.unknown)
+	}
+
 	if err := r.act("DM the user: the session listing is unknown", func(ctx context.Context) error { return r.d.Notify.DM(ctx, text) }); err != nil {
 		r.fail("%v", err)
 	}
@@ -184,7 +219,7 @@ func (r *run) countListing() {
 // autoContinueAtUsageLimit: past a usage limit, factory work would go on
 // with usage credits, and only user or managed settings can turn it off.
 func (r *run) checkAutoContinue() {
-	if r.d.Claude.Home == "" {
+	if r.d.Claude.Home == "" || onlyCodex(r.d.Brain) {
 		return
 	}
 	var settings struct {
@@ -207,8 +242,9 @@ func (r *run) superviseOwner(owner *entity) {
 	if sess == nil || !sess.open() || sess.cur.State == sessionCompacting {
 		return
 	}
-	s, ok := r.findSession(sess.session.Name)
-	if !ok || !s.Live() || len(r.undelivered(owner, sess)) > 0 {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present || !s.Live() || claudePermissionPrompt(s) || len(r.undelivered(owner, sess)) > 0 {
 		return
 	}
 	subject := r.subject(owner)
@@ -226,8 +262,86 @@ func (r *run) superviseOwner(owner *entity) {
 	switch {
 	case !acted:
 		r.nudge(owner, subject, s, st.why)
-	case last.Kind == events.KindNudge && r.elapsed(owner, last.At) >= st.window:
+	case last.Kind == events.KindNudge && r.elapsed(subject, last.At) >= st.window:
 		r.restart(subject, sess, s, st.why)
+	}
+}
+
+// babysitterRecovery requires the newest open slot and fresh evidence that no
+// writer is active. A pending boundary denies recovery even with no helper jobs.
+func (r *run) babysitterRecovery(it, sess *entity) (session.Session, bool) {
+	if !watched(it) || !r.workAllowed(it) ||
+		sess == nil || r.babysitterOf(it) != sess || !sess.open() ||
+		!slices.Contains([]string{sessionRunning, sessionTurnEnded}, sess.cur.State) ||
+		nativeBoundaryState(sess).pending() || r.helperBusy(it) {
+		return session.Session{}, false
+	}
+	observedLookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	observed := observedLookup.Session
+	if observedLookup.Presence != session.Present || !claudePermissionPrompt(observed) && (it.st.Unanswered == 0 || len(r.undelivered(it, sess)) > 0) {
+		return session.Session{}, false
+	}
+	ctx, cancel := r.call()
+	inventory, err := r.runtimeFor(observed.Executor).List(ctx)
+	cancel()
+	if err == nil {
+		err = r.validateInventory(observed.Executor, &inventory)
+	}
+	if err != nil {
+		r.fail("babysitter recovery listing: %v", err)
+		inventory.Complete = false
+	}
+	r.inventories[observed.Executor], r.inventoryErrors[observed.Executor] = inventory, err
+	lookup := inventory.Lookup(sess.session.Name)
+	r.notePresence(sess, lookup)
+	s := lookup.Session
+	// An old transcript cannot authorize idle-only recovery of a fresh writer.
+	idle := s.State == listedWorking && s.Status == listedIdle
+	ended := s.State == listedTurnEnded && (s.Status == "" || s.Status == listedIdle)
+	if err != nil || lookup.Presence != session.Present || !s.Live() || (!idle && !ended && !claudePermissionPrompt(s)) ||
+		s.ID != observed.ID || s.ConversationID != observed.ConversationID || s.PID != observed.PID || s.AttemptID != observed.AttemptID || s.Generation != observed.Generation {
+		return session.Session{}, false
+	}
+	return s, !r.helperBusy(it) && r.accountAllows(sess, false)
+}
+
+func (r *run) superviseBabysitter(it *entity) {
+	sess := r.babysitterOf(it)
+	if !watched(it) || it.st.Unanswered == 0 || sess == nil || !sess.open() || !r.turnEnded(sess) {
+		return
+	}
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present {
+		return
+	}
+	if _, exhausted := r.babysitterDying(it); exhausted {
+		return
+	}
+	// Idle transitions, receipt acks and unchanged checkpoints are not progress.
+	// Retain the original window when a nudge merely produces another idle turn.
+	since := later(it.cur.Since, startedAt(sess))
+	seen := map[string]bool{}
+	for _, ev := range it.evs {
+		if ev.Sender != it.id || ev.SHA256 == "" || (ev.Kind != events.KindEnd && ev.Kind != events.KindCheckpoint) {
+			continue
+		}
+		key := ev.Kind + ":" + ev.SHA256
+		if !seen[key] {
+			since = later(since, ev.At)
+			seen[key] = true
+		}
+	}
+	if r.elapsed(it, since) < time.Duration(r.b.Values.Inbox.CheckEvery) {
+		return
+	}
+	last, acted := lastAction(it, since)
+	why := fmt.Sprintf("its turn ended with %d unanswered review threads", it.st.Unanswered)
+	switch {
+	case !acted:
+		r.nudge(it, it, s, why)
+	case last.Kind == events.KindNudge && r.elapsed(it, last.At) >= time.Duration(r.b.Values.Supervision.NoProgress):
+		r.restart(it, sess, s, why)
 	}
 }
 
@@ -240,6 +354,15 @@ func (r *run) subject(owner *entity) *entity {
 	items, _ := r.itemsOf(owner)
 	for _, it := range items {
 		if _, ready := worktreeReady(it); ready && active(it) && !handedOver(it) {
+			return it
+		}
+	}
+	// Codex publication belongs to the repo worker, not its orchestrator.
+	if r.providerForEpic(owner.entry.Epic) != "claude" {
+		return nil
+	}
+	for _, it := range items {
+		if _, ready := worktreeReady(it); ready && r.openingPR(it) {
 			return it
 		}
 	}
@@ -259,37 +382,28 @@ type stall struct {
 // heartbeats: the helper's check points bound the delay) or when its work
 // shows no progress; a session whose turn ended stalls when its work is
 // open and nothing came for an inbox check interval.
-func (r *run) stalled(owner, subject, sess *entity, s claude.Session) (stall, bool) {
-	v := r.b.Values
-	turnEnded := r.turnEnded(sess)
-	if !turnEnded && s.State == listedWorking {
-		unacked := time.Duration(v.Inbox.Unacked)
-		if inbox := events.Inbox(owner.evs); len(inbox) > 0 && !r.helperBusy(owner) && r.elapsed(owner, inbox[0].At) >= unacked {
-			m := inbox[0]
-			return stall{fmt.Sprintf("message seq %d unacknowledged for %s", m.Seq, r.elapsed(owner, m.At).Round(time.Minute)), m.At, unacked}, true
-		}
-		if subject == nil {
-			return stall{}, false
-		}
-		p := r.progress(owner, subject, sess)
-		if r.elapsed(owner, p) >= time.Duration(v.Supervision.NoProgress) {
-			return stall{fmt.Sprintf("no progress on %s (%s) for %s", subject.id, subject.cur.State, r.elapsed(owner, p).Round(time.Minute)), p, time.Duration(v.Supervision.NoProgress)}, true
-		}
+func (r *run) stalled(owner, subject, sess *entity, s session.Session) (stall, bool) {
+	if r.claudeCoordinatorHeld(owner) || r.managedClock(owner) && r.clockHeld(owner) || subject != nil && (r.claudeCoordinatorHeld(subject) || r.managedClock(subject) && r.clockHeld(subject)) {
 		return stall{}, false
 	}
-	if subject == nil || !turnEnded {
+	if r.nativeBusy(owner.id) {
 		return stall{}, false
 	}
-	base := later(r.progress(owner, subject, sess), sess.cur.Since)
-	if r.elapsed(owner, base) < time.Duration(v.Inbox.CheckEvery) {
-		return stall{}, false
-	}
-	return stall{fmt.Sprintf("its turn ended with %s %s", subject.id, subject.cur.State), base, time.Duration(v.Supervision.NoProgress)}, true
+	return r.stalledWithTurnEnded(owner, subject, sess, s, r.turnEnded(sess))
+}
+
+func (r *run) stalledWithTurnEnded(owner, subject, sess *entity, s session.Session, turnEnded bool) (stall, bool) {
+	in := r.currentSupervisorReadings(owner, subject, r.supervisorStallInputs(owner, subject, sess, s, turnEnded))
+	st, _, ok := supervisorStall(in)
+	return st, ok
 }
 
 // helperBusy reports whether someone in the set's session heartbeat under
 // its lease within the last inbox check interval.
 func (r *run) helperBusy(owner *entity) bool {
+	if r.nativeBusy(owner.id) {
+		return true
+	}
 	if owner.set == nil {
 		return false
 	}
@@ -346,39 +460,105 @@ func lastAction(e *entity, since time.Time) (events.Event, bool) {
 }
 
 // nudge posts the session a reminder of its work, and counts it on subject.
-func (r *run) nudge(owner, subject *entity, s claude.Session, why string) {
-	text := r.nudgePrompt(owner, why)
-	if err := r.act(fmt.Sprintf("nudge %s: %s", s.Name, why), func(ctx context.Context) error { return r.d.Claude.Post(ctx, s.PID, text) }); err != nil {
+func (r *run) nudge(owner, subject *entity, s session.Session, why string) {
+	if owner.work != nil {
+		var ok bool
+		s, ok = r.babysitterRecovery(owner, r.babysitterOf(owner))
+		if !ok {
+			return
+		}
+	}
+	text := coordinatorText(s.Executor, r.nudgePrompt(owner, why))
+	key := "nudge:" + strconv.Itoa(r.n)
+	if s.Executor == "codex" {
+		previous := "initial"
+		for _, ev := range subject.evs {
+			if ev.Kind == events.KindNudge {
+				previous = eventRef(subject.id, ev)
+			}
+		}
+		key = "nudge:" + subject.id + ":" + s.ID + ":after:" + previous
+	}
+	if err := r.act(fmt.Sprintf("nudge %s: %s", s.Name, why), func(ctx context.Context) error {
+		return r.runtimeFor(s.Executor).Post(ctx, deliveryRef(s.Ref, key), text)
+	}); err != nil {
 		r.fail("%v", err)
 		return
 	}
-	r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindNudge, Sender: events.SenderProgram, Text: why, Key: "nudge:" + strconv.Itoa(r.n)}))
+	r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindNudge, Sender: events.SenderProgram, Text: why, Key: key}))
 }
 
 // restart stops the session and counts a restart on subject. Its machine
 // then moves it to stopped and resumes it with no flags.
-func (r *run) restart(subject, sess *entity, s claude.Session, why string) {
+func (r *run) restart(subject, sess *entity, s session.Session, why string) {
 	key := "restart:" + strconv.Itoa(r.n)
-	if err := r.stopSession(sess, s, key, fmt.Sprintf("restart %s: %s", s.Name, why)); err != nil {
+	if sess.session.Component == babysitterComponent {
+		var ok bool
+		s, ok = r.babysitterRecovery(subject, sess)
+		if _, exhausted := r.babysitterDying(subject); !ok || exhausted {
+			return
+		}
+		key = babysitterRestartPrefix + sess.id + ":" + strconv.Itoa(r.n)
+	}
+	if s.Executor == "codex" {
+		if _, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
+			if _, err := r.captureSupervisorCloseLocked(subject, sess); err != nil {
+				r.fail("%s: supervisor close request: %v", sess.id, err)
+			}
+			return
+		}
+	}
+	if err := r.stopCoordinator(sess, s, key, fmt.Sprintf("restart %s: %s", s.Name, why)); err != nil {
+		if errors.Is(err, errBabysitterRecoveryHeld) {
+			return
+		}
 		r.fail("%v", err)
 		return
 	}
-	r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: why, Key: key}))
+	if sess.session.Component != babysitterComponent {
+		r.logged(r.append(subject, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: why, Key: key}))
+	}
 }
 
 // stopSession stops a session and logs the stop in its log, so its machine
 // moves to stopped.
-func (r *run) stopSession(sess *entity, s claude.Session, key, what string) error {
-	if err := r.act(what, func(ctx context.Context) error { return r.d.Claude.Stop(ctx, s.ID) }); err != nil {
+func (r *run) stopSession(sess *entity, s session.Session, key, what string) error {
+	if err := r.act(what, func(ctx context.Context) error {
+		// Native fencing may have taken time since the recovery eligibility check.
+		if strings.HasPrefix(strings.TrimPrefix(key, nativeBoundaryPrefix), babysitterRestartPrefix) && !r.accountAllows(sess, false) {
+			return errBabysitterRecoveryHeld
+		}
+		return r.runtimeFor(s.Executor).Stop(ctx, s.Ref)
+	}); err != nil {
 		return err
 	}
-	_, err := r.append(sess, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: stopText, Key: "stop:" + key})
-	return err
+	r.invalidateInventory(s.Executor)
+	if _, err := r.append(sess, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: stopText, Key: "stop:" + key}); err != nil {
+		return err
+	}
+	// Native boundary recovery calls stopSession directly, not restart. Charge
+	// the successful stop here, using the original recovery key in both paths.
+	recoveryKey := strings.TrimPrefix(key, nativeBoundaryPrefix)
+	if strings.HasPrefix(recoveryKey, babysitterRestartPrefix) {
+		owner := r.ents[sess.session.Task]
+		if owner == nil {
+			return fmt.Errorf("babysitter restart owner %s is not indexed", sess.session.Task)
+		}
+		_, err := r.append(owner, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: what, Key: recoveryKey})
+		return err
+	}
+	return nil
 }
 
 // nudgePrompt names why the session is nudged and what it works on.
 func (r *run) nudgePrompt(owner *entity, why string) string {
 	lead := fmt.Sprintf("Nudge: %s. Run `factory inbox %s`, then carry on from your newest event.", why, owner.id)
+	if owner.work != nil {
+		if r.stepOpen(owner) {
+			lead += " Finish or recover the unfinished babysit pass. Preserve its uncommitted work and run the remaining tests before pushing and answering review threads. Checkpoint only at a clean step boundary; do not invent an end or a report."
+		}
+		return r.babysitterPromptFor(owner, r.deliveries(owner)) + "\n" + lead + "\n"
+	}
 	if owner.set != nil {
 		return r.orchestratorPrompt(owner, lead, r.workingItems(owner), r.deliveries(owner))
 	}
@@ -391,7 +571,7 @@ func (r *run) nudgePrompt(owner *entity, why string) string {
 func (r *run) resumePrompt(owner *entity, component string, news []delivery) string {
 	prompt := r.wakePrompt(owner, component, news)
 	if component == componentOrchestrator {
-		prompt = r.orchestratorPrompt(owner, "You were stopped and are resumed. Carry on from your newest event.", r.workingItems(owner), news)
+		prompt = r.orchestratorPrompt(owner, "You were stopped and are resumed. Carry on from your newest event.", r.codexWorkingItems(owner), news)
 	}
 	return prompt + r.outboxSection(owner)
 }
@@ -433,15 +613,37 @@ func openIntents(e *entity, sender string) []events.Event {
 // heartbeat and lease-ok fail and it pushes nothing. Its next prompt
 // carries the new number.
 func (r *run) checkLease(set, sess *entity) {
+	if r.managedClock(set) && r.clockHeld(set) {
+		return
+	}
+	if nativeBoundaryState(sess).pending() {
+		return
+	}
+	if r.nativeBusy(set.id) {
+		return
+	}
 	lease := set.st.Lease
 	renewed := r.leaseRenewed(set, sess)
 	if lease == 0 || r.elapsed(set, renewed) < time.Duration(r.b.Values.Lease) {
 		return
 	}
+	if err := r.fenceHelpers(set, "lease expiry"); err != nil {
+		r.fail("%s: %v", set.id, err)
+		return
+	}
 	set.st.Lease++
 	text := fmt.Sprintf("lease %d expired after %s with no heartbeat; lease %d granted", lease, r.elapsed(set, renewed).Round(time.Minute), set.st.Lease)
 	r.say("%s: %s", set.id, text)
-	r.logged(r.grantLease(set, text))
+	if _, err := r.grantLease(set, text); err != nil {
+		r.fail("%s: %v", set.id, err)
+		return
+	}
+	if r.managedClock(set) {
+		r.invalidateAvailability()
+	}
+	if err := r.reopenHelpers(set); err != nil {
+		r.fail("%s: %v", set.id, err)
+	}
 }
 
 // leaseRenewed returns when the set's current lease was last renewed: a
@@ -460,8 +662,9 @@ func (r *run) leaseRenewed(set, sess *entity) time.Time {
 // stopped; an automatic compaction gets its "you were compacted" message;
 // on a full reconcile, a session that used a denied model is stopped.
 func (r *run) superviseSession(sess *entity) {
-	s, ok := r.findSession(sess.session.Name)
-	if !ok || !s.Live() {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present || !s.Live() {
 		return
 	}
 	if sess.cur.State == sessionFinished {
@@ -470,6 +673,10 @@ func (r *run) superviseSession(sess *entity) {
 				r.fail("%v", err)
 			}
 		}
+		return
+	}
+	if claudePermissionPrompt(s) {
+		r.recoverClaudePermissionPrompt(sess, s)
 		return
 	}
 	r.postCompactions(sess, s)
@@ -481,12 +688,18 @@ func (r *run) superviseSession(sess *entity) {
 // checkModels stops a session whose transcript, or a helper's, shows a
 // denied model, and logs an error on what it works on, which then waits for
 // the user.
-func (r *run) checkModels(sess *entity, s claude.Session) {
+func (r *run) checkModels(sess *entity, s session.Session) {
 	ctx, cancel := r.call()
-	models, err := r.d.Claude.Models(ctx, s.SessionID)
+	models, err := r.runtimeFor(s.Executor).Models(ctx, s.Ref)
 	cancel()
 	if errors.Is(err, claude.ErrNoTranscript) {
 		return
+	}
+	if s.Executor == "codex" && errors.Is(err, session.ErrModelTelemetryUnavailable) {
+		selected, readErr := executor.ReadSelection(r.d.Brain, sess.entry.Epic)
+		if readErr == nil && selected.Executor == "codex" && selected.Profile.ModelEvidencePolicy == executor.CodexModelEvidencePolicy {
+			return
+		}
 	}
 	if err != nil {
 		r.fail("%s: %v", sess.id, err)
@@ -503,7 +716,7 @@ func (r *run) checkModels(sess *entity, s claude.Session) {
 	for _, file := range slices.Sorted(maps.Keys(models)) {
 		for _, m := range models[file] {
 			denied, ok := blueprint.DeniedModel(m, r.b.Deny.Models)
-			key := deniedModelPrefix + s.SessionID + ":" + file
+			key := deniedModelPrefix + s.ConversationID + ":" + file
 			if !ok || subject.has(key) || owner.has(key) {
 				continue
 			}
@@ -533,6 +746,9 @@ func (r *run) countOtherRestarts() {
 				r.logged(r.append(e, events.Event{At: r.now, Kind: events.KindRestart, Sender: events.SenderProgram, Text: t.From + " timed out", Key: "restart:timeout:" + seqRef(t)}))
 				r.restartWorker(e, "restart:timeout:"+e.id+":"+seqRef(t))
 			case e.session != nil && t.From == sessionDead && t.To == sessionStarting:
+				if _, pending := claudePermissionRepair(e); pending {
+					continue
+				}
 				owner := r.ents[e.session.Task]
 				if owner == nil {
 					continue
@@ -564,11 +780,20 @@ func (r *run) restartWorker(e *entity, key string) {
 	if sess == nil {
 		return
 	}
-	s, ok := r.findSession(sess.session.Name)
-	if !ok || !s.Live() {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	s := lookup.Session
+	if lookup.Presence != session.Present || !s.Live() {
 		return
 	}
-	if err := r.stopSession(sess, s, key, fmt.Sprintf("restart %s: %s timed out in %s", s.Name, e.id, e.cur.State)); err != nil {
+	if s.Executor == "codex" {
+		if _, ok := r.runtimeFor("codex").(*codex.Runtime); ok {
+			if _, err := r.captureWorkTimeoutCloseLocked(e, sess); err != nil {
+				r.fail("%s: timeout close request: %v", sess.id, err)
+			}
+			return
+		}
+	}
+	if err := r.stopCoordinator(sess, s, key, fmt.Sprintf("restart %s: %s timed out in %s", s.Name, e.id, e.cur.State)); err != nil {
 		r.fail("%v", err)
 	}
 }
@@ -715,9 +940,10 @@ const (
 // plan version, the error of a session that ran a denied model, and the
 // restart of a session found dead.
 const (
-	refusedPlanPrefix = "refused-plan:"
-	deniedModelPrefix = "fable:"
-	deadRestartPrefix = "restart:dead:"
+	refusedPlanPrefix       = "refused-plan:"
+	deniedModelPrefix       = "fable:"
+	deadRestartPrefix       = "restart:dead:"
+	babysitterRestartPrefix = "restart:babysitter:"
 )
 
 // deadLettered: an agent reported the same error the blueprint's number of
@@ -772,11 +998,15 @@ func (r *run) babysitterDying(it *entity) (string, bool) {
 	}
 	prefix := deadRestartPrefix + babysitterID(it.id, 1)
 	all := countedSince(it, lastLeft(it, stateNeedsYou), func(ev events.Event) bool {
-		return ev.Kind == events.KindRestart && strings.HasPrefix(ev.Key, prefix)
+		return ev.Kind == events.KindRestart && (strings.HasPrefix(ev.Key, prefix) || strings.HasPrefix(ev.Key, babysitterRestartPrefix+it.id+"-"))
 	})
 	hour := slices.DeleteFunc(slices.Clone(all), func(ev events.Event) bool { return !ev.At.After(r.now.Add(-time.Hour)) })
-	if len(hour) < r.restartLimit(babysitterComponent) && len(all) < r.b.Values.Supervision.RestartsPerItem {
+	if len(hour) < r.restartLimit(babysitterComponent) && len(itemRestarts(it)) < r.b.Values.Supervision.RestartsPerItem {
 		return "", false
+	}
+	if len(all) == 0 || slices.ContainsFunc(all, func(ev events.Event) bool { return strings.HasPrefix(ev.Key, babysitterRestartPrefix) }) {
+		counted := itemRestarts(it)
+		return "babysitter-stalled:" + seqRef(counted[len(counted)-1]), true
 	}
 	return fmt.Sprintf("%s%d:%s", babysitterDiedRef, len(all), seqRef(all[len(all)-1])), true
 }
@@ -857,12 +1087,34 @@ func (r *run) needsYouWhy(e *entity, t events.Event) string {
 	case strings.HasPrefix(ref, deniedModelRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, deniedModelRef))
 		return ev.Text
+	case strings.HasPrefix(ref, claudePermissionFailurePrefix):
+		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, claudePermissionFailurePrefix))
+		return ev.Text
+	case strings.HasPrefix(ref, "babysitter-stalled:"):
+		if ev, ok := eventBySeq(e, strings.TrimPrefix(ref, "babysitter-stalled:")); ok && e.work != nil && (strings.HasPrefix(ev.Key, deadRestartPrefix+sessionID(e.work.Set, componentOrchestrator)+":") || e.st.PR == 0 && r.babysitterOf(e) == nil) {
+			return "its orchestrator exhausted its recovery budget; retry to resume its work"
+		}
+		return "its babysitter exhausted its recovery budget; the PR is not watched until you retry"
 	case strings.HasPrefix(ref, babysitterDiedRef):
 		n, _, _ := strings.Cut(strings.TrimPrefix(ref, babysitterDiedRef), ":")
 		return fmt.Sprintf("its babysitter died and was resumed %s times (the limit is %d an hour, %d in all); its PR %s is not watched until you retry",
 			n, r.restartLimit(babysitterComponent), r.b.Values.Supervision.RestartsPerItem, e.st.PRURL)
 	case strings.HasPrefix(ref, timedOutRef):
 		return fmt.Sprintf("%s timed out %d times, and its planner was restarted each time", t.From, r.b.Values.Supervision.PlannerRunsPerProblem)
+	case strings.HasPrefix(ref, publicationHoldRef):
+		return strings.TrimPrefix(ref, publicationHoldRef) + "; use factory settle-publication " + e.id + " --write <key> --outcome landed (--head <sha> for push, --pr <N> for PR), or --outcome not-landed after resolving the conflict; then factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef) && strings.HasSuffix(ref, ":authority-changed"):
+		return "Codex verification changed and the saved coordinator inputs or ownership no longer match; restore the recorded configuration before factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef) && strings.HasSuffix(ref, ":helpers-unsettled"):
+		return "Codex verification changed and the old coordinator has unsettled helpers; settle their stop and publication evidence, then factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef) && strings.HasSuffix(ref, ":closure-unconfirmed"):
+		return "Codex verification changed and the old coordinator closure is unconfirmed; resolve its saved recovery hold, then factory retry " + e.id
+	case strings.HasPrefix(ref, codexQualificationRef):
+		return "Codex contract-2 verification changed; factory retry " + e.id + " authorizes stopping the old " + sessionComponent(e) + " and renewing its authority after closure and helper settlement"
+	case strings.HasPrefix(ref, unknownCodexDeliveryRef):
+		return "Codex session " + strings.TrimPrefix(ref, unknownCodexDeliveryRef) + " has an unknown receipt; factory retry authorizes one delivery"
+	case strings.HasPrefix(ref, missingRecheckScopeRef):
+		return "no saved re-check scope; use factory replan " + e.id + " \"<what to re-check>\" to provide one"
 	case strings.HasPrefix(ref, plansRefusedRef):
 		ev, _ := eventBySeq(e, strings.TrimPrefix(ref, plansRefusedRef))
 		refusal, _, _ := strings.Cut(ev.Text, ". Write a fixed new version")

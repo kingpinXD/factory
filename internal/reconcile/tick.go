@@ -17,20 +17,33 @@ import (
 	"github.com/kingpinXD/factory/internal/agents"
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/claude"
+	"github.com/kingpinXD/factory/internal/codex"
 	"github.com/kingpinXD/factory/internal/events"
+	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/fsm"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/notify"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
 // Deps are what the tick and `factory add` act through.
 type Deps struct {
-	Brain  string
-	Now    func() time.Time
-	GitHub gh.Client
-	Claude claude.Client
-	Notify notify.Notifier
+	// ConfigureCodex is requested by intake before publishing a Codex selection.
+	ConfigureCodex    func(*Deps) error
+	CodexSetupError   error
+	Helpers           *helper.Service
+	StartHelpers      func(context.Context) error
+	Brain             string
+	Now               func() time.Time
+	GitHub            gh.Client
+	Claude            claude.Client
+	Runtimes          map[string]session.Runtime
+	Quotas            map[string]helper.UsageReader
+	QuotaForSelection func(executor.Selection) helper.UsageReader
+	ExecutorAdmission func(context.Context, executor.Selection) error
+	Notify            notify.Notifier
 	// Post posts the review requests in review_channel as the user.
 	Post notify.Poster
 	// Account is the tick's first step.
@@ -68,6 +81,13 @@ const maxMoves = 10
 // Tick runs one tick under the tick lock. A dry run takes no lock and makes
 // no side effect: it reads what a tick reads and prints what it would do.
 func Tick(ctx context.Context, d Deps, dryRun bool) error {
+	return tickUsingVerificationQualification(ctx, d, dryRun, codex.Contract2AcceptanceAuthority)
+}
+
+func tickUsingVerificationQualification(ctx context.Context, d Deps, dryRun bool, verify nativeAcceptance) error {
+	if verify == nil {
+		verify = codex.Contract2AcceptanceAuthority
+	}
 	if d.TickTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, d.TickTimeout)
@@ -80,7 +100,20 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	// so a slow tick never delays a stop at the pause point. It runs before
 	// anything is read, so the tick sees the sessions it stopped and the
 	// resumes it asked for.
+	var helperErr error
+	if !dryRun && d.StartHelpers != nil {
+		helperErr = d.StartHelpers(ctx)
+	}
 	acctState, acctErr := stepAccount(ctx, d, dryRun)
+	var modernRecoveryErr error
+	if !dryRun {
+		modernRecoveryErr = recoverModernCoordinators(ctx, d)
+	}
+	var verificationObservations []VerifierCandidateObservation
+	var verificationObservationErr error
+	if !dryRun {
+		verificationObservations, verificationObservationErr = observeVerificationCandidatesUsing(ctx, d, verify)
+	}
 	if !dryRun {
 		unlock, err := store.Lock(d.Brain, "tick")
 		if err != nil {
@@ -92,17 +125,45 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 	if err != nil {
 		return err
 	}
+	r.verificationQualifier = verify
+	if helperErr != nil {
+		r.fail("native runner: %v", helperErr)
+	}
+	if modernRecoveryErr != nil {
+		r.fail("Codex attempt recovery: %v", modernRecoveryErr)
+	}
+	if verificationObservationErr != nil {
+		r.fail("verification observation: %v", verificationObservationErr)
+	}
 	r.useAccount(acctState, acctErr)
 	if err := r.loadBlueprint(); err != nil {
 		return err
 	}
 	r.attachMachines()
+	if !dryRun {
+		if err := r.prepareVerificationDecisionsLocked(verificationObservations); err != nil {
+			return err
+		}
+	}
+	r.recoverRuntimes()
+	r.manageCodexCoordinators()
+	r.pauseCodexSessions()
+	r.recoverHelperOwnership()
 	if r.full {
 		r.reconcileGitHub()
 		r.watchBases()
 		r.startRepairs()
 		r.noteRepairs()
 	}
+	r.prepareAvailability()
+	for _, id := range r.order() {
+		e := r.ents[id]
+		if r.availability.managed[id] {
+			r.codexQuota(e, false)
+			r.inventory("codex")
+		}
+	}
+	r.observeAvailabilityHolds()
 	for _, id := range r.order() {
 		r.tickEntity(r.ents[id])
 	}
@@ -135,6 +196,14 @@ func Tick(ctx context.Context, d Deps, dryRun bool) error {
 // tickEntity reads and moves one entity. A panic stops only this entity: it
 // is logged as an error, and the tick goes on with the others.
 func (r *run) tickEntity(e *entity) {
+	if err := r.executorSetupError(e); err != nil {
+		e.st.ExecutorHold = err.Error()
+		if epic := r.ents[e.entry.Epic]; epic != nil {
+			epic.st.ExecutorHold = err.Error()
+		}
+		return
+	}
+
 	defer func() {
 		if p := recover(); p != nil {
 			text := fmt.Sprintf("panic: %v", p)
@@ -144,11 +213,22 @@ func (r *run) tickEntity(e *entity) {
 			}
 		}
 	}()
+	if r.managedClock(e) {
+		e.cur = fsm.HoldClock(e.cur, r.now, r.clockHeld(e))
+	}
 	if e.session != nil {
-		if _, known := r.listing(); !known {
+		lookup := r.lookupSession(e.entry.Epic, e.session.Name)
+		r.notePresence(e, lookup)
+		if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
 			return
 		}
 		r.observe(e)
+		if _, pending := claudePermissionRepair(e); pending && e.cur.State == sessionStarting {
+			if err := r.driveClaudePermissionRepair(e); err != nil {
+				r.fail("%s: %v", e.id, err)
+			}
+			return
+		}
 		r.measure(e)
 	}
 	if err := r.refuseStaleUIAnswers(e); err != nil {
@@ -161,11 +241,14 @@ func (r *run) tickEntity(e *entity) {
 
 // run is one tick's view of the factory.
 type run struct {
-	uiPlans map[string]uiPinnedPlan
-	d       Deps
-	ctx     context.Context
-	dry     bool
-	now     time.Time
+	verificationQualifier nativeAcceptance
+	codexLaunched         map[codex.AttemptRef]bool
+	availability          *availabilityState
+	uiPlans               map[string]uiPinnedPlan
+	d                     Deps
+	ctx                   context.Context
+	dry                   bool
+	now                   time.Time
 	// n is this tick's number; full is set on a full reconcile of GitHub.
 	n    int
 	full bool
@@ -181,14 +264,15 @@ type run struct {
 	// is ok.
 	accountState string
 
-	listed        bool
-	sessions      []claude.Session
-	sessionsKnown bool
-	bases         map[string]baseRead
-	blockerReads  map[string]blockerRead
-	agents        map[string]agents.Agent
-	errs          []string
-	sup           supervision
+	listed          bool
+	inventories     map[string]session.Inventory
+	inventoryErrors map[string]error
+	providerQuotas  map[string]codexQuotaObservation
+	bases           map[string]baseRead
+	blockerReads    map[string]blockerRead
+	agents          map[string]agents.Agent
+	errs            []string
+	sup             supervision
 	// repairs are the open repair episodes, carried from the last tick;
 	// closed are those this tick closed.
 	repairs []store.RepairEpisode
@@ -236,6 +320,12 @@ func (r *run) account() { r.useAccount(stepAccount(r.ctx, r.d, r.dry)) }
 // stepAccount runs the account step on its own budget, under the account
 // lock: a second step waits for the first. A dry run takes no lock.
 func stepAccount(ctx context.Context, d Deps, dryRun bool) (string, error) {
+	if err := selectionReadError(d.Brain); err != nil {
+		return "", err
+	}
+	if onlyCodex(d.Brain) {
+		return stateOK, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, d.AccountTimeout)
 	defer cancel()
 	if !dryRun {
@@ -376,7 +466,13 @@ func (r *run) advance(e *entity) {
 		}
 		seen[e.cur.State] = true
 	}
-	next, fired := fsm.Timeout(e.m, e.cur, r.now, r.held(e))
+	var next fsm.Cur
+	var fired bool
+	if r.managedClock(e) {
+		next, fired = fsm.TimeoutEligible(e.m, e.cur, r.now, r.clockHeld(e), r.eligibleElapsed(e, e.cur.Since).Eligible)
+	} else {
+		next, fired = fsm.Timeout(e.m, e.cur, r.now, r.held(e))
+	}
 	if !fired {
 		e.cur = next
 		return
@@ -392,7 +488,7 @@ func (r *run) held(e *entity) bool {
 	if e.entry.Kind == blueprint.MachineAccount {
 		return r.sup.usage.idle
 	}
-	return !r.workAllowed(e)
+	return !r.workAllowed(e) || r.claudeCoordinatorHeld(e)
 }
 
 // step tries each move out of the entity's state, in blueprint order, and
@@ -448,10 +544,25 @@ func candidates(m blueprint.Machine, state string) []blueprint.Transition {
 // transition, so they are safe to repeat.
 func (r *run) move(e *entity, next fsm.Cur, trigger, ref string) (bool, error) {
 	from := e.cur.State
+	_, modernRuntime := r.runtimeFor("codex").(*codex.Runtime)
+	modernTerminal := modernRuntime && e.session == nil && r.providerForEpic(e.entry.Epic) == "codex" && e.m.States[next.State].End
+	if err := r.prepareCoordinatorTerminalMove(e, next, trigger, ref); err != nil {
+		return false, err
+	}
+	if !modernTerminal && (next.State == workCancelled || (e.work != nil && e.m.States[next.State].End)) {
+		if err := r.fenceHelpers(e, "state transition"); err != nil {
+			return false, err
+		}
+	}
 	next.Prev = returnFromMerging(e, from, next.Prev)
 	key := events.Key(e.id, from, next.State, ref, next.Attempt)
 	if e.has(key) {
 		return false, nil
+	}
+	if e.session != nil && next.State == sessionCompacting {
+		if _, err := r.beginNativeBoundary(e, "compact", key); err != nil {
+			return false, err
+		}
 	}
 	logged, err := r.append(e, events.Event{
 		Kind:       events.KindTransition,

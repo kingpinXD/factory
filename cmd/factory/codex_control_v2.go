@@ -1,0 +1,781 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"reflect"
+
+	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/codex"
+	"github.com/kingpinXD/factory/internal/controlrecord"
+	"github.com/kingpinXD/factory/internal/effects"
+	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/helper"
+	"github.com/kingpinXD/factory/internal/reconcile"
+	"github.com/kingpinXD/factory/internal/session"
+	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/toolcontract"
+)
+
+func coordinatorControlV2(ctx context.Context, brain string, attempt codex.AttemptRef, data []byte) (output any, result error) {
+	stage := "request_decode"
+	var originalRef controlrecord.OriginalRequestRef
+	originalFresh := false
+	var release func() error
+	defer func() {
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
+		if result == nil {
+			if failure, ok := output.(toolcontract.ToolFailure); ok && failure.ToolError != "" && originalRef.Path != "" {
+				if !originalFresh {
+					output, result = nil, effects.ErrUnresolved
+				} else {
+					if failure.Code == "" {
+						failure.Code = "invalid_input"
+						output = failure
+					}
+					result = errors.Join(controlrecord.StoreFailure(brain, originalRef, stage, failure.Code), codex.RecordAttemptControlRefusal(brain, attempt, stage, failure.Code))
+					return
+				}
+			} else {
+				return
+			}
+		}
+		diagnosticErr := codex.RecordControlFailure(brain, attempt, data, stage, result)
+		if originalRef.Path != "" {
+			diagnosticErr = errors.Join(diagnosticErr, controlrecord.StoreFailure(brain, originalRef, stage, codex.ControlFailureCode(result), helper.ControlAdmissionSubReason(result)))
+		}
+		if diagnosticErr == nil && originalFresh {
+			if corrected, ok := controlAdmissionFailure(stage, result); ok {
+				output, result = corrected, nil
+				return
+			}
+		}
+		result = errors.Join(result, diagnosticErr)
+	}()
+
+	invocation, err := codex.DecodeToolInvocation(data)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.Tool != toolcontract.FactoryControl {
+		return nil, codex.ErrObservationUnknown
+	}
+	stage = "control_ingress"
+	spec, err := codex.ValidateAttemptControlIngress(ctx, brain, attempt, invocation.ThreadID, invocation.TurnID)
+	if err != nil {
+		return nil, err
+	}
+	stage = "coordinator_authority"
+	if err := reconcile.CoordinatorAuthority(brain, spec); err != nil {
+		return nil, err
+	}
+	stage = "tool_arguments"
+	payload, err := codex.ToolArguments(invocation)
+	if err != nil {
+		return nil, err
+	}
+	stage = "payload_decode"
+	envelope, input, err := toolcontract.DecodeRequestForContract(toolcontract.FactoryControl, 2, payload)
+	if err != nil {
+		return correctedControlReply(err)
+	}
+	id := effects.ControlID{Attempt: effects.AttemptKey{SessionID: attempt.SessionID, AttemptID: attempt.AttemptID}, ThreadID: invocation.ThreadID, TurnID: invocation.TurnID, CallID: invocation.CallID}
+	stage = "original_build"
+	original, err := controlrecord.NewOriginal(invocation.Tool, payload, &id, nil)
+	if err != nil {
+		return nil, err
+	}
+	stage = "writer_capture"
+	writer, err := (reconcile.NativeAuthority{Brain: brain}).CaptureControlOutputWriter()
+	if err != nil {
+		return nil, err
+	}
+	stage = "executable_lookup"
+	binary, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	stage = "program_effects"
+	programme, err := reconcile.NewProgramEffects(brain, binary)
+	if err != nil {
+		return nil, err
+	}
+	stage = "control_lock"
+	release, err = controlLock(ctx, brain)
+	if err != nil {
+		return nil, err
+	}
+	stage = "control_authority_recheck"
+	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
+		return nil, err
+	}
+	stage = "original_lookup"
+	if _, _, lookupErr := controlrecord.FindControlOriginal(brain, id); errors.Is(lookupErr, os.ErrNotExist) {
+		originalFresh = true
+	} else if lookupErr != nil {
+		return nil, lookupErr
+	}
+	stage = "original_request"
+	originalRef, err = controlrecord.StoreOriginal(brain, original)
+	if err != nil {
+		return nil, err
+	}
+	stage = "owner_authority"
+	ownerAuthority, err := reconcile.ResolveOwnerAuthority(ctx, brain, spec.EpicID, spec.Task)
+	if err != nil {
+		return nil, err
+	}
+	service := helperService(brain)
+	stage = "outcome_recovery"
+	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
+		stage = "outcome_binding_validation"
+		if record.Input.Operation != original.Operation || record.Input.PayloadSHA256 != original.PayloadSHA256 {
+			return nil, effects.ErrEvidence
+		}
+		stage = "outcome_validation"
+		if err := programme.Service().Controls.ValidateOutcome(ctx, id, record.Input, record.Outcome); err != nil {
+			return nil, err
+		}
+		stage = "outcome_completion"
+		if _, err := programme.Service().CompleteControl(ctx, id, record.Outcome); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(record.Reply), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	var control effects.ControlReceiptRef
+	var controlInput effects.ControlInput
+	var witness controlrecord.ImmutableRef
+	switch envelope.Op {
+	case "helper_submit", "helper_continue", "helper_cancel":
+		stage = "helper_ingress_build"
+		source, err := reconcile.BuildControlIngressLocked(ctx, brain, originalRef, writer)
+		if err != nil {
+			return nil, err
+		}
+		stage = "helper_admission_capture"
+		witness, err = service.CaptureControlAdmission(ctx, originalRef, source)
+		if err != nil {
+			return nil, codexHelperInputError(err)
+		}
+		controlInput = source.Input
+	case "event", "heartbeat", "inbox":
+		if envelope.Op == "inbox" && localControlV2(envelope.Op, input) {
+			stage = "local_input"
+			controlInput, err = localControlInputV2(ctx, brain, spec, original, input)
+			if err != nil {
+				return correctedControlReply(err)
+			}
+			break
+		}
+		stage = "event_source_capture"
+		witness, err = reconcile.CaptureControlEventSourceLocked(ctx, brain, originalRef, writer)
+		if err != nil {
+			return correctedControlReply(err)
+		}
+		stage = "event_source_read"
+		source, err := reconcile.ReadControlEventSourceLocal(ctx, brain, witness)
+		if err != nil {
+			return nil, err
+		}
+		controlInput = source.Input
+	case "file_write":
+		var source helper.ControlIngressSource
+		stage = "output_ingress_capture"
+		witness, source, err = reconcile.CaptureControlOutputIngressLocked(ctx, brain, originalRef, writer)
+		if err != nil {
+			return nil, err
+		}
+		controlInput = source.Input
+	default:
+		if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
+			stage = "read_source_capture"
+			witness, err = reconcile.CaptureCoordinatorReadSourceLocked(ctx, brain, originalRef, reconcile.ControlReadDirect, writer)
+			if err != nil {
+				return nil, err
+			}
+			stage = "read_source_read"
+			pre, err := reconcile.ReadControlReadPreSourceLocal(ctx, brain, witness)
+			if err != nil {
+				return nil, err
+			}
+			if pre.Coordinator == nil {
+				return nil, effects.ErrEvidence
+			}
+			controlInput = pre.Coordinator.Ingress.Input
+		} else {
+			stage = "local_input"
+			controlInput, err = localControlInputV2(ctx, brain, spec, original, input)
+			if err != nil {
+				return correctedControlReply(err)
+			}
+		}
+	}
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		stage = "write_source_store"
+		witness, err = controlrecord.StoreWriteSource(brain, controlrecord.WriteSource{Schema: 2, Original: originalRef, Input: controlInput, Owner: ownerAuthority})
+		if err != nil {
+			return nil, err
+		}
+	}
+	stage = "control_authority_recheck"
+	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
+		return nil, err
+	}
+	stage = "work_admission_check"
+	if err := service.CheckWorkControlAdmission(ctx, controlInput.Target.WorkID); err != nil {
+		return nil, err
+	}
+	var localProof controlrecord.ImmutableRef
+	var localSnapshot controlrecord.ReplySnapshot
+	if localControlV2(envelope.Op, input) {
+		stage = "reply_snapshot"
+		localProof, localSnapshot, err = controlrecord.CaptureReplySnapshot(brain, originalRef, controlInput, func() (any, error) {
+			value, readErr := scopedCoordinatorControl(ctx, brain, spec, controlRequest{Op: envelope.Op, Payload: envelope.Payload})
+			if readErr != nil {
+				return correctedControlReply(readErr)
+			}
+			return value, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+
+	}
+	stage = "control_authority_recheck"
+	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
+		return nil, err
+	}
+	stage = "work_admission_check"
+	if err := service.CheckWorkControlAdmission(ctx, controlInput.Target.WorkID); err != nil {
+		return nil, err
+	}
+	stage = "owner_authority_validation"
+	if err := reconcile.ValidateAdmittedOwnerAuthority(ctx, brain, ownerAuthority); err != nil {
+		return nil, err
+	}
+	stage = "control_enrollment"
+	control, err = programme.Service().EnrollControl(ctx, id, controlInput)
+	if err != nil {
+		return nil, err
+	}
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		stage = "control_enrollment_snapshot"
+		if _, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput}); err != nil {
+			return nil, err
+		}
+	}
+	stage = "outcome_lookup"
+	if _, record, err := controlrecord.FindOutcome(brain, originalRef); err == nil {
+		stage = "outcome_binding_validation"
+		if !reflect.DeepEqual(record.Input, controlInput) {
+			return nil, effects.ErrEvidence
+		}
+		stage = "outcome_validation"
+		if err := programme.Service().Controls.ValidateOutcome(ctx, id, record.Input, record.Outcome); err != nil {
+			return nil, err
+		}
+		stage = "outcome_completion"
+		if _, err := programme.Service().CompleteControl(ctx, id, record.Outcome); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(record.Reply), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	var proof controlrecord.ImmutableRef
+	var outcome effects.ControlOutcome
+	var reply json.RawMessage
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, envelope.Op, 2) {
+		release()
+		release = nil
+		stage = "program_write"
+		var result controlrecord.WriteResult
+		proof, result, err = coordinatorProgramWrite(ctx, brain, spec, originalRef, original, control, controlInput, ownerAuthority)
+		stage = "program_write_lock_reentry"
+		var lockErr error
+		release, lockErr = controlLock(ctx, brain)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		if err != nil {
+			stage = "program_write"
+			return nil, err
+		}
+		reply = result.Reply
+		outcome = effects.ControlOutcome{Kind: effects.ControlWrite, Write: &effects.GuardReceipt{Operation: original.Operation, Code: "applied", EvidenceSHA256: proof.SHA256}}
+	} else if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
+		stage = "read_source_bind"
+		admission, err := reconcile.BindCoordinatorReadSourceLocked(ctx, brain, witness, control)
+		if err != nil {
+			return nil, err
+		}
+		stage = "program_read_prepare"
+		read, err := reconcile.PrepareProgramReadLocked(ctx, brain, admission)
+		if err != nil {
+			return nil, err
+		}
+		release()
+		release = nil
+		stage = "program_read_execute"
+		result, readErr := reconcile.RunProgramRead(ctx, brain, binary, read)
+		stage = "program_read_lock_reentry"
+		release, err = controlLock(ctx, brain)
+		if err != nil {
+			return nil, err
+		}
+		stage = "read_admission_lookup"
+		retained, err := reconcile.FindControlReadAdmissionLocal(ctx, brain, originalRef, reconcile.ControlReadDirect)
+		if err != nil {
+			return nil, err
+		}
+		stage = "read_admission_validation"
+		if !reflect.DeepEqual(retained, admission) {
+			return nil, effects.ErrEvidence
+		}
+		var noAction *reconcile.ProgramReadNoActionError
+		var unavailable *gh.ProgramReadUnavailable
+		if errors.As(readErr, &noAction) {
+			stage = "read_no_action_proof"
+			proof, reply, err = codex.StoreControlReadNoActionProof(ctx, brain, originalRef, noAction.Reference)
+		} else if readErr == nil || errors.As(readErr, &unavailable) && result != (codex.ProgramReadResultRef{}) {
+			stage = "read_proof"
+			proof, reply, err = codex.StoreControlReadProof(ctx, brain, originalRef, result)
+		} else {
+			stage = "program_read_execute"
+			return nil, readErr
+		}
+		if err != nil {
+			return nil, err
+		}
+		outcome = effects.ControlOutcome{Kind: effects.ControlRead, Read: &effects.ReadReceipt{Operation: original.Operation, RequestSHA256: original.PayloadSHA256, ResponseSHA256: sha256.Sum256(reply)}}
+	} else if envelope.Op == "file_write" {
+		stage = "output_build"
+		request, err := reconcile.BuildControlOutputLocked(ctx, brain, originalRef, &control)
+		if err != nil {
+			return nil, err
+		}
+		stage = "output_writer_validation"
+		if request.Writer != writer {
+			return nil, effects.ErrEvidence
+		}
+		stage = "output_prepare"
+		prepared, err := service.PrepareControlOutputLocked(ctx, request)
+		if err != nil {
+			return nil, err
+		}
+		stage = "output_commit"
+		proof, err = service.CommitControlOutputLocked(ctx, prepared)
+		if err != nil {
+			return nil, err
+		}
+		stage = "output_read"
+		final, _, err := service.ReadControlOutput(ctx, prepared)
+		if err != nil {
+			return nil, err
+		}
+		stage = "output_reply"
+		reply, err = json.Marshal(map[string]string{"path": final.Path, "filename": final.Caller.Coordinator.OutputName})
+		if err != nil {
+			return nil, err
+		}
+		outcome = effects.ControlOutcome{Kind: effects.ControlFile, File: &effects.FileReceipt{Path: final.Path, SHA256: final.FinalSHA256, PublicationSHA256: proof.SHA256}}
+
+	} else if envelope.Op == "event" || envelope.Op == "heartbeat" || envelope.Op == "inbox" && !localControlV2(envelope.Op, input) {
+		stage = "event_enrollment_snapshot"
+		enrollment, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput})
+		if err != nil {
+			return nil, err
+		}
+		stage = "event_execution"
+		result, err := reconcile.ApplyControlEventLocked(ctx, brain, witness, enrollment, writer)
+		if err != nil {
+			return nil, err
+		}
+		proof, outcome, reply = result.Proof, result.Outcome, result.Reply
+	} else if envelope.Op == "helper_submit" || envelope.Op == "helper_continue" || envelope.Op == "helper_cancel" {
+		stage = "helper_enrollment_snapshot"
+		enrollment, err := controlrecord.StoreEnrollmentSnapshot(brain, controlrecord.EnrollmentSnapshot{Schema: 2, Original: originalRef, Source: witness, Receipt: control, Input: controlInput})
+		if err != nil {
+			return nil, err
+		}
+		switch envelope.Op {
+		case "helper_submit":
+			stage = "helper_submit"
+			_, err = service.SubmitControl(ctx, witness, enrollment)
+		case "helper_continue":
+			stage = "helper_continue"
+			_, err = service.ContinueControl(ctx, witness, enrollment)
+		case "helper_cancel":
+			stage = "helper_cancel"
+			_, _, err = service.AdmitControlCancellation(ctx, witness)
+		}
+		if err != nil {
+			return nil, err
+		}
+		var admission helper.ControlAdmissionReceipt
+		stage = "helper_admission_lookup"
+		proof, admission, err = service.LookupControlAdmission(ctx, witness)
+		if err != nil {
+			return nil, err
+		}
+		stage = "helper_admission_reply"
+		reply, err = codex.ControlAdmissionReply(admission)
+		if err != nil {
+			return nil, err
+		}
+		outcome = effects.ControlOutcome{Kind: effects.ControlBroker, Broker: &effects.BrokerAdmission{JobID: admission.Accepted.JobID, Round: admission.Accepted.Round, RequestSHA256: admission.RequestSHA256, ScopeSHA256: admission.ScopeSHA256}}
+	} else {
+		proof = localProof
+		reply = localSnapshot.Reply
+		outcome = effects.ControlOutcome{Kind: effects.ControlRead, Read: &effects.ReadReceipt{Operation: original.Operation, RequestSHA256: original.PayloadSHA256, ResponseSHA256: localSnapshot.ResponseSHA256}}
+
+	}
+	record := controlrecord.OutcomeRecord{Schema: 2, Original: originalRef, Input: controlInput, Outcome: outcome, Reply: reply, ReplySHA256: sha256.Sum256(reply), Proof: proof}
+	stage = "outcome_record"
+	if _, err := controlrecord.StoreOutcome(brain, record); err != nil {
+		return nil, err
+	}
+	stage = "outcome_completion"
+	if _, err := programme.Service().CompleteControl(ctx, id, outcome); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(reply), nil
+}
+func recheckControlV2(ctx context.Context, brain string, id effects.ControlID, spec session.Spec) error {
+	current, err := codex.ReadAttemptControlLocal(ctx, brain, id)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(current, spec) {
+		return effects.ErrAuthority
+	}
+	return reconcile.CoordinatorAuthority(brain, current)
+}
+func localControlV2(op string, input toolcontract.Input) bool {
+	switch op {
+	case "brain_read", "plan_input", "epic_file", "events", "lease_check", "file_read", "query", "helper_result":
+		return true
+	case "inbox":
+		p, ok := input.(*toolcontract.ControlInput)
+		return ok && p.Ack == 0
+	}
+	return false
+}
+func localControlInputV2(ctx context.Context, brain string, spec session.Spec, original controlrecord.OriginalRequest, input toolcontract.Input) (effects.ControlInput, error) {
+	result := effects.ControlInput{Operation: original.Operation, PayloadSHA256: original.PayloadSHA256}
+	if toolcontract.IsWriteOperationForContract(toolcontract.FactoryControl, original.Operation, 2) {
+		ix, err := store.ReadIndex(brain)
+		if err != nil {
+			return result, err
+		}
+		owner, err := ix.Lookup(spec.Task)
+		if err != nil {
+			return result, err
+		}
+		if owner.Kind == blueprint.MachineWork {
+			result.Target.WorkID = spec.Task
+		}
+		if p, ok := input.(*toolcontract.IssueInput); ok {
+			if _, _, err := coordinatorRepo(brain, ix, spec, p.Repo, p.Base); err != nil {
+				return result, err
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if p, ok := input.(*toolcontract.ResultInput); ok {
+		job, err := (helper.Service{Brain: brain}).Job(p.JobID)
+		if err != nil {
+			return result, err
+		}
+		if job.Scope.EpicID != spec.EpicID {
+			return result, effects.ErrAuthority
+		}
+		workID := job.Scope.WorkID
+		if job.Scope.OwnerID != spec.Task {
+			ix, err := store.ReadIndex(brain)
+			if err != nil {
+				return result, err
+			}
+			owner, err := ix.Lookup(spec.Task)
+			if err != nil || owner.Kind != blueprint.MachineEpic || spec.Task != spec.EpicID || spec.Name != "factory:"+spec.EpicID+":planner" {
+				return result, effects.ErrAuthority
+			}
+			workID = ""
+		}
+		result.Target = effects.ControlTarget{WorkID: workID, JobID: job.ID, Round: p.Round}
+		return result, nil
+	}
+	if p, ok := input.(*toolcontract.IssueInput); ok && original.Operation == "query" {
+		ix, err := store.ReadIndex(brain)
+		if err != nil {
+			return result, err
+		}
+		if _, _, err := coordinatorRepo(brain, ix, spec, p.Repo, p.Base); err != nil {
+			return result, err
+		}
+	}
+	if p, ok := input.(*toolcontract.ControlInput); ok {
+		ix, err := store.ReadIndex(brain)
+		if err != nil {
+			return result, err
+		}
+		targetID := p.Target
+		if targetID == "" {
+			targetID = spec.Task
+		}
+		target, err := reconcile.ResolveCoordinatorTarget(ix, spec, targetID)
+		if err != nil {
+			return result, err
+		}
+		if target.Kind == blueprint.MachineWork {
+			result.Target.WorkID = targetID
+		}
+		if original.Operation == "file_read" {
+			result.Target.Path, err = controlrecord.ResolveCoordinatorOutput(brain, target, spec, p.Path, false)
+			if err != nil {
+				return result, err
+			}
+		}
+	}
+	return result, nil
+}
+func correctedControlReply(err error) (any, error) {
+	var input *toolcontract.ToolInputError
+	if errors.As(err, &input) {
+		return toolcontract.ToolFailure{ToolError: input.Message, Code: "invalid_input"}, nil
+	}
+	return nil, err
+}
+
+func helperControlV2(ctx context.Context, brain, id string, generation, round int, data []byte) (any, error) {
+	invocation, err := codex.DecodeToolInvocation(data)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.Tool != toolcontract.FactoryHelper && invocation.Tool != toolcontract.ManagedFiles {
+		return nil, codex.ErrObservationUnknown
+	}
+	call := controlrecord.HelperCall{JobID: id, Generation: generation, Round: round, ThreadID: invocation.ThreadID, TurnID: invocation.TurnID, CallID: invocation.CallID}
+	job, err := codex.ValidateHelperControlIngress(ctx, brain, call)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := codex.ToolArguments(invocation)
+	if err != nil {
+		return nil, err
+	}
+	envelope, input, err := toolcontract.DecodeRequestForContract(invocation.Tool, 2, payload)
+	if err != nil {
+		return correctedControlReply(err)
+	}
+	original, err := controlrecord.NewOriginal(invocation.Tool, payload, nil, &call)
+	if err != nil {
+		return nil, err
+	}
+	writer, err := (reconcile.NativeAuthority{Brain: brain}).CaptureControlOutputWriter()
+	if err != nil {
+		return nil, err
+	}
+	release, err := controlLock(ctx, brain)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	service := helperService(brain)
+	if err := recheckHelperV2(ctx, brain, service, job, call); err != nil {
+		return nil, err
+	}
+	originalRef, err := controlrecord.StoreOriginal(brain, original)
+	if err != nil {
+		return nil, err
+	}
+	if invocation.Tool == toolcontract.FactoryHelper && (envelope.Op == "submit" || envelope.Op == "continue" || envelope.Op == "yield") {
+		witness, err := service.CaptureManagedControl(ctx, originalRef)
+		if err != nil {
+			return correctedControlReply(codexHelperInputError(err))
+		}
+		_, receipt, err := service.LookupManagedControl(ctx, witness)
+		if errors.Is(err, helper.ErrNotFound) {
+			switch envelope.Op {
+			case "submit":
+				_, err = service.SubmitManagedControl(ctx, witness)
+			case "continue":
+				_, err = service.ContinueManagedControl(ctx, witness)
+			case "yield":
+				err = service.YieldManagedControl(ctx, witness)
+			}
+			if err != nil {
+				return correctedControlReply(codexHelperInputError(err))
+			}
+			_, receipt, err = service.LookupManagedControl(ctx, witness)
+		}
+		if err != nil {
+			return nil, err
+		}
+		reply, err := codex.ManagedControlReply(receipt)
+		return json.RawMessage(reply), err
+	}
+	if toolcontract.IsReadOperationForContract(invocation.Tool, envelope.Op, 2) {
+		if _, reply, err := codex.FindControlReadProof(ctx, brain, originalRef); err == nil {
+			return json.RawMessage(reply), nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		pre, err := reconcile.CaptureHelperReadSourceLocked(ctx, brain, originalRef, reconcile.ControlReadDirect)
+		if err != nil {
+			return nil, err
+		}
+		admission, err := reconcile.BindHelperReadSourceLocked(ctx, brain, pre)
+		if err != nil {
+			return nil, err
+		}
+		request, err := reconcile.PrepareProgramReadLocked(ctx, brain, admission)
+		if err != nil {
+			return nil, err
+		}
+		binary, err := os.Executable()
+		if err != nil {
+			return nil, err
+		}
+		release()
+		release = nil
+		result, readErr := reconcile.RunProgramRead(ctx, brain, binary, request)
+		release, err = controlLock(ctx, brain)
+		if err != nil {
+			return nil, err
+		}
+		retained, err := reconcile.FindControlReadAdmissionLocal(ctx, brain, originalRef, reconcile.ControlReadDirect)
+		if err != nil {
+			return nil, err
+		}
+		if !reflect.DeepEqual(retained, admission) {
+			return nil, effects.ErrEvidence
+		}
+		var reply json.RawMessage
+		var noAction *reconcile.ProgramReadNoActionError
+		var unavailable *gh.ProgramReadUnavailable
+		if errors.As(readErr, &noAction) {
+			_, reply, err = codex.StoreControlReadNoActionProof(ctx, brain, originalRef, noAction.Reference)
+		} else if readErr == nil || errors.As(readErr, &unavailable) && result != (codex.ProgramReadResultRef{}) {
+			_, reply, err = codex.StoreControlReadProof(ctx, brain, originalRef, result)
+		} else {
+			return nil, readErr
+		}
+		return json.RawMessage(reply), err
+	}
+	if invocation.Tool == toolcontract.ManagedFiles && envelope.Op != "read" {
+		ref, err := service.FindControlOutput(ctx, originalRef)
+		if err == nil {
+			prepared, committed, err := service.ReadControlOutput(ctx, ref)
+			if err != nil {
+				return nil, err
+			}
+			if committed == nil {
+				return nil, &helper.ControlOutputPendingError{Path: prepared.Path, Output: ref}
+			}
+			if prepared.Original != originalRef || prepared.Caller.Helper == nil || prepared.Caller.Helper.JobID != job.ID {
+				return nil, effects.ErrEvidence
+			}
+			return map[string]string{"path": prepared.Path}, nil
+		}
+		if !errors.Is(err, helper.ErrNotFound) {
+			return nil, err
+		}
+		request, err := reconcile.BuildControlOutputLocked(ctx, brain, originalRef, nil)
+		if err != nil {
+			return correctedControlReply(err)
+		}
+		request.Writer = writer
+		ref, err = service.PrepareControlOutputLocked(ctx, request)
+		if err != nil {
+			return correctedControlReply(err)
+		}
+		if _, err := service.CommitControlOutputLocked(ctx, ref); err != nil {
+			return nil, err
+		}
+		return map[string]string{"path": request.Path}, nil
+	}
+	controlInput := effects.ControlInput{Operation: original.Operation, PayloadSHA256: original.PayloadSHA256, Target: effects.ControlTarget{WorkID: job.Scope.WorkID, JobID: job.ID, Round: job.Round}}
+	if invocation.Tool == toolcontract.ManagedFiles {
+		file, ok := input.(*toolcontract.FileInput)
+		if !ok || envelope.Op != "read" {
+			return nil, effects.ErrEvidence
+		}
+		controlInput.Target.Path, err = helperArtifactPath(ctx, brain, job, file.Path)
+		if err != nil {
+			return correctedControlReply(err)
+		}
+	} else {
+		switch envelope.Op {
+		case "brain_read", "inbox", "lease_check", "result":
+		default:
+			return nil, fmt.Errorf("%w: concrete helper %s receipt integration is required", reconcile.ErrCodexIntegration, envelope.Op)
+		}
+	}
+	if _, snapshot, err := controlrecord.FindReplySnapshot(brain, originalRef); err == nil {
+		if !reflect.DeepEqual(snapshot.Input, controlInput) {
+			return nil, effects.ErrEvidence
+		}
+		return json.RawMessage(snapshot.Reply), nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	var value any
+	if invocation.Tool == toolcontract.ManagedFiles {
+		var content []byte
+		content, err = readCoordinatorFile(controlInput.Target.Path, controlLimit)
+		if errors.Is(err, os.ErrNotExist) {
+			err = &codex.ToolInputError{Message: "task artifact does not exist yet; use an existing declared artifact path"}
+		}
+		value = map[string]string{"text": string(content)}
+	} else {
+		value, err = managedControl(ctx, service, id, generation, payload)
+	}
+	if err != nil {
+		value, err = correctedControlReply(err)
+		if err != nil {
+			return nil, err
+		}
+	}
+	reply, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(reply) > toolcontract.ControlLimit {
+		return nil, fmt.Errorf("helper result exceeds transport limit")
+	}
+	if err := recheckHelperV2(ctx, brain, service, job, call); err != nil {
+		return nil, err
+	}
+	snapshot := controlrecord.ReplySnapshot{Schema: 2, Original: originalRef, Input: controlInput, Reply: reply, ResponseSHA256: sha256.Sum256(reply)}
+	if _, err := controlrecord.StoreReplySnapshot(brain, snapshot); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(reply), nil
+}
+
+func recheckHelperV2(ctx context.Context, brain string, service helper.Service, expected helper.Job, call controlrecord.HelperCall) error {
+	_, err := service.WithManagedAdmission(ctx, call.JobID, call.Generation, func(job helper.Job) error {
+		if job.ID != expected.ID || job.Scope != expected.Scope || job.Generation != call.Generation || job.Round != call.Round || job.ConversationID != call.ThreadID || job.TurnID != call.TurnID {
+			return effects.ErrAuthority
+		}
+		return codex.ValidateHelperAttempt(brain, job)
+	})
+	return err
+}

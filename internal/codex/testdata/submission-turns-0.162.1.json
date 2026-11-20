@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "id": "new-turn",
+      "status": "completed",
+      "itemsView": "full",
+      "items": [
+        {"id": "user-input", "type": "userMessage", "clientId": null, "content": [{"type": "text", "text": "uncertain input", "text_elements": []}]},
+        {"id": "reply", "type": "agentMessage", "text": "acknowledged", "phase": "final_answer"}
+      ]
+    }
+  ],
+  "nextCursor": "older-page",
+  "backwardsCursor": "reverse-page"
+}

@@ -95,18 +95,36 @@ func Apply(m blueprint.Machine, cur Cur, ev Event, guards map[string]GuardFunc) 
 // stops and nothing times out. The returned Cur records the hold, so the
 // caller keeps it even when nothing moved.
 func Timeout(m blueprint.Machine, cur Cur, now time.Time, held bool) (Cur, bool) {
+	cur = HoldClock(cur, now, held)
+	return timeout(m, cur, now, held, now.Sub(cur.Since)-cur.Held)
+}
+
+// HoldClock records whether cur's clock is currently held, without moving it.
+func HoldClock(cur Cur, now time.Time, held bool) Cur {
 	if held {
 		if cur.HeldSince.IsZero() {
 			cur.HeldSince = now
 		}
-		return cur, false
+		return cur
 	}
 	if !cur.HeldSince.IsZero() {
 		cur.Held += now.Sub(cur.HeldSince)
 		cur.HeldSince = time.Time{}
 	}
+	return cur
+}
+
+// TimeoutEligible observes the hold and times out using the caller's proved
+// eligible duration. That duration already excludes holds; Held is not
+// subtracted again. While held, no timeout fires.
+func TimeoutEligible(m blueprint.Machine, cur Cur, now time.Time, held bool, eligible time.Duration) (Cur, bool) {
+	cur = HoldClock(cur, now, held)
+	return timeout(m, cur, now, held, eligible)
+}
+
+func timeout(m blueprint.Machine, cur Cur, now time.Time, held bool, eligible time.Duration) (Cur, bool) {
 	s := m.States[cur.State]
-	if s.Timeout == 0 || now.Sub(cur.Since)-cur.Held < time.Duration(s.Timeout) {
+	if held || s.Timeout == 0 || eligible < time.Duration(s.Timeout) {
 		return cur, false
 	}
 	if s.OnTimeout == cur.State {

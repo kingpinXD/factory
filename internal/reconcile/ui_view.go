@@ -577,6 +577,13 @@ func (r *uiRecord) progress() time.Time {
 func (s *uiSnapshot) fresh() bool {
 	return !s.overall.LastTick.IsZero() && s.now.Sub(s.overall.LastTick) <= 3*time.Minute && s.now.Sub(s.overall.LastTick) >= 0
 }
+func (s *uiSnapshot) providerListingKnown(provider string) bool {
+	if s.overall.ProviderListings != nil {
+		return s.overall.ProviderListings[provider]
+	}
+	return s.overall.UnknownListings == 0
+}
+
 func (s *uiSnapshot) health(r *uiRecord) UIHealth {
 	state, since := r.position()
 	h := UIHealth{Category: "unknown", Reason: "No current manager observation", SourceAt: s.overall.LastTick, PhaseSince: since, ProgressAt: r.progress(), Recovery: []UIRecovery{}, AllowedActions: []string{}}
@@ -631,8 +638,13 @@ func (s *uiSnapshot) health(r *uiRecord) UIHealth {
 		}
 		return h
 	}
-	if s.overall.UnknownListings > 0 {
+	if !s.providerListingKnown("claude") {
 		h.Reason = "Manager could not observe agents"
+		return h
+	}
+	writerID := s.ownership(r).SessionID
+	if sess := s.records[writerID]; sess != nil && unknownSessionObservation(sess.status.Listed) {
+		h.Reason = "Manager could not observe this agent"
 		return h
 	}
 	if s.account.State == statePaused || s.account.State == stateNearLimit || s.account.State == stateStale {
@@ -898,7 +910,7 @@ func (s *uiSnapshot) job(r *uiRecord) UIJobView {
 		j.Health.Reason = "Some saved job evidence is incomplete"
 		j.Health.AllowedActions = []string{}
 	}
-	if s.fresh() && s.overall.UnknownListings == 0 && len(j.Errors) == 0 {
+	if s.fresh() && s.providerListingKnown(j.Executor) && len(j.Errors) == 0 {
 		rank := map[string]int{"working": 0, "finished": 0, "waiting": 1, "unknown": 2, "possibly_stuck": 3, "needs_decision": 4}
 		if len(j.Items) > 0 && j.Health.Reason == "No saved agent observation establishes active work" {
 			j.Health.Category = j.Items[0].Health.Category

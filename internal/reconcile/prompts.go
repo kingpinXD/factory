@@ -14,13 +14,15 @@ import (
 
 // startPrompt is a session's first prompt: everything its owner holds for it now.
 func (r *run) startPrompt(owner *entity, component string) string {
+	_, name := r.sessionSlot(owner, component)
+	deliveries := r.codexDeliveries(owner, name, r.deliveries(owner))
 	switch component {
 	case componentPlanner:
-		return r.plannerPrompt(owner, r.deliveries(owner))
+		return r.plannerPrompt(owner, deliveries)
 	case componentOrchestrator:
-		return r.orchestratorPrompt(owner, "You are starting on this set.", r.workingItems(owner), r.deliveries(owner))
+		return r.orchestratorPrompt(owner, "You are starting on this set.", r.codexWorkingItems(owner), deliveries)
 	case babysitterComponent:
-		return r.babysitterPromptFor(owner, r.deliveries(owner))
+		return r.babysitterPromptFor(owner, deliveries)
 	}
 	return taskLine(owner.id)
 }
@@ -56,6 +58,9 @@ func (r *run) plannerPrompt(epic *entity, msgs []delivery) string {
 	fmt.Fprintf(&b, "input (%s): %s\n", in.Kind, in.Input)
 	if in.Path != "" {
 		fmt.Fprintf(&b, "plan file: %s\n", in.Path)
+	}
+	if in.PlanInputSHA256 != "" {
+		b.WriteString("Read the immutable accepted plan with factory_control {\"op\":\"plan_input\",\"payload\":{}}. Its sha256 must match inputs.plan_input_sha256; do not read the original external path.\n")
 	}
 	if in.RepoHint != "" {
 		fmt.Fprintf(&b, "repo hint: %s\n", in.RepoHint)

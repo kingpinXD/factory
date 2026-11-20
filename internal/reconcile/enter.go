@@ -55,6 +55,12 @@ func (r *run) enter(e *entity, t events.Event) error {
 // state and logs a done when it succeeds, so it runs once. The DMs of a move
 // to needs_you are dmNeedsYou's, which also runs every tick.
 func (r *run) entryActions(it *entity) error {
+	if err := r.preparePublicationRevision(it); err != nil {
+		return err
+	}
+	if err := r.preparePublication(it); err != nil {
+		return err
+	}
 	t := it.enteredBy
 	switch it.cur.State {
 	case stateWaitingUser:
@@ -73,6 +79,11 @@ func repoKey(kind string, t events.Event) string { return fmt.Sprintf("repo:%s:%
 // once per key: a worktree, or the cleanup of one. The tick never runs it
 // itself.
 func (r *run) queueRepoWork(e *entity, kind, key string) error {
+	if kind == cleanupRequest {
+		if err := r.fenceHelpers(e, "cleanup"); err != nil {
+			return err
+		}
+	}
 	_, err := r.append(e, events.Event{
 		At: r.now, Kind: events.KindRequest, Sender: events.SenderProgram, Recipient: events.RecipientRepoWorker,
 		Request: kind, Key: key,
@@ -202,6 +213,9 @@ func (r *run) create(id string, entry store.Entry, inputs any, trigger string) (
 	}
 	if _, taken := r.ix[id]; taken {
 		return nil, fmt.Errorf("id %s is taken", id)
+	}
+	if err := r.checkCoordinatorTerminalProspective(id, entry, inputs); err != nil {
+		return nil, err
 	}
 	m := r.b.Machines[entry.Kind]
 	e := &entity{id: id, entry: entry, m: m, cur: fsm.Start(m, r.now)}

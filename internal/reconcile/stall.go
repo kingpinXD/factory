@@ -13,6 +13,7 @@ import (
 	"github.com/kingpinXD/factory/internal/epic"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/gh"
+	"github.com/kingpinXD/factory/internal/session"
 )
 
 // Stalls. On each full reconcile, after the PRs are watched, the tick looks
@@ -245,6 +246,9 @@ func (r *run) noteMover(it *entity) {
 // stalled: in a state it stalls in, with no mover now and at every full
 // reconcile since one first found none, for stall_after.
 func (r *run) stalledFor(it *entity) (time.Duration, bool) {
+	if r.claudeCoordinatorHeld(it) || r.managedClock(it) && r.clockHeld(it) {
+		return 0, false
+	}
 	if it.work == nil || !slices.Contains(stallStates, it.cur.State) || it.st.NoMoverSince.IsZero() || r.mover(it) != "" {
 		return 0, false
 	}
@@ -307,6 +311,9 @@ const (
 // no one. It reads only what this tick read already: a session's listing,
 // the merge hold watchPRs kept, the blockers and bases read so far.
 func (r *run) mover(it *entity) string {
+	if r.nativeBusy(it.id) {
+		return "its native helper"
+	}
 	ep := r.ents[it.entry.Epic]
 	switch {
 	case it.cur.State == stateNeedsYou, it.cur.State == stateWaitingUser, ep != nil && ep.cur.State == stateNeedsYou:
@@ -395,7 +402,8 @@ func (r *run) working(sess *entity) bool {
 	if sess == nil || !sess.open() {
 		return false
 	}
-	if _, known := r.listing(); !known {
+	lookup := r.lookupSession(sess.entry.Epic, sess.session.Name)
+	if lookup.Presence == session.Unknown || lookup.Presence == session.Quarantined {
 		return true
 	}
 	ok, _, _ := r.listedWorking(sess)
@@ -455,30 +463,82 @@ func digested(who string) bool {
 		strings.HasPrefix(who, moverMergeHold) || strings.HasSuffix(who, moverRedBase)
 }
 
-// digestWaits DMs the user one digest of the open work items that waited in
-// their state longer than wait_dm on a mover it lists, with what each waits
-// on: once a wait crossed wait_dm since the last digest and that one is
-// digestMinGap old, or wait_dm after it while any remain. The last digest
-// is the newest digest done in any epic's log.
+func (r *run) digestWaitReason(it *entity, who string) string {
+	if h, held := r.claudeListingHold(it); held {
+		return "the Claude session listing (unknown since " + h.From.Format(time.RFC3339) + ")"
+	}
+	if who == moverAccount && r.providerForEpic(it.entry.Epic) == "claude" {
+		switch r.accountState {
+		case statePaused:
+			return "the account (paused)"
+		case stateStale:
+			return "the account (stale usage)"
+		case stateNearLimit:
+			return "the account (near limit)"
+		}
+	}
+	if who == moverYou && it.cur.State == stateNeedsYou {
+		if why := r.needsYouWhy(it, it.enteredBy); why != "" {
+			return "you: " + why
+		}
+	}
+	return cmp.Or(who, "no one")
+}
+
+// digestWaits DMs the user the open work items waiting longer than wait_dm
+// on a mover it lists, plus listing holds older than wait_dm. A held owner
+// appears only when no listed work item represents it. The digest runs
+// after a new wait crosses wait_dm and digestMinGap has passed, or wait_dm
+// after the last digest while any wait remains. The last digest is the
+// newest digest done in any epic's log.
+func (r *run) digestAge(e *entity) time.Duration {
+	if r.managedClock(e) {
+		return r.eligibleElapsed(e, e.cur.Since).Eligible
+	}
+	return r.now.Sub(e.cur.Since)
+}
+
 func (r *run) digestWaits() {
 	limit := time.Duration(r.b.Values.WaitDM)
 	var waits []*entity
 	movers := map[*entity]string{}
+	waitSince := map[*entity]time.Time{}
+	representedOwners := map[string]bool{}
 	for _, id := range r.order() {
 		it := r.ents[id]
-		if it.work == nil || !it.open() || r.now.Sub(it.cur.Since) <= limit {
+		if it.work == nil || !it.open() {
 			continue
 		}
-		if who := r.mover(it); digested(who) {
-			waits, movers[it] = append(waits, it), who
+		since, age := it.cur.Since, r.digestAge(it)
+		h, listingHeld := r.claudeListingHold(it)
+		if listingHeld {
+			since, age = h.From, r.now.Sub(h.From)
 		}
+		if age <= limit {
+			continue
+		}
+		if who := r.mover(it); listingHeld || digested(who) {
+			waits, movers[it], waitSince[it] = append(waits, it), who, since
+			if listingHeld {
+				representedOwners[h.OwnerID] = true
+			}
+		}
+	}
+	for _, h := range r.coordinatorHolds() {
+		owner := r.ents[h.OwnerID]
+		if h.Reason != claudeListingUnavailable || !h.To.IsZero() || r.now.Sub(h.From) <= limit || representedOwners[h.OwnerID] ||
+			owner == nil || !owner.open() || owner.session != nil || r.claudeClockOwner(owner) != owner.id {
+			continue
+		}
+		waits, waitSince[owner] = append(waits, owner), h.From
+		representedOwners[owner.id] = true
 	}
 	if len(waits) == 0 {
 		return
 	}
 	slices.SortStableFunc(waits, func(a, b *entity) int { return a.cur.Since.Compare(b.cur.Since) })
 	last := r.lastDigest()
-	newly := waits[len(waits)-1].cur.Since.Add(limit).After(last)
+	newly := slices.ContainsFunc(waits, func(it *entity) bool { return waitSince[it].Add(limit).After(last) })
 	if gap := r.now.Sub(last); !(newly && gap >= digestMinGap) && gap < limit {
 		return
 	}
@@ -488,10 +548,16 @@ func (r *run) digestWaits() {
 	}
 	lines := []string{"factory: long waits:"}
 	for _, it := range waits {
-		line := fmt.Sprintf(" - %s (%s) in %s for %s, waiting on %s", it.id, issueRef(it), it.cur.State,
-			r.now.Sub(it.cur.Since).Round(time.Hour), cmp.Or(movers[it], "no one"))
-		if from := r.deployedWait(it); from != "" {
-			line += fmt.Sprintf("; once %s is deployed, run: factory deployed <its PR URL>", from)
+		name := it.id
+		if it.work != nil {
+			name += fmt.Sprintf(" (%s)", issueRef(it))
+		}
+		line := fmt.Sprintf(" - %s in %s for %s, waiting on %s", name, it.cur.State,
+			r.digestAge(it).Round(time.Hour), r.digestWaitReason(it, movers[it]))
+		if it.work != nil {
+			if from := r.deployedWait(it); from != "" {
+				line += fmt.Sprintf("; once %s is deployed, run: factory deployed <its PR URL>", from)
+			}
 		}
 		lines = append(lines, line)
 	}

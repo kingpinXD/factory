@@ -65,3 +65,20 @@ func TestReadTiersRealBrain(t *testing.T) {
 		t.Logf("%-9s Claude=%q", tier, row[ProductClaude])
 	}
 }
+
+func TestModelForProduct(t *testing.T) {
+	tiers := Tiers{"medium": {"Claude": "opus", "Zed": "openai-subscribed/gpt-6.1-sol"}}
+	got, err := tiers.ModelFor("Zed", "medium", nil)
+	if err != nil || got != "openai-subscribed/gpt-6.1-sol" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := tiers.ModelFor("Zed", "medium", []string{"gpt-6.1"}); err == nil {
+		t.Fatal("accepted denied model")
+	}
+	if _, err := tiers.ModelFor("Missing", "medium", nil); err == nil {
+		t.Fatal("accepted empty product")
+	}
+	if got, err := tiers.Model("medium", nil); err != nil || got != "opus" {
+		t.Fatalf("legacy %q %v", got, err)
+	}
+}

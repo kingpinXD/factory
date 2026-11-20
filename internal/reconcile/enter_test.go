@@ -183,6 +183,9 @@ func TestAMergedItemAsksForItsCleanupAfterACrash(t *testing.T) {
 }
 
 func TestAFailedCleanupIsAskedAgainWithBackoffThenDMs(t *testing.T) {
+	if isolatedParallelTest(t) {
+		return
+	}
 	w := mergedWithWorktree(t)
 	w.tick(false)
 	// The worker fails each cleanup; the tick asks again 1, 5, then 15

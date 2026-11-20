@@ -650,7 +650,7 @@ func (s *uiSnapshot) ownership(record *uiRecord) UIOwnership {
 	if owner := s.records[v.Owner]; owner != nil && owner.set != nil {
 		v.Lease = max(owner.status.Lease, grantedLease(owner.evs))
 	}
-	if !s.fresh() || s.overall.UnknownListings > 0 || r.native || len(r.errs) > 0 {
+	if !s.fresh() || !s.providerListingKnown("claude") || r.native || len(r.errs) > 0 {
 		v.Reason = "Writer liveness is unknown; manager evidence is stale, incomplete or unsupported"
 		return v
 	}
@@ -659,7 +659,7 @@ func (s *uiSnapshot) ownership(record *uiRecord) UIOwnership {
 		return v
 	}
 	listed := sess.status.Listed
-	if listed == "" || listed == "not listed" {
+	if listed == "" || listed == "not listed" || unknownSessionObservation(listed) {
 		return v
 	}
 	sessionState, _ := sess.position()

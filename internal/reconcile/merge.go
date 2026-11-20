@@ -87,6 +87,8 @@ func (r *run) hold(it *entity, skipApproval bool) (string, error) {
 	pr := it.pr
 	quiet := time.Duration(r.b.Values.MergeQuiet)
 	switch {
+	case r.providerForEpic(it.entry.Epic) == "codex" && publicationRevisionPending(it):
+		return "a publication revision is pending", nil
 	case pr == nil:
 		return "its PR is read on a full reconcile", nil
 	case pr.State != prOpen:

@@ -14,7 +14,8 @@ type EpicInputs struct {
 	Repo string `yaml:"repo,omitempty"`
 	Base string `yaml:"base,omitempty"`
 	// Path is a plan file's absolute path.
-	Path string `yaml:"path,omitempty"`
+	Path            string `yaml:"path,omitempty"`
+	PlanInputSHA256 string `yaml:"plan_input_sha256,omitempty"`
 	// RepoHint is the repo the input names, if any.
 	RepoHint  string    `yaml:"repo_hint,omitempty"`
 	Overrides Overrides `yaml:"overrides,omitempty"`

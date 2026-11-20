@@ -17,6 +17,7 @@ import (
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/fsm"
 	"github.com/kingpinXD/factory/internal/proc"
+	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
 )
 
@@ -215,8 +216,8 @@ func (r *run) idle() bool {
 // factorySessionLive reports whether Claude Code lists a live factory
 // session, and whether the listing is known.
 func (r *run) factorySessionLive() (live, known bool) {
-	sessions, known := r.listing()
-	return known && slices.ContainsFunc(sessions, func(s claude.Session) bool { return factorySession(s) && s.Live() }), known
+	inventory := r.inventory("claude")
+	return inventory.Complete && slices.ContainsFunc(inventory.Sessions, func(s session.Session) bool { return factorySession(s) && s.Live() }), inventory.Complete
 }
 
 // readAccountStatus reads the account's status.json; the zero status when
@@ -258,23 +259,23 @@ func (r *run) newestFigure() (*Figure, error) {
 
 // factorySession reports whether s is a background session the factory
 // started: the usage probe is interactive.
-func factorySession(s claude.Session) bool {
+func factorySession(s session.Session) bool {
 	return s.Kind == "background" && strings.HasPrefix(s.Name, "factory:")
 }
 
 // limitSeen returns a running factory session whose newest answer is a
 // usage-limit message for a limit that has not reset.
 func (r *run) limitSeen() *limitSeen {
-	sessions, known := r.listing()
-	if !known {
+	inventory := r.inventory("claude")
+	if !inventory.Complete {
 		return nil
 	}
-	for _, s := range sessions {
-		if !factorySession(s) || !s.Live() || s.SessionID == "" {
+	for _, s := range inventory.Sessions {
+		if s.Executor == "codex" || !factorySession(s) || !s.Live() || s.ConversationID == "" {
 			continue
 		}
 		ctx, cancel := r.call()
-		at, weekly, ok, err := r.d.Claude.LimitHit(ctx, s.SessionID, r.now)
+		at, weekly, ok, err := r.runtimeFor(s.Executor).LimitHit(ctx, s.Ref, r.now)
 		cancel()
 		switch {
 		case errors.Is(err, claude.ErrNoTranscript):
@@ -460,19 +461,20 @@ func newestTransitionTo(e *entity, state string) (events.Event, bool) {
 // restarting, and records it twice: in the account's log, for the resumes,
 // and in its session's log, so its machine moves to stopped.
 func (r *run) stopAll(acct *entity, pause events.Event) {
-	sessions, known := r.listing()
-	if !known {
+	inventory := r.inventory("claude")
+	if !inventory.Complete {
 		r.fail("usage pause: the session listing is unknown, so no session was stopped")
 		return
 	}
-	for _, s := range sessions {
-		if !factorySession(s) || !s.Live() && s.State != listedWorking {
+	for _, s := range inventory.Sessions {
+		if s.Executor == "codex" || !factorySession(s) || !s.Live() && s.State != listedWorking {
 			continue
 		}
-		if err := r.act("stop "+s.Name+" for the usage pause", func(ctx context.Context) error { return r.d.Claude.Stop(ctx, s.ID) }); err != nil {
+		if err := r.act("stop "+s.Name+" for the usage pause", func(ctx context.Context) error { return r.runtimeFor(s.Executor).Stop(ctx, s.Ref) }); err != nil {
 			r.fail("%v", err)
 			continue
 		}
+		r.invalidateInventory("claude")
 		r.logged(r.append(acct, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: "stop " + s.Name, Key: fmt.Sprintf("stop:%d:%s", pause.Seq, s.Name)}))
 		if sess := r.sessionNamed(s.Name); sess != nil {
 			r.logged(r.append(sess, events.Event{At: r.now, Kind: events.KindDone, Sender: events.SenderProgram, Text: stopText, Key: fmt.Sprintf("stop:account:%d", pause.Seq)}))
@@ -630,6 +632,12 @@ func (r *run) driveProbe(acct *entity, p Probe) {
 // posted to, supervised and compacted, and run its clocks. Everything may
 // while the account is ok; near its limit, only a repair epic's entities.
 func (r *run) workAllowed(e *entity) bool {
+	if r.providerForEpic(e.entry.Epic) == "unknown" {
+		return false
+	}
+	if r.providerForEpic(e.entry.Epic) == "codex" {
+		return r.codexQuota(e, false).State == "allowed"
+	}
 	return r.accountOK || r.accountState == stateNearLimit && r.isRepair(e)
 }
 
@@ -641,6 +649,12 @@ func (r *run) workAllowed(e *entity) bool {
 // while it is resuming or near its limit. With no account status yet,
 // nothing holds work back.
 func (r *run) accountAllows(e *entity, afterPause bool) bool {
+	if r.providerForEpic(e.entry.Epic) == "unknown" {
+		return false
+	}
+	if r.providerForEpic(e.entry.Epic) == "codex" {
+		return r.codexQuota(e, true).State == "allowed"
+	}
 	st, err := readAccountStatus(r.d.Brain)
 	if err != nil {
 		r.fail("%v", err)

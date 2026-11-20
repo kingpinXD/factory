@@ -183,7 +183,7 @@ func DecodeQuota(data []byte, expectedIdentity string, now time.Time) (helper.Qu
 		seen[*window.Duration] = true
 		reset := time.Unix(*window.Reset, 0)
 		duration := time.Duration(*window.Duration) * time.Minute
-		if !reset.After(now) || reset.After(now.Add(duration)) {
+		if !reset.After(now) || reset.After(now.Add(duration).Add(helper.CodexResetClockSkewTolerance)) {
 			return snapshot, nil
 		}
 		snapshot.Windows = append(snapshot.Windows, helper.QuotaWindow{Used: *window.Used, Duration: duration, ResetsAt: reset})

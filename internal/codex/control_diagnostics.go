@@ -23,6 +23,7 @@ type controlFailure struct {
 	Reason        string    `json:"reason"`
 	Cause         string    `json:"cause,omitempty"`
 	Code          string    `json:"code"`
+	SubReason     string    `json:"sub_reason,omitempty"`
 }
 
 // Retain the failure stage and a known reason, never request data or subprocess stderr.
@@ -90,8 +91,8 @@ func RecordControlFailure(brain string, attempt AttemptRef, request []byte, stag
 	if reason == "the scoped control operation failed" {
 		classification = controlFailureCause(cause)
 	}
-	failure := controlFailure{Cause: classification, Code: ControlFailureCode(cause), Schema: 1, At: time.Now().UTC(), RequestSHA256: hash(request), Operation: operation, Stage: stage, Reason: reason}
-	return errors.Join(writeJSON(name, failure), appendAttemptError(brain, attempt, failure), recordControlFailureOriginal(brain, attempt, request, stage, failure.Code))
+	failure := controlFailure{SubReason: helper.ControlAdmissionSubReason(cause), Cause: classification, Code: ControlFailureCode(cause), Schema: 1, At: time.Now().UTC(), RequestSHA256: hash(request), Operation: operation, Stage: stage, Reason: reason}
+	return errors.Join(writeJSON(name, failure), appendAttemptError(brain, attempt, failure), recordControlFailureOriginal(brain, attempt, request, stage, failure.Code, failure.SubReason))
 }
 
 // Names identify failures without retaining error text, paths or subprocess output.
@@ -128,7 +129,7 @@ func controlFailureCause(cause error) string {
 	return reflect.TypeOf(cause).String()
 }
 
-func recordControlFailureOriginal(brain string, attempt AttemptRef, request []byte, stage, code string) error {
+func recordControlFailureOriginal(brain string, attempt AttemptRef, request []byte, stage, code, subReason string) error {
 	invocation, err := DecodeToolInvocation(request)
 	if err != nil || invocation.Tool != toolcontract.FactoryControl {
 		return nil
@@ -152,5 +153,5 @@ func recordControlFailureOriginal(brain string, attempt AttemptRef, request []by
 	if !reflect.DeepEqual(expected, original) {
 		return effects.ErrEvidence
 	}
-	return controlrecord.StoreFailure(brain, ref, stage, code)
+	return controlrecord.StoreFailure(brain, ref, stage, code, subReason)
 }

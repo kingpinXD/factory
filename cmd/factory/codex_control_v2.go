@@ -50,7 +50,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		}
 		diagnosticErr := codex.RecordControlFailure(brain, attempt, data, stage, result)
 		if originalRef.Path != "" {
-			diagnosticErr = errors.Join(diagnosticErr, controlrecord.StoreFailure(brain, originalRef, stage, codex.ControlFailureCode(result)))
+			diagnosticErr = errors.Join(diagnosticErr, controlrecord.StoreFailure(brain, originalRef, stage, codex.ControlFailureCode(result), helper.ControlAdmissionSubReason(result)))
 		}
 		if diagnosticErr == nil && originalFresh {
 			if corrected, ok := controlAdmissionFailure(stage, result); ok {
@@ -165,7 +165,7 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		stage = "helper_admission_capture"
 		witness, err = service.CaptureControlAdmission(ctx, originalRef, source)
 		if err != nil {
-			return correctedControlReply(codexHelperInputError(err))
+			return nil, codexHelperInputError(err)
 		}
 		controlInput = source.Input
 	case "event", "heartbeat", "inbox":

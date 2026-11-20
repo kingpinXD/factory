@@ -187,7 +187,7 @@ func TestPublicationRevisionWaitsForPreviousPublication(t *testing.T) {
 func TestPublicationRevisionStepUsesReviewEntry(t *testing.T) {
 	log := b2Log(t, workPROpen)
 	log.move(workInReview, blueprint.TriggerGitHub, log.cause())
-	step, err := nativeStepFromHistoryWithVerification("work", log.evs, log.b, "implementor", 0, nil, "e1", &nativeVerificationReplay{})
+	step, err := nativeStepFromHistoryWithVerification("work", log.evs, log.b, "implementor", 0, nil, "e1", "", &nativeVerificationReplay{})
 	if err != nil || step.EntryRef != "work#3" || step.Component != "implementor" {
 		t.Fatalf("review revision step: %+v %v", step, err)
 	}

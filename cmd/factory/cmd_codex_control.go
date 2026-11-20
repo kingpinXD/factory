@@ -503,20 +503,27 @@ func readCoordinatorFile(full string, limit int) ([]byte, error) {
 }
 
 func codexHelperInputError(err error) error {
+	inputError := func(message string) error {
+		converted := &codex.ToolInputError{Message: message}
+		if helper.ControlAdmissionSubReason(err) != "" {
+			return errors.Join(err, converted)
+		}
+		return converted
+	}
 	if errors.Is(err, helper.ErrOutputPath) {
-		return &codex.ToolInputError{Message: "file output requires a canonical absolute output_path under the work directory; this request was not admitted"}
+		return inputError("file output requires a canonical absolute output_path under the work directory; this request was not admitted")
 	}
 	var reply *helper.ReplyOutputError
 	if errors.As(err, &reply) {
-		return &codex.ToolInputError{Message: "reply-only component requires omitted output_path; this request was not admitted"}
+		return inputError("reply-only component requires omitted output_path; this request was not admitted")
 	}
 	var phase *helper.PhaseMismatchError
 	if errors.As(err, &phase) {
-		return &codex.ToolInputError{Message: phase.Error() + "; this request was not admitted; the owning coordinator can use query{repo} from registered work inputs and read the matching work id state, then wait for the program transition; after a failed verifier, obtain a fresh truthful implementation report even when no code changes"}
+		return inputError(phase.Error() + "; this request was not admitted; the owning coordinator can use query{repo} from registered work inputs and read the matching work id state, then wait for the program transition; after a failed verifier, obtain a fresh truthful implementation report even when no code changes")
 	}
 	var round *helper.RoundMismatchError
 	if errors.As(err, &round) {
-		return &codex.ToolInputError{Message: fmt.Sprintf("expected_round must equal the current stored round %d, not the next round; inspect helper_result and confirmed completion before correcting; this request was not admitted", round.CurrentRound)}
+		return inputError(fmt.Sprintf("expected_round must equal the current stored round %d, not the next round; inspect helper_result and confirmed completion before correcting; this request was not admitted", round.CurrentRound))
 	}
 	return err
 }

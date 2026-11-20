@@ -29,10 +29,10 @@ func nativeStepBasis(id string, evs []events.Event, b *blueprint.Blueprint, comp
 	return nativeStepFromHistory(id, evs, b, component, after, nil, "")
 }
 func nativeStepFromHistory(id string, evs []events.Event, b *blueprint.Blueprint, component string, after int, history map[string][]events.Event, epic string) (helper.StepBasis, error) {
-	return nativeStepFromHistoryWithVerification(id, evs, b, component, after, history, epic, nil)
+	return nativeStepFromHistoryWithVerification(id, evs, b, component, after, history, epic, "", nil)
 }
 
-func nativeStepFromHistoryWithVerification(id string, evs []events.Event, b *blueprint.Blueprint, component string, after int, history map[string][]events.Event, epic string, verification *nativeVerificationReplay) (helper.StepBasis, error) {
+func nativeStepFromHistoryWithVerification(id string, evs []events.Event, b *blueprint.Blueprint, component string, after int, history map[string][]events.Event, epic, set string, verification *nativeVerificationReplay) (helper.StepBasis, error) {
 	var out helper.StepBasis
 	if len(evs) == 0 || after < 0 || after > len(evs) {
 		return out, fmt.Errorf("work step history incomplete")
@@ -106,7 +106,7 @@ func nativeStepFromHistoryWithVerification(id string, evs []events.Event, b *blu
 		if !allowed {
 			return out, fmt.Errorf("%w: work step transition/cause unsupported: %s to %s", effects.ErrEvidence, ev.From, ev.To)
 		}
-		if !nativeStepCause(evs, ev, history, epic) {
+		if !nativeStepCause(id, evs, ev, b, history, epic, set) {
 			return out, fmt.Errorf("%w: work step cause missing or unsupported: %s", effects.ErrEvidence, ev.TriggerRef)
 		}
 		cur = fsm.Cur{State: ev.To, Prev: ev.Prev, Attempt: ev.Attempt}
@@ -285,7 +285,7 @@ func (a NativeAuthority) resolveStepFactsQualified(ctx context.Context, scope he
 	if err != nil {
 		return empty, err
 	}
-	return nativeStepFromHistoryWithVerification(it.id, it.evs, b, component, rec.AfterSeq, history, scope.EpicID, verification)
+	return nativeStepFromHistoryWithVerification(it.id, it.evs, b, component, rec.AfterSeq, history, scope.EpicID, it.work.Set, verification)
 }
 
 var _ helper.StepAuthority = NativeAuthority{}
@@ -299,8 +299,29 @@ func nativeEntrySequence(ref string) int {
 	return n
 }
 
-func nativeStepCause(local []events.Event, transition events.Event, history map[string][]events.Event, epic string) bool {
+func nativeStepCause(workID string, local []events.Event, transition events.Event, b *blueprint.Blueprint, history map[string][]events.Event, epic, set string) bool {
 	ref := transition.TriggerRef
+	if strings.HasPrefix(ref, blockerRef) {
+		if set == "" || transition.Trigger != blueprint.TriggerFile || transition.To != stateBlocked || !slices.Contains(blockable(b), transition.From) || transition.Seq < 1 || transition.Seq > len(local) || transition.Key != events.Key(workID, transition.From, transition.To, ref, transition.Attempt) {
+			return false
+		}
+		prefix := local[:transition.Seq-1]
+		entered, ok := lastTransition(prefix)
+		if !ok {
+			return false
+		}
+		r := run{b: b}
+		reported, expected, err := r.blockedReported(&entity{id: workID, work: &WorkInputs{Set: set}, evs: prefix, cur: fsm.Cur{State: entered.To}, entered: entered.Seq})
+		return err == nil && reported && ref == expected
+	}
+	if strings.HasPrefix(ref, restartsRef) {
+		if transition.Trigger != blueprint.TriggerTick || transition.To != stateBlocked || nativeRootRoles[transition.From] == "" || transition.Seq < 1 || transition.Seq > len(local) {
+			return false
+		}
+		r := run{b: b, now: transition.At}
+		exhausted, expected, err := r.restartsExhausted(&entity{id: workID, work: &WorkInputs{}, evs: local[:transition.Seq-1]})
+		return err == nil && exhausted && ref == expected
+	}
 	if strings.HasPrefix(ref, timeoutRef) {
 		return true
 	}

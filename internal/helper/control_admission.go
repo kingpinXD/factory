@@ -124,7 +124,13 @@ func publishAdmissionArtifact(name string, v any) (controlrecord.ImmutableRef, e
 	return ref, nil
 }
 
-func (s Service) CaptureControlAdmission(ctx context.Context, originalRef controlrecord.OriginalRequestRef, source ControlIngressSource) (controlrecord.ImmutableRef, error) {
+func (s Service) CaptureControlAdmission(ctx context.Context, originalRef controlrecord.OriginalRequestRef, source ControlIngressSource) (result controlrecord.ImmutableRef, resultErr error) {
+	check := "original"
+	defer func() {
+		if resultErr != nil {
+			resultErr = &controlAdmissionError{check: check, cause: resultErr}
+		}
+	}()
 	original, err := controlrecord.ReadOriginal(s.Brain, originalRef)
 	if err != nil {
 		return controlrecord.ImmutableRef{}, err
@@ -132,6 +138,7 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 	if original.Control == nil || original.Tool != toolcontract.FactoryControl || s.Authority == nil {
 		return controlrecord.ImmutableRef{}, ErrAuthority
 	}
+	check = "ingress_source"
 	if err := validateControlIngressSource(original, source); err != nil {
 		return controlrecord.ImmutableRef{}, err
 	}
@@ -143,11 +150,13 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 		return controlrecord.ImmutableRef{}, ErrAuthority
 	}
 	w := ControlAdmissionWitness{Schema: 2, Original: originalRef, Operation: original.Operation, Source: source}
-	var result controlrecord.ImmutableRef
+	check = "ledger"
 	err = s.transaction(ctx, true, func(db *ledger) error {
+		check = "ingress_source"
 		if err := authority.ValidateControlIngress(ctx, source); err != nil {
 			return err
 		}
+		check = "scope"
 		switch original.Operation {
 		case "helper_submit":
 			var req Request
@@ -169,10 +178,12 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 			}
 			w.Scope = scope.Authorization()
 			w.Submit = &req
+			check = "step"
 			w.Step, err = s.resolveStep(ctx, scope, req.Component)
 			if err != nil {
 				return err
 			}
+			check = "output_path"
 			b, err := blueprint.Load(blueprint.Path(s.Brain))
 			if err != nil {
 				return err
@@ -197,15 +208,18 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 				id = req.JobID
 				w.Cancel = &req
 			}
+			check = "ledger"
 			r, err := lookup(db, id)
 			if err != nil {
 				return err
 			}
+			check = "scope"
 			if err := s.check(ctx, db, r.Job); err != nil {
 				return err
 			}
 			w.Scope = r.Job.Scope.Authorization()
 			if r.Job.Request.ParentJobID == "" {
+				check = "step"
 				w.Step, err = s.resolveStep(ctx, w.Scope, r.Job.Request.Component)
 				if err != nil {
 					return err
@@ -214,14 +228,11 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 		default:
 			return ErrAuthority
 		}
+		check = "scope"
 		if w.Scope.CodexContract != 2 {
 			return ErrAuthority
 		}
-		for _, id := range []string{w.Scope.WorkID, w.Scope.OwnerID, w.Scope.EpicID} {
-			if db.Blocks[id] != "" {
-				return ErrAuthority
-			}
-		}
+		check = "scope"
 		if w.Scope.OwnerID != source.Authority.OwnerID || w.Scope.EpicID != source.Authority.EpicID || source.Input.Target.WorkID != w.Scope.WorkID {
 			return ErrConflict
 		}
@@ -231,10 +242,24 @@ func (s Service) CaptureControlAdmission(ctx context.Context, originalRef contro
 		if w.Continue != nil && source.Input.Target.JobID != w.Continue.JobID || w.Cancel != nil && source.Input.Target.JobID != w.Cancel.JobID {
 			return ErrConflict
 		}
+		if w.Submit != nil {
+			check = "scope_recovery"
+			if err := s.recoverAdmission(ctx, db, w.Scope); err != nil {
+				return err
+			}
+		}
+		check = "ledger"
+		for _, id := range []string{w.Scope.WorkID, w.Scope.OwnerID, w.Scope.EpicID} {
+			if db.Blocks[id] != "" {
+				return ErrAuthority
+			}
+		}
 		var err error
+		check = "admission_artifact"
 		result, err = publishAdmissionArtifact(controlAdmissionName(s.Brain, "inputs", originalRef), w)
 		if err == nil {
 			db.SchemaVersion = 2
+			check = "ledger"
 		}
 		return err
 	})

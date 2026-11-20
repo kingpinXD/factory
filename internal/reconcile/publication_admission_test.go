@@ -46,7 +46,7 @@ func TestCodexOpenerWaitsForVerifiedWorktreeAdoption(t *testing.T) {
 			if outcome == "new-verification" {
 				log.add(publicationVerifiedReceipt(decision, verified.Artifact, strings.Repeat("f", 40)))
 			}
-			step, err := nativeStepFromHistoryWithVerification("w1", log.evs, log.b, "pr-opener", 0, nil, "e1", verification)
+			step, err := nativeStepFromHistoryWithVerification("w1", log.evs, log.b, "pr-opener", 0, nil, "e1", "", verification)
 			if outcome == "done" {
 				if err != nil || step.EntryRef != "w1#4" {
 					t.Fatalf("adopted commit did not admit opener: %+v %v", step, err)
@@ -63,7 +63,7 @@ func TestCodexOpenerWaitsForVerifiedWorktreeAdoption(t *testing.T) {
 func TestLegacyOpenerDoesNotRequireCodexCommitAdoption(t *testing.T) {
 	log := b2Log(t, "verifying")
 	log.move(workPROpen, "file", log.cause())
-	step, err := nativeStepFromHistoryWithVerification("w1", log.evs, log.b, "pr-opener", 0, nil, "e1", nil)
+	step, err := nativeStepFromHistoryWithVerification("w1", log.evs, log.b, "pr-opener", 0, nil, "e1", "", nil)
 	if err != nil || step.Component != "pr-opener" {
 		t.Fatalf("legacy opener changed: %+v %v", step, err)
 	}

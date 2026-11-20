@@ -12,11 +12,13 @@ import (
 
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/codex"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
 // NativeAuthority never acquires tick: broker callbacks run under helper-ledger,
@@ -42,7 +44,7 @@ func (a NativeAuthority) resolveQualified(ctx context.Context, req helper.Reques
 	}
 	// v1 has no approved epic-only helper component. Never infer that grant.
 	if req.WorkID == "" {
-		return helper.Scope{}, fmt.Errorf("work_id required; epic-only helper scope is not enabled")
+		return helper.Scope{}, &toolcontract.ToolInputError{Message: "work_id required; epic-only helper scope is not enabled"}
 	}
 	entry, err := ix.Lookup(req.WorkID)
 	if err != nil {
@@ -148,7 +150,7 @@ func (a NativeAuthority) resolveQualified(ctx context.Context, req helper.Reques
 	sum := sha256.Sum256([]byte(identity))
 	s.Generation = fmt.Sprintf("g%x", sum[:16])
 	if req.OwnerID != s.OwnerID || req.SetID != s.SetID || req.Lease != s.Lease {
-		return s, fmt.Errorf("helper owner or lease is stale")
+		return s, fmt.Errorf("%w: helper owner or lease is stale", effects.ErrAuthority)
 	}
 	if contract {
 		if err := a.applyCodexContractUsing(ctx, it, &s, verify); err != nil {

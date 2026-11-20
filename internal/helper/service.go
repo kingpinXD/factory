@@ -17,6 +17,7 @@ import (
 	"github.com/kingpinXD/factory/internal/blueprint"
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
 var ErrOutputPath = errors.New("file output requires canonical absolute path")
@@ -81,7 +82,7 @@ func validateRequest(r Request) error {
 		}
 	}
 	if r.Lease < 0 || (r.SetID != "" && r.Lease < 1) || (r.SetID == "" && r.Lease != 0) {
-		return fmt.Errorf("set requires positive lease")
+		return &toolcontract.ToolInputError{Message: "set_id and a positive lease are required together; copy both from the current owning set"}
 	}
 	return nil
 }

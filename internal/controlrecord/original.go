@@ -225,6 +225,9 @@ func FindControlOriginal(brain string, id effects.ControlID) (OriginalRequestRef
 	if err != nil {
 		return OriginalRequestRef{}, OriginalRequest{}, err
 	}
+	if _, err := os.Lstat(name); err != nil {
+		return OriginalRequestRef{}, OriginalRequest{}, err
+	}
 	ref, err := existingRecordReference(name)
 	if err != nil {
 		return OriginalRequestRef{}, OriginalRequest{}, err

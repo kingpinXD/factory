@@ -228,14 +228,15 @@ func scopedCoordinatorControl(ctx context.Context, brain string, spec session.Sp
 		return nil, fmt.Errorf("%w: coordinator owner changed", effects.ErrAuthority)
 	}
 	if req.Op == "plan_input" {
-		if owner.Kind != blueprint.MachineEpic || !strings.HasSuffix(spec.Name, ":planner") {
-			return nil, fmt.Errorf("plan input requires the owning planner")
-		}
 		var p struct{}
 		if err := strictInput(req.Payload, &p); err != nil {
 			return nil, err
 		}
-		data, hash, err := reconcile.ReadPlanInput(owner.Dir)
+		ep, err := ix.Lookup(spec.EpicID)
+		if err != nil || ep.Kind != blueprint.MachineEpic || ep.Epic != spec.EpicID {
+			return nil, fmt.Errorf("%w: epic plan reference unavailable", effects.ErrAuthority)
+		}
+		data, hash, err := reconcile.ReadPlanInput(ep.Dir)
 		return map[string]string{"text": string(data), "sha256": hash}, err
 	}
 	if req.Op == "epic_file" {

@@ -23,10 +23,42 @@ import (
 
 func coordinatorControlV2(ctx context.Context, brain string, attempt codex.AttemptRef, data []byte) (output any, result error) {
 	stage := "request_decode"
+	var originalRef controlrecord.OriginalRequestRef
+	originalFresh := false
+	var release func() error
 	defer func() {
-		if result != nil {
-			result = errors.Join(result, codex.RecordControlFailure(brain, attempt, data, stage, result))
+		defer func() {
+			if release != nil {
+				release()
+			}
+		}()
+		if result == nil {
+			if failure, ok := output.(toolcontract.ToolFailure); ok && failure.ToolError != "" && originalRef.Path != "" {
+				if !originalFresh {
+					output, result = nil, effects.ErrUnresolved
+				} else {
+					if failure.Code == "" {
+						failure.Code = "invalid_input"
+						output = failure
+					}
+					result = errors.Join(controlrecord.StoreFailure(brain, originalRef, stage, failure.Code), codex.RecordAttemptControlRefusal(brain, attempt, stage, failure.Code))
+					return
+				}
+			} else {
+				return
+			}
 		}
+		diagnosticErr := codex.RecordControlFailure(brain, attempt, data, stage, result)
+		if originalRef.Path != "" {
+			diagnosticErr = errors.Join(diagnosticErr, controlrecord.StoreFailure(brain, originalRef, stage, codex.ControlFailureCode(result)))
+		}
+		if diagnosticErr == nil && originalFresh {
+			if corrected, ok := controlAdmissionFailure(stage, result); ok {
+				output, result = corrected, nil
+				return
+			}
+		}
+		result = errors.Join(result, diagnosticErr)
 	}()
 
 	invocation, err := codex.DecodeToolInvocation(data)
@@ -77,21 +109,22 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		return nil, err
 	}
 	stage = "control_lock"
-	release, err := controlLock(ctx, brain)
+	release, err = controlLock(ctx, brain)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if release != nil {
-			release()
-		}
-	}()
 	stage = "control_authority_recheck"
 	if err := recheckControlV2(ctx, brain, id, spec); err != nil {
 		return nil, err
 	}
+	stage = "original_lookup"
+	if _, _, lookupErr := controlrecord.FindControlOriginal(brain, id); errors.Is(lookupErr, os.ErrNotExist) {
+		originalFresh = true
+	} else if lookupErr != nil {
+		return nil, lookupErr
+	}
 	stage = "original_request"
-	originalRef, err := controlrecord.StoreOriginal(brain, original)
+	originalRef, err = controlrecord.StoreOriginal(brain, original)
 	if err != nil {
 		return nil, err
 	}
@@ -269,11 +302,11 @@ func coordinatorControlV2(ctx context.Context, brain string, attempt codex.Attem
 		var result controlrecord.WriteResult
 		proof, result, err = coordinatorProgramWrite(ctx, brain, spec, originalRef, original, control, controlInput, ownerAuthority)
 		stage = "program_write_lock_reentry"
-		release, lockErr := controlLock(ctx, brain)
+		var lockErr error
+		release, lockErr = controlLock(ctx, brain)
 		if lockErr != nil {
 			return nil, lockErr
 		}
-		defer release()
 		if err != nil {
 			stage = "program_write"
 			return nil, err
@@ -521,7 +554,7 @@ func localControlInputV2(ctx context.Context, brain string, spec session.Spec, o
 func correctedControlReply(err error) (any, error) {
 	var input *toolcontract.ToolInputError
 	if errors.As(err, &input) {
-		return toolcontract.ToolFailure{ToolError: input.Message}, nil
+		return toolcontract.ToolFailure{ToolError: input.Message, Code: "invalid_input"}, nil
 	}
 	return nil, err
 }

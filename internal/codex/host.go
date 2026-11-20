@@ -579,6 +579,9 @@ func (r *Runtime) handleEvent(ctx context.Context, p *Protocol, owner Owner, rec
 		}
 		var failure ToolFailure
 		if json.Unmarshal(data, &failure) == nil && failure.ToolError != "" {
+			if failure.Code != "" {
+				return replyHelperToolFailure(ctx, p, event, failure.Code+": "+failure.ToolError)
+			}
 			return replyHelperToolFailure(ctx, p, event, failure.ToolError)
 		}
 		return p.Reply(ctx, event, map[string]any{"contentItems": []any{map[string]any{"type": "inputText", "text": string(data)}}, "success": true}, nil)

@@ -312,7 +312,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 		return out, empty, err
 	}
 	if selected.Executor != "codex" || rec.SelectionHash != selectionHash(selected) {
-		return out, empty, fmt.Errorf("authority selection changed")
+		return out, empty, fmt.Errorf("%w: authority selection changed", effects.ErrAuthority)
 	}
 	acceptance, err := verify(ctx, brain, selected)
 	if err != nil {
@@ -322,14 +322,14 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 		policy = nativeQualificationRetirementBasis
 	}
 	if acceptance != rec.Acceptance && (policy != nativeQualificationRetirementBasis || acceptance.Binding == "" || acceptance.ReceiptSHA256 == "") {
-		return out, empty, fmt.Errorf("authority qualification changed")
+		return out, empty, fmt.Errorf("%w: authority qualification changed", effects.ErrAuthority)
 	}
 	if err := nativeValidateBasis(ix, rec.Basis); err != nil {
 		return out, empty, err
 	}
 	out = OwnerAuthority{EpicID: epic, OwnerID: id, Kind: e.entry.Kind, Revision: nativeDigest(rec), Activation: nativeEventRef(id, ev)}
 	if expected != nil && out != *expected {
-		return out, empty, fmt.Errorf("authority revision changed")
+		return out, empty, fmt.Errorf("%w: authority revision changed", effects.ErrAuthority)
 	}
 	if current || policy == nativeQualificationRetirementBasis {
 		b, err := blueprint.Load(blueprint.Path(brain))
@@ -338,7 +338,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 		}
 		state, ok := b.Machines[e.entry.Kind].States[e.cur.State]
 		if !ok || state.End {
-			return out, empty, fmt.Errorf("authority owner is not open")
+			return out, empty, fmt.Errorf("%w: authority owner is not open", effects.ErrAuthority)
 		}
 		basisPolicy := policy
 		if policy == nativeQualificationRetirementBasis {
@@ -349,7 +349,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 			return out, empty, err
 		}
 		if !reflect.DeepEqual(basis, rec.Basis) && (policy != nativeQualificationRetirementBasis || !nativeLeaseOnlyAdvance(ix, e, rec.Basis, basis)) {
-			return out, empty, fmt.Errorf("authority ownership changed")
+			return out, empty, fmt.Errorf("%w: authority ownership changed", effects.ErrAuthority)
 		}
 		if policy == nativeAdmissionBasis {
 			ids := []string{epic, e.id}
@@ -559,7 +559,7 @@ func (a NativeAuthority) applyCodexContractUsing(ctx context.Context, it *entity
 		return err
 	}
 	if rec.WorkGeneration == "" || rec.WorkGeneration != scope.Generation {
-		return fmt.Errorf("work activation generation changed")
+		return fmt.Errorf("%w: work activation generation changed", effects.ErrAuthority)
 	}
 	if scope.OwnerID != it.id {
 		owner, _, err := nativeAuthority(ctx, a.Brain, scope.EpicID, scope.OwnerID, true, nil, verify)
@@ -567,10 +567,10 @@ func (a NativeAuthority) applyCodexContractUsing(ctx context.Context, it *entity
 			return err
 		}
 		if rec.OwnerActivation == nil || *rec.OwnerActivation != owner.Activation {
-			return fmt.Errorf("work owner activation changed")
+			return fmt.Errorf("%w: work owner activation changed", effects.ErrAuthority)
 		}
 	} else if rec.OwnerActivation != nil {
-		return fmt.Errorf("work self-owner activation changed")
+		return fmt.Errorf("%w: work self-owner activation changed", effects.ErrAuthority)
 	}
 	scope.CodexContract = 2
 	return nil

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/kingpinXD/factory/internal/codex"
@@ -38,7 +39,12 @@ func runCodexHost(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "factory codex-host: %v\n", err)
+		if *attempt != "" {
+			err = errors.Join(err, codex.RecordAttemptHostFailure(*brain, codex.AttemptRef{SessionID: *id, AttemptID: *attempt}, err))
+			fmt.Fprintf(stderr, "factory codex-host: %s\n", codex.ControlFailureCode(err))
+		} else {
+			fmt.Fprintf(stderr, "factory codex-host: %v\n", err)
+		}
 		return 1
 	}
 	return 0

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/kingpinXD/factory/internal/blueprint"
+	"github.com/kingpinXD/factory/internal/effects"
 	"github.com/kingpinXD/factory/internal/events"
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/helper"
@@ -17,7 +18,7 @@ import (
 func coordinatorAuthorityEntities(brain string, spec session.Spec) (*entity, *entity, store.Index, error) {
 	selected, err := executor.ReadSelection(brain, spec.EpicID)
 	if err != nil || selected.Executor != "codex" || selectionHash(selected) != spec.SelectionHash {
-		return nil, nil, nil, fmt.Errorf("coordinator immutable selection changed")
+		return nil, nil, nil, fmt.Errorf("%w: coordinator immutable selection changed", effects.ErrAuthority)
 	}
 	ix, err := store.ReadIndex(brain)
 	if err != nil {
@@ -25,7 +26,7 @@ func coordinatorAuthorityEntities(brain string, spec session.Spec) (*entity, *en
 	}
 	ownerEntry, err := ix.Lookup(spec.Task)
 	if err != nil || ownerEntry.Epic != spec.EpicID {
-		return nil, nil, nil, fmt.Errorf("coordinator owner changed")
+		return nil, nil, nil, fmt.Errorf("%w: coordinator owner changed", effects.ErrAuthority)
 	}
 	owner, err := loadEntity(spec.Task, ownerEntry)
 	if err != nil {
@@ -38,10 +39,10 @@ func coordinatorAuthorityEntities(brain string, spec session.Spec) (*entity, *en
 	m, ok := b.Machines[ownerEntry.Kind]
 	state, known := m.States[owner.cur.State]
 	if !ok || !known || state.End || owner.cur.State == stateNeedsYou {
-		return nil, nil, nil, fmt.Errorf("coordinator owner is not admitted")
+		return nil, nil, nil, fmt.Errorf("%w: coordinator owner is not admitted", effects.ErrAuthority)
 	}
 	if owner.set != nil && !strings.Contains(spec.Generation, fmt.Sprintf(":%d:", owner.st.Lease)) {
-		return nil, nil, nil, fmt.Errorf("coordinator lease changed")
+		return nil, nil, nil, fmt.Errorf("%w: coordinator lease changed", effects.ErrAuthority)
 	}
 	var sess *entity
 	for id, entry := range ix {
@@ -58,7 +59,7 @@ func coordinatorAuthorityEntities(brain string, spec session.Spec) (*entity, *en
 		}
 	}
 	if sess == nil {
-		return nil, nil, nil, fmt.Errorf("coordinator session missing")
+		return nil, nil, nil, fmt.Errorf("%w: coordinator session missing", effects.ErrAuthority)
 	}
 	if err = syncOwnership(sess); err != nil {
 		return nil, nil, nil, err
@@ -73,7 +74,7 @@ func CoordinatorAuthority(brain string, spec session.Spec) error {
 		return err
 	}
 	if nativeBoundaryState(sess).pending() || sess.cur.State == sessionCompacting || sess.cur.State == sessionStopped || sess.cur.State == sessionDead || sess.cur.State == sessionFinished {
-		return fmt.Errorf("coordinator admission closed")
+		return fmt.Errorf("%w: coordinator admission closed", effects.ErrAuthority)
 	}
 	return nil
 }

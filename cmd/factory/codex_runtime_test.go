@@ -56,7 +56,7 @@ func TestCodexHostConfiguredConstructorDriver(t *testing.T) {
 	}
 	var output bytes.Buffer
 	code := runCodexHost([]string{"--brain", binding.Brain, "--session", binding.Ref.SessionID, "--attempt", binding.Ref.AttemptID, "--claim", binding.Claim}, io.Discard, &output)
-	if code != 1 || !strings.Contains(output.String(), codex.ErrAcceptancePending.Error()) {
+	if code != 1 || !strings.Contains(output.String(), "control_qualification_required") {
 		t.Fatalf("actual modern command did not reach configured qualification gate: code=%d reply=%q", code, output.String())
 	}
 }

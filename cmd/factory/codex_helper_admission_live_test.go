@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,16 +16,55 @@ import (
 	"github.com/kingpinXD/factory/internal/helper"
 	"github.com/kingpinXD/factory/internal/reconcile"
 	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/workspace"
 )
 
 func liveExplorerAdmissionAttempt(t *testing.T) (string, codex.Record, helper.Service, helper.Request) {
 	t.Helper()
+	return liveExplorerAdmissionAtLease(t, 1, false)
+}
+
+// This fixture constructs current authority with a real qualification receipt.
+// The manager renewal and historical closure chain have separate tests.
+func liveExplorerAdmissionAtLease(t *testing.T, lease int, immutablePlan bool) (string, codex.Record, helper.Service, helper.Request) {
+	t.Helper()
 	brain, record, _, scope := localReadAttemptSetup(t, false, false)
 	service := reconcile.NativeService(brain, nil)
-	request := helper.Request{SchemaVersion: 1, RequestKey: "minmax-explore-1", OwnerID: "owner1", WorkID: "work1", SetID: "owner1", Lease: 1, Component: "explorer", Prompt: "Explore the MinMax implementation and tests."}
+	request := helper.Request{SchemaVersion: 1, RequestKey: "minmax-explore-1", OwnerID: "owner1", WorkID: "work1", SetID: "owner1", Lease: lease, Component: "explorer", Prompt: "Explore the MinMax implementation and tests."}
 	ix, err := store.ReadIndex(brain)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if lease != 1 {
+		if _, err := events.Append(store.EventsPath(ix["owner1"].Dir), events.Event{Kind: events.KindHeartbeat, Sender: events.SenderProgram, Lease: lease, Key: fmt.Sprintf("lease:%d", lease)}); err != nil {
+			t.Fatal(err)
+		}
+		record.Spec.Generation = fmt.Sprintf("owner1:%d:orchestrator", lease)
+		attemptDir := filepath.Join(brain, "factory/codex/sessions", record.ID, "attempts", record.AttemptID)
+		if err := store.WriteJSON(filepath.Join(attemptDir, "state.json"), record); err != nil {
+			t.Fatal(err)
+		}
+		generation := fmt.Sprintf("%x", sha256.Sum256([]byte(record.Spec.Generation+"\x00"+record.AttemptID)))
+		remote := workspace.RemoteOwner{ID: record.ID, Generation: generation, Worktree: record.Spec.Cwd, RunDir: filepath.Join(attemptDir, "remote"), OutputRoot: record.Spec.Cwd, Image: record.Selection.ContainerImageID, ExecBinary: record.Selection.Binaries["codex-executor"], CodexVersion: record.Selection.Profile.CodexVersion, ControlOnly: true, CodexContract: 2}
+		controlFenceContainment(t, remote)
+		current, err := service.Authority.Resolve(context.Background(), request)
+		if err != nil && !errors.Is(err, reconcile.ErrCodexIntegration) {
+			t.Fatal(err)
+		}
+		if current.Generation == "" || current.Lease != lease {
+			t.Fatalf("current lease scope unavailable: %+v %v", current, err)
+		}
+		scope = current
+	}
+	if immutablePlan {
+		plan := []byte("accepted plan <>&\n")
+		planPath := filepath.Join(ix["epic1"].Dir, "plan-input.yaml")
+		if err := os.WriteFile(planPath, plan, 0400); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteInputs(ix["epic1"].Dir, &reconcile.EpicInputs{ID: "epic1", Kind: "plan", Path: planPath, PlanInputSHA256: fmt.Sprintf("%x", sha256.Sum256(plan))}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	work := ix["work1"]
 	history := []events.Event{
@@ -63,7 +103,7 @@ func liveExplorerAdmissionAttempt(t *testing.T) (string, codex.Record, helper.Se
 		}
 		var refs []effects.EventRef
 		for _, event := range log {
-			if event.Sender == events.SenderProgram && (event.Kind == events.KindTransition && event.From == "" || event.Kind == events.KindHeartbeat && event.Key == "lease:1") {
+			if event.Sender == events.SenderProgram && (event.Kind == events.KindTransition && event.From == "" || event.Kind == events.KindHeartbeat && (event.Key == "lease:1" || event.Key == fmt.Sprintf("lease:%d", lease))) {
 				encoded, _ := json.Marshal(event)
 				refs = append(refs, effects.EventRef{OwnerID: id, Sequence: event.Seq, SHA256: sha256.Sum256(encoded)})
 			}

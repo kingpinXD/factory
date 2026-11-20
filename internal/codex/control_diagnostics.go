@@ -22,6 +22,7 @@ type controlFailure struct {
 	Stage         string    `json:"stage"`
 	Reason        string    `json:"reason"`
 	Cause         string    `json:"cause,omitempty"`
+	Code          string    `json:"code"`
 }
 
 // Retain the failure stage and a known reason, never request data or subprocess stderr.
@@ -89,7 +90,8 @@ func RecordControlFailure(brain string, attempt AttemptRef, request []byte, stag
 	if reason == "the scoped control operation failed" {
 		classification = controlFailureCause(cause)
 	}
-	return writeJSON(name, controlFailure{Cause: classification, Schema: 1, At: time.Now().UTC(), RequestSHA256: hash(request), Operation: operation, Stage: stage, Reason: reason})
+	failure := controlFailure{Cause: classification, Code: ControlFailureCode(cause), Schema: 1, At: time.Now().UTC(), RequestSHA256: hash(request), Operation: operation, Stage: stage, Reason: reason}
+	return errors.Join(writeJSON(name, failure), appendAttemptError(brain, attempt, failure), recordControlFailureOriginal(brain, attempt, request, stage, failure.Code))
 }
 
 // Names identify failures without retaining error text, paths or subprocess output.
@@ -124,4 +126,31 @@ func controlFailureCause(cause error) string {
 		cause = next
 	}
 	return reflect.TypeOf(cause).String()
+}
+
+func recordControlFailureOriginal(brain string, attempt AttemptRef, request []byte, stage, code string) error {
+	invocation, err := DecodeToolInvocation(request)
+	if err != nil || invocation.Tool != toolcontract.FactoryControl {
+		return nil
+	}
+	payload, err := ToolArguments(invocation)
+	if err != nil {
+		return nil
+	}
+	id := effects.ControlID{Attempt: effects.AttemptKey{SessionID: attempt.SessionID, AttemptID: attempt.AttemptID}, ThreadID: invocation.ThreadID, TurnID: invocation.TurnID, CallID: invocation.CallID}
+	expected, err := controlrecord.NewOriginal(invocation.Tool, payload, &id, nil)
+	if err != nil {
+		return nil
+	}
+	ref, original, err := controlrecord.FindControlOriginal(brain, id)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(expected, original) {
+		return effects.ErrEvidence
+	}
+	return controlrecord.StoreFailure(brain, ref, stage, code)
 }

@@ -315,6 +315,21 @@ func (r *run) launchCodexAttempt(sess *entity, runtime *codex.Runtime, ref codex
 }
 
 func (r *run) coordinatorReplacementMode(sess *entity, view codex.CoordinatorAttemptView, runtime *codex.Runtime, verify nativeAcceptance) (string, error) {
+	// A completed renewal carries its exact closure even if the predecessor
+	// was already stopped by an ordinary recovery path.
+	if owner := r.ents[sess.session.Task]; owner != nil {
+		_, activation, err := nativeAuthority(r.ctx, r.d.Brain, owner.entry.Epic, owner.id, true, nil, verify)
+		if err != nil {
+			return "", err
+		}
+		proof := codex.AttemptClosureRef{Attempt: view.Ref, ClosureSHA256: view.ClosureSHA256}
+		if activation.RenewalClosure != nil && *activation.RenewalClosure == proof {
+			if _, err := nativeRenewalAncestors(r.ix, owner, activation, proof); err != nil {
+				return "", err
+			}
+			return "process_replace", nil
+		}
+	}
 	if view.CloseCause == nil {
 		switch view.SealReason {
 		case "host_failure", "unknown_submission", "prelaunch_failure":
@@ -335,8 +350,8 @@ func (r *run) coordinatorReplacementMode(sess *entity, view codex.CoordinatorAtt
 		return "", err
 	}
 	switch request.Mode {
-	case "process_pause", "process_replace", "qualification_refresh":
-		if request.Mode == "qualification_refresh" {
+	case "process_pause", "process_replace", "qualification_refresh", "lease_refresh":
+		if request.Mode == "qualification_refresh" || request.Mode == "lease_refresh" {
 			return "process_replace", nil
 		}
 		return request.Mode, nil
@@ -373,6 +388,21 @@ func (r *run) readCoordinatorSelectionLocked(sess *entity, key string, previous 
 	if intent.Transition != nil || intent.TaskRestart != nil {
 		return intent, ErrCodexIntegration
 	}
+	_, activation, err := nativeAuthority(r.ctx, r.d.Brain, old.EpicID, old.OwnerID, current, &intent.Authority, verify)
+	if err != nil {
+		return intent, err
+	}
+	if activation.RenewalClosure != nil && *activation.RenewalClosure == intent.Previous {
+		if intent.Mode != "process_replace" {
+			return intent, effects.ErrAuthority
+		}
+		ix, owner, err := nativeOwner(r.d.Brain, old.EpicID, old.OwnerID)
+		if err != nil {
+			return intent, err
+		}
+		_, err = nativeRenewalAncestors(ix, owner, activation, intent.Previous)
+		return intent, err
+	}
 	if old.CloseCause == nil {
 		if intent.Mode != "process_replace" {
 			return intent, effects.ErrEvidence
@@ -391,16 +421,19 @@ func (r *run) readCoordinatorSelectionLocked(sess *entity, key string, previous 
 		if toolcontract.DecodeBroker([]byte(requestEv.Text), &request) != nil {
 			return intent, effects.ErrEvidence
 		}
-		refresh := request.Mode == "qualification_refresh" && intent.Mode == "process_replace"
+		refresh := (request.Mode == "qualification_refresh" || request.Mode == "lease_refresh") && intent.Mode == "process_replace"
 		if !refresh && (request.Mode != intent.Mode || request.Authority != intent.Authority) || request.Attempt != previous || request.Reason != old.SealReason {
 			return intent, effects.ErrEvidence
 		}
 		if refresh {
-			if err := validateQualificationClose(r.ctx, r.d.Brain, request, verify); err != nil {
+			if err := validateRenewalClose(r.ctx, r.d.Brain, request, verify); err != nil {
 				return intent, err
 			}
 			_, activation, err := nativeAuthority(r.ctx, r.d.Brain, old.EpicID, old.OwnerID, current, &intent.Authority, verify)
-			if err != nil || activation.Previous == nil || *activation.Previous != request.Authority.Activation {
+			if err != nil {
+				return intent, effects.ErrAuthority
+			}
+			if activation.Previous == nil || *activation.Previous != request.Authority.Activation {
 				return intent, effects.ErrAuthority
 			}
 		}

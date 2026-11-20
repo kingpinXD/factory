@@ -269,7 +269,7 @@ func (r *Runtime) SelectSuccessor(ctx context.Context, old AttemptRef, key strin
 	if err != nil {
 		return next, err
 	}
-	if observed.Stage != attemptClosed || !sameLogicalAuthorization(observed.Spec, spec) || !reflect.DeepEqual(observed.Selection, selection) {
+	if observed.Stage != attemptClosed || r.successorAuthorization(ctx, observed, spec) != nil || !reflect.DeepEqual(observed.Selection, selection) {
 		return next, ErrAttemptStale
 	}
 	if r.Effects == nil {
@@ -292,7 +292,7 @@ func (r *Runtime) SelectSuccessor(ctx context.Context, old AttemptRef, key strin
 		if e != nil {
 			return e
 		}
-		if !reflect.DeepEqual(i, observedIndex) || prior.Revision != observed.Revision || !reflect.DeepEqual(prior.Closure, observed.Closure) || prior.Stage != attemptClosed || !sameLogicalAuthorization(prior.Spec, spec) || !reflect.DeepEqual(prior.Selection, selection) {
+		if !reflect.DeepEqual(i, observedIndex) || prior.Revision != observed.Revision || !reflect.DeepEqual(prior.Closure, observed.Closure) || prior.Stage != attemptClosed || r.successorAuthorization(ctx, prior, spec) != nil || !reflect.DeepEqual(prior.Selection, selection) {
 			return ErrAttemptStale
 		}
 		if e := r.validateSessionClaimants(ctx, spec.Name); e != nil {
@@ -400,4 +400,26 @@ func (r *Runtime) LaunchAttempt(ctx context.Context, ref AttemptRef) error {
 		return err
 	}
 	return r.launchHost(ctx, v, "")
+}
+
+// Generation changes need a program-owned transfer, in addition to closure.
+// Ordinary process replacements retain their generation without this capability.
+type AttemptGenerationAuthority interface {
+	ValidateGenerationSuccessor(context.Context, AttemptRef, session.Spec) error
+}
+
+func (r *Runtime) successorAuthorization(ctx context.Context, old Record, next session.Spec) error {
+	if sameLogicalAuthorization(old.Spec, next) {
+		return nil
+	}
+	normalized := next
+	normalized.Generation = old.Spec.Generation
+	if !sameLogicalAuthorization(old.Spec, normalized) {
+		return ErrAttemptConflict
+	}
+	authority, ok := r.AttemptAuthority.(AttemptGenerationAuthority)
+	if !ok {
+		return ErrAttemptIntegration
+	}
+	return authority.ValidateGenerationSuccessor(ctx, old.attemptRef(), next)
 }

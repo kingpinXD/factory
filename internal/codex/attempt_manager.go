@@ -149,7 +149,7 @@ func (r *Runtime) validateProcessRecovery(ctx context.Context, previous, success
 	if err != nil {
 		return ProcessRecoveryRef{}, err
 	}
-	if old.Stage != attemptClosed || next.FromAttempt != previous.AttemptID || next.RecoveryKey != key || !sameLogicalAuthorization(old.Spec, next.Spec) || !reflect.DeepEqual(old.Selection, next.Selection) {
+	if old.Stage != attemptClosed || next.FromAttempt != previous.AttemptID || next.RecoveryKey != key || r.successorAuthorization(ctx, old, next.Spec) != nil || !reflect.DeepEqual(old.Selection, next.Selection) {
 		return ProcessRecoveryRef{}, ErrAttemptConflict
 	}
 	ref := ProcessRecoveryRef{Previous: previous, Successor: successor, Key: key, ClosureSHA256: attemptDigest(old.Closure)}

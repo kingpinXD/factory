@@ -56,6 +56,7 @@ type nativeActivation struct {
 	AfterSeq        int                          `json:"after_seq"`
 	OwnerActivation *effects.EventRef            `json:"owner_activation,omitempty"`
 	Acceptance      codex.Contract2AcceptanceRef `json:"acceptance"`
+	RenewalClosure  *codex.AttemptClosureRef     `json:"renewal_closure,omitempty"`
 	Previous        *effects.EventRef            `json:"previous,omitempty"`
 }
 
@@ -347,7 +348,7 @@ func nativeAuthorityUsing(ctx context.Context, brain, epic, id string, current b
 		if err != nil {
 			return out, empty, err
 		}
-		if !reflect.DeepEqual(basis, rec.Basis) {
+		if !reflect.DeepEqual(basis, rec.Basis) && (policy != nativeQualificationRetirementBasis || !nativeLeaseOnlyAdvance(ix, e, rec.Basis, basis)) {
 			return out, empty, fmt.Errorf("authority ownership changed")
 		}
 		if policy == nativeAdmissionBasis {

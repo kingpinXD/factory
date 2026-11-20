@@ -93,6 +93,10 @@ func validateQualificationClose(ctx context.Context, brain string, request Coord
 	if err != nil || !codexCoordinatorOwner(owner) || request.Work != nil || request.Cause.OwnerID != owner.id {
 		return effects.ErrAuthority
 	}
+	return validateQualificationCloseEvidence(owner, old, request)
+}
+
+func validateQualificationCloseEvidence(owner *entity, old nativeActivation, request CoordinatorCloseRequest) error {
 	for _, move := range owner.evs {
 		if move.Kind != events.KindTransition || move.Sender != events.SenderProgram || move.From != stateNeedsYou || move.Trigger != "user" || move.TriggerRef != fmt.Sprint(request.Cause.Sequence) {
 			continue
@@ -127,7 +131,16 @@ func (r *run) refreshCodexQualification(owner, sess *entity, runtime *codex.Runt
 	if err != nil {
 		return true, err
 	}
-	if next == old.Acceptance {
+	ix, current, err := nativeOwner(r.d.Brain, owner.entry.Epic, owner.id)
+	if err != nil {
+		return true, err
+	}
+	basis, err := nativeBasis(ix, current)
+	if err != nil {
+		return true, err
+	}
+	leaseChanged := nativeLeaseOnlyAdvance(ix, current, old.Basis, basis)
+	if next == old.Acceptance && !leaseChanged {
 		// A previous tick may have appended the parent activation before a
 		// dependent work renewal failed. Finish it before selecting a successor.
 		if owner.set != nil && old.Previous != nil {
@@ -142,6 +155,16 @@ func (r *run) refreshCodexQualification(owner, sess *entity, runtime *codex.Runt
 		return false, nil
 	}
 	retry, released := qualificationRetry(owner, qualificationRef(old, next))
+	mode := "qualification_refresh"
+	cause := nativeEventRef(owner.id, retry)
+	if next == old.Acceptance && leaseChanged {
+		mode, released = "lease_refresh", true
+		for _, b := range basis {
+			if b.OwnerID == owner.id {
+				cause = b.Events[len(b.Events)-1]
+			}
+		}
+	}
 	if !released || owner.cur.State == stateNeedsYou {
 		if owner.cur.State != stateNeedsYou {
 			return true, fmt.Errorf("authority qualification changed")
@@ -159,9 +182,12 @@ func (r *run) refreshCodexQualification(owner, sess *entity, runtime *codex.Runt
 	if view.OwnerID != owner.id || view.EpicID != owner.entry.Epic || view.Name != sess.session.Name {
 		return true, effects.ErrAuthority
 	}
+	if view.Stage == "sealing" {
+		return true, nil
+	}
 	if view.Stage != "closed" {
-		request := CoordinatorCloseRequest{Version: 2, Attempt: view.Ref, Authority: expected, Cause: nativeEventRef(owner.id, retry), Mode: "qualification_refresh", Reason: "shutdown"}
-		if err := validateQualificationClose(r.ctx, r.d.Brain, request, verify); err != nil {
+		request := CoordinatorCloseRequest{Version: 2, Attempt: view.Ref, Authority: expected, Cause: cause, Mode: mode, Reason: "shutdown"}
+		if err := validateRenewalClose(r.ctx, r.d.Brain, request, verify); err != nil {
 			return true, err
 		}
 		data, err := json.Marshal(request)
@@ -174,18 +200,22 @@ func (r *run) refreshCodexQualification(owner, sess *entity, runtime *codex.Runt
 	if err := runtime.ValidateAttemptClosure(r.ctx, codex.AttemptClosureRef{Attempt: view.Ref, ClosureSHA256: view.ClosureSHA256}); err != nil {
 		return true, err
 	}
+	if view.SealReason != "shutdown" && view.SealReason != "host_failure" && view.SealReason != "unknown_submission" && view.SealReason != "prelaunch_failure" && view.SealReason != "quota_pause" {
+		return true, effects.ErrAuthority
+	}
 	if err := r.qualificationHelpersSettled(owner); err != nil {
 		return true, err
 	}
-	ix, current, err := nativeOwner(r.d.Brain, owner.entry.Epic, owner.id)
+	ix, current, err = nativeOwner(r.d.Brain, owner.entry.Epic, owner.id)
 	if err != nil {
 		return true, err
 	}
-	basis, err := nativeBasis(ix, current)
-	if err != nil || !reflect.DeepEqual(old.Basis, basis) {
+	basis, err = nativeBasis(ix, current)
+	if err != nil || !reflect.DeepEqual(old.Basis, basis) && !nativeLeaseOnlyAdvance(ix, current, old.Basis, basis) {
 		return true, effects.ErrAuthority
 	}
-	old.Acceptance, old.AfterSeq = next, len(current.evs)
+	old.RenewalClosure = &codex.AttemptClosureRef{Attempt: view.Ref, ClosureSHA256: view.ClosureSHA256}
+	old.Basis, old.Acceptance, old.AfterSeq = basis, next, len(current.evs)
 	ref := nativeEventRef(owner.id, previous)
 	old.Previous = &ref
 	data, err := json.Marshal(old)
@@ -203,32 +233,24 @@ func (r *run) refreshCodexQualification(owner, sess *entity, runtime *codex.Runt
 }
 
 func (r *run) renewSetQualificationWork(owner *entity, activation nativeActivation, parent effects.EventRef, closed codex.CoordinatorAttemptView, runtime *codex.Runtime, verify nativeAcceptance) error {
-	if owner.set == nil || activation.Previous == nil || closed.CloseCause == nil {
+	if owner.set == nil || activation.Previous == nil || activation.RenewalClosure == nil {
 		return nil
 	}
-	event, err := (ProgramEffects{Brain: r.d.Brain}).boundEffectEvent(*closed.CloseCause)
+	proof := codex.AttemptClosureRef{Attempt: closed.Ref, ClosureSHA256: closed.ClosureSHA256}
+	if *activation.RenewalClosure != proof {
+		return nil
+	}
+	if closed.Stage != "closed" || closed.OwnerID != owner.id || closed.EpicID != owner.entry.Epic {
+		return effects.ErrAuthority
+	}
+	if err := runtime.ValidateAttemptClosure(r.ctx, proof); err != nil {
+		return err
+	}
+	ix, currentOwner, err := nativeOwner(r.d.Brain, owner.entry.Epic, owner.id)
 	if err != nil {
 		return err
 	}
-	var request CoordinatorCloseRequest
-	if err := json.Unmarshal([]byte(event.Text), &request); err != nil {
-		return err
-	}
-	// Later same-binary closures use the normal replacement path. Only the
-	// exact qualification close can finish a partially renewed work set.
-	if request.Mode != "qualification_refresh" || request.Authority.Activation != *activation.Previous {
-		return nil
-	}
-	if closed.Stage != "closed" || closed.OwnerID != owner.id || closed.EpicID != owner.entry.Epic || request.Reason != "shutdown" || request.Attempt != closed.Ref || event.Kind != events.KindRequest || event.Sender != events.SenderProgram || event.Recipient != "codex-attempt" || event.Request != "close" || event.Key != coordinatorCloseKey(request) {
-		return effects.ErrAuthority
-	}
-	if err := runtime.ValidateAttemptClosure(r.ctx, codex.AttemptClosureRef{Attempt: closed.Ref, ClosureSHA256: closed.ClosureSHA256}); err != nil {
-		return err
-	}
-	if err := validateQualificationClose(r.ctx, r.d.Brain, request, verify); err != nil {
-		return err
-	}
-	oldParent, err := qualificationRetirementAuthority(r.ctx, r.d.Brain, request.Authority, verify)
+	ancestors, err := nativeRenewalAncestors(ix, currentOwner, activation, proof)
 	if err != nil {
 		return err
 	}
@@ -259,11 +281,11 @@ func (r *run) renewSetQualificationWork(owner *entity, activation nativeActivati
 			continue
 		}
 		scope, err := (NativeAuthority{r.d.Brain}).resolveBase(r.ctx, helper.Request{WorkID: item.id, OwnerID: owner.id, SetID: owner.id, Lease: owner.st.Lease, Component: "implementor"}, false, false, false, false)
-		if err != nil || scope.Generation != old.WorkGeneration || scope.OwnerID != owner.id {
+		if err != nil || scope.OwnerID != owner.id {
 			return effects.ErrAuthority
 		}
-		if old.Acceptance == activation.Acceptance {
-			if old.OwnerActivation == nil || *old.OwnerActivation != parent {
+		if old.Acceptance == activation.Acceptance && old.OwnerActivation != nil && *old.OwnerActivation == parent {
+			if scope.Generation != old.WorkGeneration {
 				return effects.ErrAuthority
 			}
 			if _, _, err := nativeAuthority(r.ctx, r.d.Brain, item.entry.Epic, item.id, true, nil, verify); err != nil {
@@ -271,7 +293,11 @@ func (r *run) renewSetQualificationWork(owner *entity, activation nativeActivati
 			}
 			continue
 		}
-		if old.OwnerActivation == nil || *old.OwnerActivation != request.Authority.Activation || old.Acceptance != oldParent.Acceptance || old.SelectionHash != activation.SelectionHash {
+		if old.OwnerActivation == nil {
+			return effects.ErrAuthority
+		}
+		oldParent, ancestor := ancestors[*old.OwnerActivation]
+		if !ancestor || old.Acceptance != oldParent.Acceptance || old.SelectionHash != activation.SelectionHash {
 			return effects.ErrAuthority
 		}
 		expected := OwnerAuthority{EpicID: item.entry.Epic, OwnerID: item.id, Kind: item.entry.Kind, Revision: nativeDigest(old), Activation: nativeEventRef(item.id, previous)}
@@ -283,6 +309,14 @@ func (r *run) renewSetQualificationWork(owner *entity, activation nativeActivati
 		}
 		previousRef := nativeEventRef(item.id, previous)
 		old.Previous, old.OwnerActivation = &previousRef, &parent
+		basis, err := nativeBasis(r.ix, current)
+		if err != nil || !reflect.DeepEqual(old.Basis, basis) && !nativeLeaseOnlyAdvance(r.ix, current, old.Basis, basis) {
+			return effects.ErrAuthority
+		}
+		if scope.Generation != old.WorkGeneration && !nativeLeaseOnlyAdvance(r.ix, current, old.Basis, basis) {
+			return effects.ErrAuthority
+		}
+		old.Basis, old.WorkGeneration = basis, scope.Generation
 		old.Acceptance, old.AfterSeq = activation.Acceptance, len(current.evs)
 		data, err := json.Marshal(old)
 		if err != nil {
@@ -339,7 +373,7 @@ func qualificationSettlementContext(ctx context.Context, ref effects.EventRef, r
 
 func qualificationSettlementAllowed(ctx context.Context, brain string, expected OwnerAuthority, verify nativeAcceptance) bool {
 	retirement, ok := ctx.Value(qualificationSettlementKey{}).(qualificationSettlement)
-	if !ok || retirement.Request.Authority.EpicID != expected.EpicID || retirement.Request.Mode != "qualification_refresh" || retirement.Request.Reason != "shutdown" {
+	if !ok || retirement.Request.Authority.EpicID != expected.EpicID || retirement.Request.Mode != "qualification_refresh" && retirement.Request.Mode != "lease_refresh" || retirement.Request.Reason != "shutdown" {
 		return false
 	}
 	control, ok := controlrecord.OutcomeValidation(ctx)
@@ -368,7 +402,7 @@ func qualificationSettlementAllowed(ctx context.Context, brain string, expected 
 	if err != nil || marshalErr != nil || event.Kind != events.KindRequest || event.Sender != events.SenderProgram || event.Recipient != "codex-attempt" || event.Request != "close" || event.Key != coordinatorCloseKey(retirement.Request) || event.Text != string(data) {
 		return false
 	}
-	if validateQualificationClose(ctx, brain, retirement.Request, verify) != nil {
+	if validateRenewalClose(ctx, brain, retirement.Request, verify) != nil {
 		return false
 	}
 	if expected == retirement.Request.Authority {

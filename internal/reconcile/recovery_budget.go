@@ -48,7 +48,7 @@ func (r *run) validateRecoveryEvent(owner, logged *entity, ev events.Event) (cod
 	if err != nil {
 		return ref, err
 	}
-	if old.OwnerID != owner.id || old.EpicID != owner.entry.Epic || next.OwnerID != old.OwnerID || next.EpicID != old.EpicID || next.Generation != old.Generation || next.Name != old.Name || logged.session == nil || logged.session.Task != owner.id || logged.session.Name != old.Name || ev.Key != recoveryEventKey(logged.id, ref) {
+	if old.OwnerID != owner.id || old.EpicID != owner.entry.Epic || next.OwnerID != old.OwnerID || next.EpicID != old.EpicID || next.Name != old.Name || logged.session == nil || logged.session.Task != owner.id || logged.session.Name != old.Name || ev.Key != recoveryEventKey(logged.id, ref) {
 		return ref, fmt.Errorf("process recovery event owner changed")
 	}
 	return ref, nil

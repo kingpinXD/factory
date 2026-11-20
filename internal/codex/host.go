@@ -18,6 +18,7 @@ import (
 	"github.com/kingpinXD/factory/internal/executor"
 	"github.com/kingpinXD/factory/internal/session"
 	"github.com/kingpinXD/factory/internal/store"
+	"github.com/kingpinXD/factory/internal/toolcontract"
 )
 
 type hostCall struct {
@@ -706,7 +707,7 @@ func dynamicTools(helper bool) []any {
 		names = []string{"factory_helper", "managed_files", "managed_terminal"}
 	}
 	for _, name := range names {
-		schema := map[string]any{"type": "object", "properties": map[string]any{"op": map[string]any{"type": "string"}, "payload": map[string]any{"type": "object"}}, "required": []string{"op", "payload"}, "additionalProperties": false}
+		schema := map[string]any{"type": "object", "properties": map[string]any{"op": map[string]any{"type": "string", "enum": toolcontract.Operations(name)}, "payload": map[string]any{"type": "object"}}, "required": []string{"op", "payload"}, "additionalProperties": false}
 		description := "Authority-scoped factory operation; follow the component's pinned payload contract."
 		switch name {
 		case "factory_helper":

@@ -51,12 +51,13 @@ type protocolDiagnosticEvent struct {
 }
 
 type protocolDiagnostics struct {
-	EventsSeen uint64                    `json:"events_seen"`
-	Events     []protocolDiagnosticEvent `json:"events"`
-	Failure    string                    `json:"failure,omitempty"`
+	EventsSeen           uint64                     `json:"events_seen"`
+	Events               []protocolDiagnosticEvent  `json:"events"`
+	Failure              string                     `json:"failure,omitempty"`
+	LocalControlRefusals []acceptanceReadDiagnostic `json:"local_control_refusals,omitempty"`
 }
 
-// Retain protocol shape only. Text, arguments, paths, credentials and provider
+// Retain protocol shape only. Argument values, paths, credentials and provider
 // error messages never enter this bounded diagnostic record.
 func (p *Protocol) recordDiagnostic(message Message) {
 	var data struct {
@@ -102,6 +103,11 @@ func (p *Protocol) diagnosticSnapshot() protocolDiagnostics {
 	defer p.mu.Unlock()
 	snapshot := p.diagnostics
 	snapshot.Events = append([]protocolDiagnosticEvent(nil), snapshot.Events...)
+	snapshot.LocalControlRefusals = append([]acceptanceReadDiagnostic(nil), snapshot.LocalControlRefusals...)
+	for i := range snapshot.LocalControlRefusals {
+		snapshot.LocalControlRefusals[i].Arguments = cloneAcceptanceShape(snapshot.LocalControlRefusals[i].Arguments)
+		snapshot.LocalControlRefusals[i].Payload = cloneAcceptanceShape(snapshot.LocalControlRefusals[i].Payload)
+	}
 	if p.err != nil {
 		var protocol *protocolFailure
 		switch {

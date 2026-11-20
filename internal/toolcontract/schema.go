@@ -5,13 +5,22 @@ import "slices"
 func Schema(tool string) map[string]any { return SchemaForContract(tool, 1) }
 func SchemaForContract(tool string, version int) map[string]any {
 	var choices []any
+	var operations []string
 	for _, d := range definitionsForContract(tool, version) {
 		choices = append(choices, operationSchema(d, tool))
+		operations = append(operations, d.operation)
 	}
 	if len(choices) == 0 {
 		return nil
 	}
-	return map[string]any{"oneOf": choices}
+	// Expose the required envelope even when a provider ignores composition.
+	return map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"op": map[string]any{"type": "string", "enum": operations}, "payload": map[string]any{"type": "object"}},
+		"required":             []string{"op", "payload"},
+		"additionalProperties": false,
+		"oneOf":                choices,
+	}
 }
 func OperationSchema(tool, op string) map[string]any {
 	d, ok := lookup(tool, op)

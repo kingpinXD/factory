@@ -150,11 +150,7 @@ func runAcceptanceModelProof(ctx context.Context, brain string, selection execut
 	}
 	route := selection.Routes["planner"][0]
 	params := map[string]any{"cwd": environment.Cwd, "model": route.Model, "approvalPolicy": "never", "sandbox": "workspace-write", "ephemeral": false, "baseInstructions": "This is a bounded factory acceptance probe in an empty contained workspace. Follow only the requested probe. Use the supplied remote environment for every file and process operation. Do not delegate, access credentials, use apps or network tools, or act outside this workspace.", "config": map[string]any{"model_reasoning_effort": route.Effort, "agents.enabled": false}, "environments": []any{map[string]any{"environmentId": environment.ID, "cwd": environment.Cwd, "runtimeWorkspaceRoots": environment.Roots}}}
-	params["dynamicTools"] = []any{map[string]any{"type": "function", "name": "factory_acceptance", "description": "Perform only the fixed, contained acceptance probe operation requested by the factory.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"op": map[string]any{"type": "string", "enum": []string{"write", "read", "writer"}}}, "required": []string{"op"}, "additionalProperties": false}}}
-	if probe != nil {
-		tools := params["dynamicTools"].([]any)
-		params["dynamicTools"] = append(tools, map[string]any{"type": "function", "name": toolcontract.FactoryControl, "description": "Read only the qualification inbox with op=inbox and payload={}; return its message text as instructed.", "inputSchema": toolcontract.SchemaForContract(toolcontract.FactoryControl, 2)})
-	}
+	params["dynamicTools"] = acceptanceDynamicTools(probe != nil)
 	remote, err := OpenRemoteClient(ctx, environment)
 	if err != nil {
 		return err
@@ -192,26 +188,25 @@ func runAcceptanceModelProof(ctx context.Context, brain string, selection execut
 			text = "Continue this same conversation. Call factory_acceptance with op=read and verify the returned file text is FIRST_ROUND. Then reply exactly " + reply + "."
 		}
 		var localRead func(context.Context, Message) (json.RawMessage, error)
+		var expectedTurn string
 		if probe != nil && round == 1 {
 			reply = acceptanceContract2Reply(probe.grant, round)
-			text = "Call factory_acceptance with op=write. Also call factory_control with {\"op\":\"inbox\",\"payload\":{}}. Then reply exactly FACTORY_CODEX_ACCEPTANCE_ROUND_1 followed by a space and the text of the sole returned inbox message. Do not guess the inbox text."
+			text = "Call factory_acceptance with op=write. Also call factory_control with exactly {\"op\":\"inbox\",\"payload\":{}}: both keys are required, payload must be an empty object, and no extra keys are allowed. Then reply exactly FACTORY_CODEX_ACCEPTANCE_ROUND_1 followed by a space and the text of the sole returned inbox message. Do not guess the inbox text."
 			localRead = func(ctx context.Context, event Message) (json.RawMessage, error) {
 				release, err := admit(ctx)
 				if err != nil {
-					return nil, err
+					call, _ := DecodeToolInvocation(event.Params)
+					return nil, acceptanceReadFacts(call, thread, expectedTurn).refuse("admission", err)
 				}
 				defer release()
-				var call ToolInvocation
-				if err := json.Unmarshal(event.Params, &call); err != nil {
-					return nil, err
-				}
-				return acceptanceControlRead(ctx, brain, probe.grant, owner, event, thread, call.TurnID)
+				return acceptanceControlRead(ctx, brain, probe.grant, owner, event, thread, expectedTurn)
 			}
 		}
 		id, err := acceptanceStartTurn(ctx, p, thread, route, environment, text)
 		if err != nil {
 			return err
 		}
+		expectedTurn = id
 		observed, err := acceptanceWaitTurn(ctx, p, thread, id, remote, environment.Cwd, round, localRead)
 		if err != nil {
 			return fmt.Errorf("acceptance round %d failed exact continuation: %w", round, err)
@@ -443,6 +438,14 @@ func runAcceptanceModelProof(ctx context.Context, brain string, selection execut
 	return nil
 }
 
+func acceptanceDynamicTools(localRead bool) []any {
+	tools := []any{map[string]any{"type": "function", "name": "factory_acceptance", "description": "Perform only the fixed, contained acceptance probe operation requested by the factory.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"op": map[string]any{"type": "string", "enum": []string{"write", "read", "writer"}}}, "required": []string{"op"}, "additionalProperties": false}}}
+	if localRead {
+		tools = append(tools, map[string]any{"type": "function", "name": toolcontract.FactoryControl, "description": `Read only the qualification inbox with exactly {"op":"inbox","payload":{}}. Both keys are required and no extra keys are allowed. Return its message text as instructed.`, "inputSchema": toolcontract.SchemaForContract(toolcontract.FactoryControl, 2)})
+	}
+	return tools
+}
+
 func acceptanceStartTurn(ctx context.Context, p Caller, thread string, route executor.Route, environment RemoteEnvironment, text string) (string, error) {
 	var accepted struct {
 		Turn Turn `json:"turn"`
@@ -457,7 +460,8 @@ func acceptanceStartTurn(ctx context.Context, p Caller, thread string, route exe
 	return accepted.Turn.ID, nil
 }
 
-func acceptanceWaitTurn(ctx context.Context, p *Protocol, thread, turn string, remote *RemoteClient, cwd string, round int, localRead func(context.Context, Message) (json.RawMessage, error)) (string, error) {
+func acceptanceWaitTurn(ctx context.Context, p *Protocol, thread, turn string, remote *RemoteClient, cwd string, round int, localRead func(context.Context, Message) (json.RawMessage, error)) (result string, resultErr error) {
+	defer func() { p.recordAcceptanceReadFailure(resultErr) }()
 	reply := ""
 	operationSeen, localReadSeen := false, false
 	for {
@@ -467,10 +471,25 @@ func acceptanceWaitTurn(ctx context.Context, p *Protocol, thread, turn string, r
 		case <-p.Done():
 			return "", ErrObservationUnknown
 		case event := <-p.Events():
+			if event.Method == "item/tool/call" && len(event.ID) == 0 {
+				if call, _ := DecodeToolInvocation(event.Params); call.Tool == toolcontract.FactoryControl {
+					return "", acceptanceReadFacts(call, thread, turn).refuse("call_shape", ErrObservationUnknown)
+				}
+			}
 			if len(event.ID) != 0 {
-				if call, err := DecodeToolInvocation(event.Params); err == nil && call.Tool == toolcontract.FactoryControl {
-					if localRead == nil || localReadSeen || call.ThreadID != thread || call.TurnID != turn {
-						return "", ErrObservationUnknown
+				if call, err := DecodeToolInvocation(event.Params); call.Tool == toolcontract.FactoryControl {
+					diagnostic := acceptanceReadFacts(call, thread, turn)
+					switch {
+					case err != nil:
+						return "", diagnostic.refuse("call_shape", ErrObservationUnknown)
+					case localRead == nil:
+						return "", diagnostic.refuse("read_unavailable", ErrObservationUnknown)
+					case localReadSeen:
+						return "", diagnostic.refuse("duplicate_read", ErrObservationUnknown)
+					case call.ThreadID != thread:
+						return "", diagnostic.refuse("thread", ErrObservationUnknown)
+					case call.TurnID != turn:
+						return "", diagnostic.refuse("turn", ErrObservationUnknown)
 					}
 					output, err := localRead(ctx, event)
 					if err != nil {
